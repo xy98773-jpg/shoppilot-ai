@@ -837,7 +837,7 @@ effective_in_transit_qty = Σ(poi.ordered_qty − poi.received_qty)
 | — | 无团队上下文记录的 `team_id` 取值 | 保留哨兵 `team_id = 0`（系统域） | 本文档 §6 规则 1 |
 | — | `IMP-4006` / `IMP-4007` 等错误码缺失 | 补入 §12.3，并新增 `AI-xxxx` 内部错误域 | 本文档 §12.3 |
 | — | 一笔流水是否可被多次冲销 | 新增 `uk_invtxn_team_reversed (team_id, reversed_txn_id)` | 本文档 §8 |
-| — | `LeadTimeSource` / `DataQualityGrade` / `InventoryBizType` / `SalesSource` / `Source` / 审计动作常量 未定义 | 统一补入 §9.17 | 本文档 §9.17 |
+| — | `LeadTimeSource` / `DataQualityGrade` / `InventoryBizType` / `SalesSource` / `Source` / 审计动作常量 **原**未定义 | 统一补入 §9.17（审计动作常量为 `AuditAction`，审计结果为 `AuditResult`） | 本文档 §9.17 |
 | — | `SUGGESTED` 是否允许直接 `REJECTED` | **不允许**，驳回必须经 `PENDING_REVIEW` | 本文档 §5 规则 6、§9.11 补充规则 |
 | — | `R-LOWSTOCK` 与 `R-STOCKOUT` 是否互斥 | **可同时命中**，`risk_types` 为数组 | 本文档 §11 |
 | — | 到货冲销后采购单状态能否回退 | **允许回退**，为唯一例外，须审计留痕 | 本文档 §9.13 补充规则 |

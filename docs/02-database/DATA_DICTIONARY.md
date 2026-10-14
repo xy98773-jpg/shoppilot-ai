@@ -809,12 +809,12 @@
 | 15 | `PurchaseOrderStatus` | `DRAFT`、`PENDING`、`ORDERED`、`PARTIALLY_RECEIVED`、`RECEIVED`、`CANCELLED` | `§9.13` | `purchase_orders.status` |
 | 16 | `GoodsReceiptStatus` | `DRAFT`、`CONFIRMED`、`REVERSED`、`CANCELLED` | `§9.14` | `goods_receipts.status` |
 | 17 | `AnalysisScopeType` | `ALL_ACTIVE`、`SELECTED_SKUS`、`CATEGORY` | `§9.16` | `analysis_runs.scope_type` |
-| 18 | `LeadTimeSource` ⚠️ | `POLICY`、`SKU`、`SUPPLIER`、`DEFAULT` | ⚠️ **`§9` 未定义**；`§10.2`/`§11.2` 要求标注。建议补充（`D-14`） | `analysis_items.lead_time_source` |
-| 19 | `InventoryBizType` ⚠️ | `GOODS_RECEIPT`、`COUNT`、`MANUAL`、`IMPORT`、`SALE`、`REVERSAL` | ⚠️ **`§9` 未定义**；建议补充（`D-14`） | `inventory_transactions.biz_type` |
-| 20 | `SalesSource` ⚠️ | `IMPORT`、`MANUAL`、`PLATFORM` | ⚠️ **`§9` 未定义**；建议补充（`D-14`） | `sales_daily.source` |
-| 21 | `PurchaseOrderSource` ⚠️ | `MANUAL`、`REPLENISHMENT` | ⚠️ **`§9` 未定义**；建议补充（`D-14`） | `purchase_orders.source` |
+| 18 | `LeadTimeSource` | `POLICY`、`SKU`、`SUPPLIER`、`DEFAULT` | `§9.17` | `analysis_items.lead_time_source` |
+| 19 | `InventoryBizType` | `GOODS_RECEIPT`、`COUNT`、`MANUAL`、`IMPORT`、`SALE`、`REVERSAL` | `§9.17` | `inventory_transactions.biz_type` |
+| 20 | `SalesSource` | `IMPORT`、`MANUAL`、`PLATFORM` | `§9.17` | `sales_daily.source` |
+| 21 | `PurchaseOrderSource` | `MANUAL`、`REPLENISHMENT` | `§9.17` | `purchase_orders.source` |
 | 22 | 审计常量（`action` / `result` / `biz_type`）⚠️ | `action` 27 个常量见 `DATABASE_DESIGN.md §6-J.1`；`result`：`SUCCESS`/`FAILURE` | ⚠️ **`§9` 未定义**；建议由 `audit` 模块维护并在 `§9` 备案（`D-14`） | `audit_logs.*` |
-| 23 | 导入错误级别 ⚠️ | `ERROR`、`WARNING` | ⚠️ **`§9` 未定义**；建议补充（`D-14`） | `import_row_errors.error_level` |
+| 23 | 导入错误级别 | `ERROR`、`WARNING` | `§9.17` | `import_row_errors.error_level` |
 
 ---
 
