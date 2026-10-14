@@ -201,7 +201,7 @@
 | INV-10 | **采购单状态由明细到货情况正确推导** | 构造不同明细组合（全收/部分/未收） | `RECEIVED`/`PARTIALLY_RECEIVED`/`ORDERED` 推导正确 |
 | INV-11 | **LLM 失败不丢失规则结果** | 关闭/故障 LLM 后运行分析 | 任务 `DEGRADED`；`analysis_items` 的规则结果完整可用 |
 | INV-12 | **分析结果可追溯到输入快照与算法/Prompt 版本** | 查 `analysis_items` 与 `analysis_runs` | 可获取输入快照、`algorithm_version`、Prompt 版本 |
-| INV-13 | **非负库存** | 出库导致负库存（`D-08`：不允许负库存） | 被拒 `INV-5001`；DB `CHECK` 兜底 |
+| INV-13 | **非负库存** | 出库导致负库存（`D-08`：不允许负库存） | 出库被拒 `INV-5001`；调整/冲销被拒 `INV-5006`；DB `CHECK` 兜底 |
 | INV-14 | **流水自证**（`qty_after = qty_before + qty_delta`） | 构造非法流水写入 | DB `CHECK` 拒绝 |
 | INV-15 | **审计仅追加** | 尝试对 `audit_logs` 执行 UPDATE/DELETE | 应用层**无对应方法**；不允许修改历史审计 |
 | INV-16 | **停用主数据不参与新分析/采购但历史可查** | 停用 SKU 后新建分析 + 查询历史销售 | 该 SKU 不进入分析范围；历史数据仍可查（`§9.4`） |

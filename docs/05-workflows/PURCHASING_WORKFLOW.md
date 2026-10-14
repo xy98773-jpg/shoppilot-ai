@@ -204,7 +204,7 @@ stateDiagram-v2
 | 7 | 编辑到货草稿 | Java | 明细 | 到货单更新 | 不变 | 单事务 + 乐观锁 | `version` | 非 `DRAFT` → `PO-9008` | `PATCH /receipts/{id}` |
 | 8 | **确认到货入库** | Java | — | 库存流水 + 余额更新 + 采购汇总 | 到货单 `DRAFT → CONFIRMED`；采购单 `→ PARTIALLY_RECEIVED`/`RECEIVED` | **单事务（§9.1）** | `uk_gr_team_idem` + 状态守卫 | 超额 → `PO-9002`；余额冲突 → `INV-5002` | `POST /receipts/{id}/confirm` |
 | 9 | 作废到货草稿 | Java | — | `cancelled_at` | `DRAFT → CANCELLED` | 单事务 | 状态守卫 | 非 `DRAFT` → `PO-9008` | `POST /receipts/{id}/cancel` |
-| 10 | 冲销已确认到货 | Java（`inventory` 写） | 到货单 | `REVERSAL` 流水 + 余额回退 + 采购汇总重算 + 到货单置 `REVERSED` | 到货单 `CONFIRMED → REVERSED`；采购单状态回退/保持 | **单事务** | 原流水唯一性（`uk_invtxn_team_reversed`，`D-13`） | 重复冲销 → `INV-5009`；导致负库存 → `INV-5001` | `POST /receipts/{id}/reverse` |
+| 10 | 冲销已确认到货 | Java（`inventory` 写） | 到货单 | `REVERSAL` 流水 + 余额回退 + 采购汇总重算 + 到货单置 `REVERSED` | 到货单 `CONFIRMED → REVERSED`；采购单状态回退/保持 | **单事务** | 原流水唯一性（`uk_invtxn_team_reversed`，`D-13`） | 重复冲销 → `INV-5009`；导致负库存 → `INV-5006` | `POST /receipts/{id}/reverse` |
 | 11 | 取消采购单 | Java | 取消原因 | `cancelled_at/reason` | `→ CANCELLED` | 单事务 | 状态守卫 | 已 `RECEIVED` → `PO-9009`；状态非法 → `PO-9003` | `POST /orders/{id}/cancel` |
 | 12 | 审计 | Java | — | 审计记录 | — | 同业务事务/独立事务 | — | — | — |
 
@@ -356,7 +356,7 @@ MIN(received_qty / ordered_qty) = 1  →  RECEIVED
 
 **约束**：
 - **一笔流水只能冲销一次**：由 `uk_invtxn_team_reversed (team_id, reversed_txn_id)` 保证（⚠️ 该索引不在 `§8`，登记 `D-13`）；重复 → `INV-5009`；
-- 冲销导致负库存 → 拒绝（`INV-5001`）；
+- 冲销导致负库存 → 拒绝（`INV-5006`）；
 - 冲销**不修改** `goods_receipt_items`（`CONFIRMED` 后不可变），修正靠新增反向证据链；
 - 冲销后采购单状态：若回退到部分收货前则 `→ PARTIALLY_RECEIVED`；若全部冲销则 `→ ORDERED`（**建议在 `§9.13` 明确"状态回退"是否合法，见 §10.3 `建议新增 D-39`**）。
 
@@ -436,7 +436,7 @@ COMMIT;
 | 收货后事务失败 | **整体回滚**，DB 无中间态 | — |
 | 余额乐观锁冲突（3 次后） | 返回失败，用户重试 | `INV-5002` |
 | 重复冲销 | 拒绝（唯一性） | `INV-5009` |
-| 冲销导致负库存 | 拒绝 | `INV-5001` |
+| 冲销导致负库存 | 拒绝 | `INV-5006` |
 | 已 `RECEIVED` 采购单取消 | 拒绝 | `PO-9009` |
 | 对 `CONFIRMED` 到货单再编辑 | 拒绝 | `PO-9008` |
 

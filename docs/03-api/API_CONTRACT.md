@@ -528,7 +528,7 @@ Idempotency-Key: <客户端生成的全局唯一字符串，长度 1..128>
 | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/api/v1/inventory/balances` | 库存余额列表（按 `sku_id`/`warehouse_id` 筛选，返回 `on_hand_qty`/`available_qty`/`in_transit_qty`） | 任何已登录成员 | ✅ | F-INV-01 | — |
 | GET | `/api/v1/inventory/transactions` | 库存流水列表（按类型/时间/SKU 筛选） | 任何已登录成员 | ✅ | F-INV-02 | — |
-| POST | `/api/v1/inventory/adjustments` | 盘点调整（`COUNT_ADJUST`）或手工调整（`MANUAL_ADJUST`），二合一入口按 `txn_type` 区分 | ⚠️ 见 §11.4（`MANUAL_ADJUST` 需 ADMIN+） | ⚠️ | F-INV-03/F-INV-04 | `INV-5001`/`5002`/`5003`/`5005`/`5006`/`5007`/`5011`、`TEAM-2003` |
+| POST | `/api/v1/inventory/adjustments` | 盘点调整（`COUNT_ADJUST`）或手工调整（`MANUAL_ADJUST`），二合一入口按 `txn_type` 区分 | ⚠️ 见 §11.4（`MANUAL_ADJUST` 需 ADMIN+） | ⚠️ | F-INV-03/F-INV-04 | `INV-5002`/`5003`/`5005`/`5006`/`5007`/`5011`、`TEAM-2003` |
 | GET | `/api/v1/inventory/transactions/{id}` | 单笔流水详情 | 任何已登录成员 | ✅ | F-INV-02 | `INV-5008` |
 | POST | `/api/v1/inventory/transactions/{id}/reverse` | 冲销某笔流水（`REVERSAL`，P1） | ADMIN+ | ⚠️ | F-INV-06 | `INV-5009`/`5010`、`TEAM-2003` |
 | GET | `/api/v1/inventory/alerts` | 库存预警列表（缺货/低库存提示） | 任何已登录成员 | ✅ | F-INV-05 | — |
