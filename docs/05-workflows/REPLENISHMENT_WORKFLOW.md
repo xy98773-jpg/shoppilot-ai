@@ -603,7 +603,7 @@ stateDiagram-v2
 
 ## 8. 审计记录点
 
-> 审计 `action` 常量清单见 `DATABASE_DESIGN.md §6-J`（27 个）。与补货相关的：
+> 审计 `action` 常量的**成员资格见 `DESIGN_BASIS §9.17`（`AuditAction`，34 条）**，语义见 `DATABASE_DESIGN.md §6-J.1`。本文档**引用不重定义**；下表 `#` 为 `§6-J.1` 的稳定编号。与补货相关的：
 
 | # | 操作 | `action` | `biz_type` | `result` |
 | --- | --- | --- | --- | --- |
@@ -612,13 +612,15 @@ stateDiagram-v2
 | 7 | 补货策略变更 | `REPLENISHMENT_POLICY_UPSERT` | `REPLENISHMENT_POLICY` | SUCCESS |
 | 18 | 建议数量修改 | `REPLENISHMENT_QTY_UPDATE` | `REPLENISHMENT_ITEM` | SUCCESS |
 | 19 | 建议提交审核 | `REPLENISHMENT_SUBMIT` | `REPLENISHMENT_ITEM` | SUCCESS |
+| 30 | 建议撤回（待审撤回） | `REPLENISHMENT_WITHDRAW` | `REPLENISHMENT_ITEM` | SUCCESS |
+| 31 | 建议作废（审批前撤销） | `REPLENISHMENT_CANCEL` | `REPLENISHMENT_ITEM` | SUCCESS |
 | 20 | 建议审批通过 | `REPLENISHMENT_APPROVE` | `REPLENISHMENT_ITEM` | SUCCESS |
 | 21 | 建议驳回 | `REPLENISHMENT_REJECT` | `REPLENISHMENT_ITEM` | SUCCESS |
 | 22 | 建议转采购 | `REPLENISHMENT_CONVERT` | `REPLENISHMENT_ITEM` | SUCCESS |
 
-> ⚠️ **注意**：`action` 常量**未在 `DESIGN_BASIS §9` 定义**，由 `DATABASE_DESIGN.md §6-J` 引入（登记 `D-14`）。本文档**引用而非重定义**。
+> ✅ `action` 常量**已由 `DESIGN_BASIS §9.17` `AuditAction`（34 条）统一定义**（原 `D-14` 该子项已注销）；本文档**引用而非重定义**。
 >
-> **撤回 / 作废**目前**无独立 `action` 常量**（`§6-J` 未列）—— 建议新增 `REPLENISHMENT_WITHDRAW` / `REPLENISHMENT_CANCEL`，见 §9.3。
+> ✅ **撤回 / 作废已闭环**（原 INC-B）：`#30 REPLENISHMENT_WITHDRAW` / `#31 REPLENISHMENT_CANCEL` 已入 `§9.17`，与 `§9.12` `ReviewAction` 的 `WITHDRAW`/`CANCEL` 对应。
 
 ---
 
@@ -633,7 +635,7 @@ stateDiagram-v2
 | `D-06` | 采购单 `DRAFT → PENDING` 的确认角色 | 影响 §6.6 转采购后的下一步（见 `PURCHASING_WORKFLOW.md`） |
 | `D-09` | **四眼原则**（提交人与审批人不得同一人） | §6.6 场景 5 首期宽松实现 |
 | `D-10` | `uk_ai_run_sku_wh` / `uk_repl_run_sku_wh` 是否豁免 `team_id` 前缀 | 影响唯一约束定义，不改流程 |
-| `D-14` | `LeadTimeSource` 等枚举与审计常量在 `§9` 未定义 | §8 审计常量来源；`lead_time_source` 的取值 |
+| `D-14`（⚠️ **旧编号**，指"数据库文档侧的枚举/常量补充"；权威 `D-14` = 同团队并发分析运行数上限） | `LeadTimeSource` 等枚举与审计常量在 `§9` 未定义 | ✅ 已裁定：全部补入 `DESIGN_BASIS §9.17`（含审计常量 34 条），§8 审计常量来源已明；`lead_time_source` 取值见 `§9.17`（编号迁移待 `M1-T01` 统一） |
 | `D-15` | 只增表保留期与归档策略 | 首期全部保留；影响长期存储 |
 
 ### 9.2 发现的不一致（本文档**不改 SSOT**，仅标注）
@@ -641,7 +643,7 @@ stateDiagram-v2
 | # | 不一致 | 涉及文档 | 建议 |
 | --- | --- | --- | --- |
 | ~~INC-A~~ | **已解决**（M0 审查裁定）：`SUGGESTED → REJECTED` **不允许**，驳回必须经 `PENDING_REVIEW` | 曾与 `DESIGN_BASIS §9.11` 存在张力 | **裁定**：SSOT §9.11 已修正为 `SUGGESTED → {PENDING_REVIEW, SUPERSEDED, CANCELLED}`；同时 §5 规则 6 明确驳回权归 `APPROVER`。前端不暴露「直接驳回」按钮。状态机图已同步（见 §6.3 的注释） |
-| INC-B | **`§6-J` 无 `REPLENISHMENT_WITHDRAW` / `REPLENISHMENT_CANCEL` 审计常量**，但 `§9.12` 有 `WITHDRAW`/`CANCEL` 动作 | `DESIGN_BASIS §9.12` vs `DATABASE_DESIGN.md §6-J` | 建议在 `§6-J` 补充 2 个审计常量（登记 `D-14`） |
+| INC-B | ✅ **已闭环**（F-28）：`§9.17` 已含 `REPLENISHMENT_WITHDRAW` / `REPLENISHMENT_CANCEL` 审计常量，与 `§9.12` `WITHDRAW`/`CANCEL` 对应 | `DESIGN_BASIS §9.12` vs `§9.17` | 已固化于 `§9.17` #30 / #31，语义见 `DATABASE_DESIGN.md §6-J.1`，见 §8 |
 | INC-C | **`D-09` 编号被两处复用**：`DATABASE_DESIGN.md` 用 `D-09` 表示"导入幂等槽位"，`USER_ROLES.md` 用 `D-09` 表示"四眼原则" | `DATABASE_DESIGN.md §11` vs `USER_ROLES.md §7.2` | 编号冲突，需统一（本文档按"四眼原则"理解） |
 | INC-D | **`analysis_items.lead_time_source` 取值 `POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`** 未在 `§9` 定义（`D-14` 已登记），但 `§10.2` 的三级回退表已隐含使用 | `DESIGN_BASIS §10.2` vs `§9` | 建议在 `§9` 补充 `LeadTimeSource`（并入 `D-14`） |
 | INC-E | **`§5.3` 的 `data_quality` 分级**（`GOOD`/`FAIR`/`POOR`/`INSUFFICIENT`，见 `ANALYSIS_CONTRACT.md`）未在 `DESIGN_BASIS §9` 定义 | `ANALYSIS_CONTRACT.md` vs `DESIGN_BASIS §9` | 建议补充 `DataQualityGrade` 枚举（并入 `D-14` 或新增） |

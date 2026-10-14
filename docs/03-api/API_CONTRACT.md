@@ -2263,7 +2263,7 @@ X-Request-Id: req_gr_002
 | `SalesSource` | `sales_daily.source` | `IMPORT`/`MANUAL`/`PLATFORM` |
 | `PurchaseOrderSource` | `purchase_orders.source` | `MANUAL`/`REPLENISHMENT` |
 | 导入错误级别 | `import_row_errors.error_level` | `ERROR`/`WARNING` |
-| 审计常量 | `audit_logs.action` | 27 个，见 `DATABASE_DESIGN.md §6-J.1` |
+| 审计常量 | `audit_logs.action` | `AuditAction` 34 条，成员资格见 `DESIGN_BASIS §9.17`（语义见 `DATABASE_DESIGN.md §6-J.1`） |
 
 ### 13.4 新增待决策（本文档发现）
 

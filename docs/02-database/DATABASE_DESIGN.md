@@ -863,7 +863,7 @@
 | --- | --- | --- | --- | --- | --- |
 | `id` | `BIGINT UNSIGNED` | 否 | AUTO_INCREMENT | 主键 | 不可变 |
 | `team_id` | `BIGINT UNSIGNED` | 否 | — | 团队 ID（`0` = **系统域**，无团队上下文的操作） | 不可变 |
-| `action` | `VARCHAR(64)` | 否 | — | 动作常量（见 §6-J 的 12+ 审计点） | 不可变 |
+| `action` | `VARCHAR(64)` | 否 | — | 动作常量（34 条，成员资格见 `DESIGN_BASIS §9.17` `AuditAction`；语义见 §6-J.1） | 不可变 |
 | `biz_type` | `VARCHAR(64)` | 否 | — | 业务对象类型（表名或领域名，如 `REPLENISHMENT_ITEM`） | 不可变 |
 | `biz_id` | `BIGINT UNSIGNED` | 是 | `NULL` | 业务对象 ID（**多态，逻辑关联**） | 不可变 |
 | `biz_no` | `VARCHAR(64)` | 是 | `NULL` | 业务编号快照（对象可能已被软停用） | 不可变 |
@@ -1439,6 +1439,8 @@ replenishment_items.status = 'APPROVED'
 
 #### J.1 记录哪些操作（审计点与 `action` 常量）
 
+> 本节给出每条常量的**语义、`biz_type`、`result`**；**成员资格（共 34 条）的唯一权威是 `DESIGN_BASIS §9.17` 的 `AuditAction`**，本节与其一一对应。编号 `#1`–`#34` **稳定不变**（下游流程文档按编号引用），新增常量只能追加编号。
+
 | # | 操作 | `action` 常量 | `biz_type` | `result` |
 | --- | --- | --- | --- | --- |
 | 1 | 登录成功 | `AUTH_LOGIN_SUCCESS` | `USER` | SUCCESS |
@@ -1468,8 +1470,15 @@ replenishment_items.status = 'APPROVED'
 | 25 | 采购单取消 | `PURCHASE_ORDER_CANCEL` | `PURCHASE_ORDER` | SUCCESS |
 | 26 | 到货单确认（入库） | `GOODS_RECEIPT_CONFIRM` | `GOODS_RECEIPT` | SUCCESS |
 | 27 | 到货单作废 | `GOODS_RECEIPT_CANCEL` | `GOODS_RECEIPT` | SUCCESS |
+| 28 | 团队成员加入 | `TEAM_MEMBER_ADD` | `TEAM_MEMBER` | SUCCESS |
+| 29 | 分析任务取消 | `ANALYSIS_RUN_CANCEL` | `ANALYSIS_RUN` | SUCCESS |
+| 30 | 建议撤回（撤回待审） | `REPLENISHMENT_WITHDRAW` | `REPLENISHMENT_ITEM` | SUCCESS |
+| 31 | 建议作废（审批前撤销） | `REPLENISHMENT_CANCEL` | `REPLENISHMENT_ITEM` | SUCCESS |
+| 32 | 采购单标记已下单 | `PURCHASE_ORDER_ORDERED` | `PURCHASE_ORDER` | SUCCESS |
+| 33 | 到货单冲销 | `GOODS_RECEIPT_REVERSE` | `GOODS_RECEIPT` | SUCCESS |
+| 34 | 审计/业务数据导出 | `AUDIT_LOG_EXPORT` | `AUDIT_LOG` | SUCCESS |
 
-> 覆盖"至少 12 个"的要求（实际 27 个）。**审计点选择原则**：改变**权限**、**状态**、**数量/金额**、或**数据可见性**的操作必须审计；纯查询不审计（除登录类鉴权事件）。
+> 覆盖"至少 12 个"的要求（实际 34 个，与 `DESIGN_BASIS §9.17` 一致）。**审计点选择原则**：改变**权限**、**状态**、**数量/金额**、或**数据可见性**的操作必须审计；纯查询不审计（**唯一例外**是 `#34` 导出——导出会造成批量数据外流，故破例审计）。
 
 #### J.2 字段设计要点
 
@@ -1618,7 +1627,7 @@ replenishment_items.status = 'APPROVED'
 | 18 | `analysis_items.lead_time_source` | **本设计引入的取源标记** | ⚠️ **`§9` 未定义该枚举**，`§10.2`/`§11.2` 只要求"标注 `lead_time_source = DEFAULT`"。本设计取值 `POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`。**建议在 `§9` 补充定义 `LeadTimeSource`**，登记 `D-14` | 4 |
 | 19 | `sales_daily.source` / `purchase_orders.source` | **本设计引入的来源标记** | ⚠️ `§9` 未定义。取值见各表字段表。**建议在 `§9` 补充**，登记 `D-14` | — |
 | 20 | `inventory_transactions.biz_type` | **本设计引入的单据来源标记** | ⚠️ `§9` 未定义。**建议在 `§9` 补充 `InventoryBizType`**，登记 `D-14` | 6 |
-| 21 | `audit_logs.action` / `result` / `biz_type` | **本设计引入的审计常量** | ⚠️ `§9` 未定义。`action` 常量清单见 §6-J。**建议在 `§9` 补充或明确"审计常量由 `audit` 模块维护"**，登记 `D-14` | — |
+| 21 | `audit_logs.action` / `result` / `biz_type` | `AuditAction`（34 条）/ `AuditResult` / 领域名 | ✅ `§9.17` 已定义：`action` 34 条常量的**成员资格**以 `§9.17` 为唯一权威，**语义/`biz_type`/`result`** 见本节 `§6-J.1`（一一对应） | 34 / 2 / — |
 
 ---
 

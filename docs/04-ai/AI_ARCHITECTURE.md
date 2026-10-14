@@ -339,7 +339,7 @@ if run.status == RUNNING and now() > run.timeout_at:
 | 目的 | 排障、性能、错误定位 | 复盘 AI 执行过程与成本 | 治理、追责、合规 |
 | 生产者 | Java 日志、Python 日志 | Python（LLM 环节） | **Java**（`audit` 模块，`AuditAppender`） |
 | 存储位置 | 容器 stdout / 日志文件 | Python 日志 + 回传 Java 的 run 摘要 | **`audit_logs` 表**（仅追加） |
-| 典型字段 | `request_id`、`uri`、`duration_ms`、异常堆栈 | `analysis_run_id`、`step`、`llm_tokens`、`llm_model`、`retry_count` | `action`（27 个常量）、`operator_id`、`before_json`/`after_json`、`result` |
+| 典型字段 | `request_id`、`uri`、`duration_ms`、异常堆栈 | `analysis_run_id`、`step`、`llm_tokens`、`llm_model`、`retry_count` | `action`（`AuditAction` 34 条常量，`DESIGN_BASIS §9.17`）、`operator_id`、`before_json`/`after_json`、`result` |
 | 是否入库 | 否（文件/采集） | 否（Python 侧）+ 摘要入 `analysis_runs.summary_json` | **是**（`audit_logs`） |
 | 是否面向用户 | 否 | 否 | 是（审计页面，OWNER/ADMIN） |
 | 是否含敏感数据 | 脱敏后有限 | 不含密钥、不含价格 | **必须脱敏**（`AuditSanitizer`） |
