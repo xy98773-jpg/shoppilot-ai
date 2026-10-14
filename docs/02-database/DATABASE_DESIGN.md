@@ -802,7 +802,7 @@
 | `receipt_no` | `VARCHAR(64)` | 否 | — | 到货单号 | **不可变** |
 | `purchase_order_id` | `BIGINT UNSIGNED` | 否 | — | 关联采购单 | **不可变** |
 | `warehouse_id` | `BIGINT UNSIGNED` | 否 | — | 入库仓库 | **不可变** |
-| `status` | `VARCHAR(32)` | 否 | `'DRAFT'` | `GoodsReceiptStatus`（`§9.14`） | `DRAFT → CONFIRMED`；`DRAFT → CANCELLED` |
+| `status` | `VARCHAR(32)` | 否 | `'DRAFT'` | `GoodsReceiptStatus`（`§9.14`） | `DRAFT → CONFIRMED`；`DRAFT → CANCELLED`；`CONFIRMED → REVERSED`（冲销） |
 | `receipt_date` | `DATE` | 否 | — | 到货业务日期 | **不可变** |
 | `total_qty` | `DECIMAL(18,3)` | 否 | `0` | 到货总数量 | 明细变更时同事务重算 |
 | `total_amount` | `DECIMAL(18,2)` | 是 | `NULL` | 到货总金额 | 同上 |
@@ -817,7 +817,7 @@
 - **唯一约束**：`uk_gr_team_no (team_id, receipt_no)`、`uk_gr_team_idem (team_id, idempotency_key)`。**`idempotency_key` 为 `NOT NULL`**（与 `purchase_orders.idempotency_key` 可空不同）：到货确认会产生**不可逆的库存变更**，必须强制幂等保护。
 - **索引**：`idx_gr_team_po_status (team_id, purchase_order_id, status)`（采购单详情页的到货记录）；`idx_gr_team_status_time (team_id, status, created_at)`（待确认到货待办）；`idx_gr_team_date (team_id, receipt_date)`（到货统计）。
 - **团队隔离**：写入/确认时校验 `po.team_id == warehouse.team_id == team_id`；明细中的 `poi.team_id` 必须等于 `receipt.team_id`。
-- **更新规则**：`receipt_no` / `purchase_order_id` / `warehouse_id` / `receipt_date` / `idempotency_key` / `operator_id` **不可变**；`DRAFT` 可改明细；`CONFIRMED` 后**一切字段冻结**（只能通过 `REVERSAL` 冲销修正库存）；`CANCELLED` 仅可从 `DRAFT` 进入。
+- **更新规则**：`receipt_no` / `purchase_order_id` / `warehouse_id` / `receipt_date` / `idempotency_key` / `operator_id` **不可变**；`DRAFT` 可改明细；`CONFIRMED` 后**一切字段冻结**（只能通过 `REVERSAL` 冲销修正库存）；`REVERSED` 仅可从 `CONFIRMED` 进入（冲销，终态）；`CANCELLED` 仅可从 `DRAFT` 进入。
 - **设计要点**：`CONFIRMED` 后不可作废（`§9.14`）——因为库存已变动。要撤销必须走**冲销**，保留完整证据链。这是"可追溯优于简洁"（P10）的直接体现。
 
 ---
@@ -1611,7 +1611,7 @@ replenishment_items.status = 'APPROVED'
 | 14 | `replenishment_items.status` | `ReplenishmentItemStatus` | `§9.11` | 7 |
 | 15 | `replenishment_reviews.action` | `ReviewAction` | `§9.12` | 5 |
 | 16 | `purchase_orders.status` | `PurchaseOrderStatus` | `§9.13` | 6 |
-| 17 | `goods_receipts.status` | `GoodsReceiptStatus` | `§9.14` | 3 |
+| 17 | `goods_receipts.status` | `GoodsReceiptStatus` | `§9.14` | 4 |
 | 18 | `analysis_items.lead_time_source` | **本设计引入的取源标记** | ⚠️ **`§9` 未定义该枚举**，`§10.2`/`§11.2` 只要求"标注 `lead_time_source = DEFAULT`"。本设计取值 `POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`。**建议在 `§9` 补充定义 `LeadTimeSource`**，登记 `D-14` | 4 |
 | 19 | `sales_daily.source` / `purchase_orders.source` | **本设计引入的来源标记** | ⚠️ `§9` 未定义。取值见各表字段表。**建议在 `§9` 补充**，登记 `D-14` | — |
 | 20 | `inventory_transactions.biz_type` | **本设计引入的单据来源标记** | ⚠️ `§9` 未定义。**建议在 `§9` 补充 `InventoryBizType`**，登记 `D-14` | 6 |

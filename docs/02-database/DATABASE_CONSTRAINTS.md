@@ -319,7 +319,7 @@ ALTER TABLE skus
 | `ck_rr_role` | `replenishment_reviews` | `reviewer_role` | 同 `TeamRole` | `§9.3` |
 | `ck_po_status` | `purchase_orders` | `status` | `DRAFT`,`PENDING`,`ORDERED`,`PARTIALLY_RECEIVED`,`RECEIVED`,`CANCELLED` | `§9.13` |
 | `ck_po_source` | `purchase_orders` | `source` | `MANUAL`,`REPLENISHMENT` ⚠️（`D-14`） | — |
-| `ck_gr_status` | `goods_receipts` | `status` | `DRAFT`,`CONFIRMED`,`CANCELLED` | `§9.14` |
+| `ck_gr_status` | `goods_receipts` | `status` | `DRAFT`,`CONFIRMED`,`REVERSED`,`CANCELLED` | `§9.14` |
 | `ck_sales_source` | `sales_daily` | `source` | `IMPORT`,`MANUAL`,`PLATFORM` | — |
 | `ck_ire_level` | `import_row_errors` | `error_level` | `ERROR`,`WARNING` ⚠️（`D-14`） | — |
 | `ck_al_result` | `audit_logs` | `result` | `SUCCESS`,`FAILURE` ⚠️（`D-14`） | — |

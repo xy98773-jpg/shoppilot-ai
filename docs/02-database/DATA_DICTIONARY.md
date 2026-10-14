@@ -707,7 +707,7 @@
 | `receipt_no` | 到货单号 | `VARCHAR(64)` | 否 | — | `UK:uk_gr_team_no`(后缀) | **不可变** |
 | `purchase_order_id` | 关联采购单 | `BIGINT UNSIGNED` | 否 | — | `FK:purchase_orders(id)`、`IDX` | **不可变** |
 | `warehouse_id` | 入库仓库 | `BIGINT UNSIGNED` | 否 | — | `FK:warehouses(id)` | **不可变** |
-| `status` | 到货单状态 | `VARCHAR(32)` | 否 | `'DRAFT'` | `CK:ck_gr_status`、`IDX` | `GoodsReceiptStatus`（`§9.14`，3 值） |
+| `status` | 到货单状态 | `VARCHAR(32)` | 否 | `'DRAFT'` | `CK:ck_gr_status`、`IDX` | `GoodsReceiptStatus`（`§9.14`，4 值） |
 | `receipt_date` | 到货日期 | `DATE` | 否 | — | `IDX` | **不可变** |
 | `total_qty` | 到货总数量 | `DECIMAL(18,3)` | 否 | `0` | `CK:ck_gr_total_qty` | 明细变更时同事务重算 |
 | `total_amount` | 到货总金额 | `DECIMAL(18,2)` | 是 | `NULL` | `CK:ck_gr_total_amount` | — |
@@ -804,7 +804,7 @@
 | 13 | `ReplenishmentItemStatus` | `SUGGESTED`、`PENDING_REVIEW`、`APPROVED`、`CONVERTED`、`REJECTED`、`SUPERSEDED`、`CANCELLED` | `§9.11` | `replenishment_items.status`、`replenishment_reviews.from_status`/`to_status` |
 | 14 | `ReviewAction` | `SUBMIT`、`WITHDRAW`、`APPROVE`、`REJECT`、`CANCEL` | `§9.12` | `replenishment_reviews.action` |
 | 15 | `PurchaseOrderStatus` | `DRAFT`、`PENDING`、`ORDERED`、`PARTIALLY_RECEIVED`、`RECEIVED`、`CANCELLED` | `§9.13` | `purchase_orders.status` |
-| 16 | `GoodsReceiptStatus` | `DRAFT`、`CONFIRMED`、`CANCELLED` | `§9.14` | `goods_receipts.status` |
+| 16 | `GoodsReceiptStatus` | `DRAFT`、`CONFIRMED`、`REVERSED`、`CANCELLED` | `§9.14` | `goods_receipts.status` |
 | 17 | `AnalysisScopeType` | `ALL_ACTIVE`、`SELECTED_SKUS`、`CATEGORY` | `§9.16` | `analysis_runs.scope_type` |
 | 18 | `LeadTimeSource` ⚠️ | `POLICY`、`SKU`、`SUPPLIER`、`DEFAULT` | ⚠️ **`§9` 未定义**；`§10.2`/`§11.2` 要求标注。建议补充（`D-14`） | `analysis_items.lead_time_source` |
 | 19 | `InventoryBizType` ⚠️ | `GOODS_RECEIPT`、`COUNT`、`MANUAL`、`IMPORT`、`SALE`、`REVERSAL` | ⚠️ **`§9` 未定义**；建议补充（`D-14`） | `inventory_transactions.biz_type` |

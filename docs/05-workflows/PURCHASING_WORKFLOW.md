@@ -180,11 +180,12 @@ stateDiagram-v2
     [*] --> DRAFT : 登记到货（不产生库存流水）
     DRAFT --> CONFIRMED : 确认到货（产生 PURCHASE_INBOUND 流水与库存变更）
     DRAFT --> CANCELLED : 作废（仅 DRAFT 可直接作废）
-    CONFIRMED --> [*] : 需冲销（REVERSAL）才能回退库存
+    CONFIRMED --> REVERSED : 冲销（产生 REVERSAL 流水，库存回退，采购单状态重算）
+    REVERSED --> [*]
     CANCELLED --> [*]
 ```
 
-> **关键**：`CONFIRMED` **不是**可直接作废的状态。库存已变动，撤销必须走 `REVERSAL` 冲销，保留完整证据链（`§9.14` + `§5.20` 设计要点）。
+> **关键**：`CONFIRMED` **不是**可直接作废的状态。库存已变动，撤销必须走 `REVERSAL` 冲销，保留完整证据链（`§9.14` + `§5.20` 设计要点）。冲销成功后到货单置为 **`REVERSED`**（终态），**不得**回退为 `CANCELLED` 或 `DRAFT`。
 >
 > **到货单无"部分确认"状态**：一次确认即全量生效；如需分批到货，应**登记多张到货单**（每张对应采购明细的一个 `purchase_order_item_id`，且同单内不重复——`uk_gri_receipt_poi`）。
 
@@ -203,7 +204,7 @@ stateDiagram-v2
 | 7 | 编辑到货草稿 | Java | 明细 | 到货单更新 | 不变 | 单事务 + 乐观锁 | `version` | 非 `DRAFT` → `PO-9008` | `PATCH /receipts/{id}` |
 | 8 | **确认到货入库** | Java | — | 库存流水 + 余额更新 + 采购汇总 | 到货单 `DRAFT → CONFIRMED`；采购单 `→ PARTIALLY_RECEIVED`/`RECEIVED` | **单事务（§9.1）** | `uk_gr_team_idem` + 状态守卫 | 超额 → `PO-9002`；余额冲突 → `INV-5002` | `POST /receipts/{id}/confirm` |
 | 9 | 作废到货草稿 | Java | — | `cancelled_at` | `DRAFT → CANCELLED` | 单事务 | 状态守卫 | 非 `DRAFT` → `PO-9008` | `POST /receipts/{id}/cancel` |
-| 10 | 冲销已确认到货 | Java（`inventory` 写） | 到货单 | `REVERSAL` 流水 + 余额回退 + 采购汇总重算 | 采购单状态回退/保持 | **单事务** | 原流水唯一性（`uk_invtxn_team_reversed`，`D-13`） | 重复冲销 → `INV-5009`；导致负库存 → `INV-5001` | `POST /receipts/{id}/reverse` |
+| 10 | 冲销已确认到货 | Java（`inventory` 写） | 到货单 | `REVERSAL` 流水 + 余额回退 + 采购汇总重算 + 到货单置 `REVERSED` | 到货单 `CONFIRMED → REVERSED`；采购单状态回退/保持 | **单事务** | 原流水唯一性（`uk_invtxn_team_reversed`，`D-13`） | 重复冲销 → `INV-5009`；导致负库存 → `INV-5001` | `POST /receipts/{id}/reverse` |
 | 11 | 取消采购单 | Java | 取消原因 | `cancelled_at/reason` | `→ CANCELLED` | 单事务 | 状态守卫 | 已 `RECEIVED` → `PO-9009`；状态非法 → `PO-9003` | `POST /orders/{id}/cancel` |
 | 12 | 审计 | Java | — | 审计记录 | — | 同业务事务/独立事务 | — | — | — |
 
@@ -515,7 +516,7 @@ COMMIT;
 
 | 建议编号 | 议题 | 可选方案 | 影响 |
 | --- | --- | --- | --- |
-| **建议新增 `D-38`** | 已冲销到货单的状态与标记方式 | ① 冲销后置 `CANCELLED`（复用现有枚举）；② 保留 `CONFIRMED` + 新增 `reversed_at`/`reversed_by` 标记列（**推荐**，语义更准）；③ 新增 `REVERSED` 枚举值（改动 `§9.14`） | 影响到货单查询与审计 |
+| **建议新增 `D-38`**（✅ **已裁定**） | 已冲销到货单的状态与标记方式 | ③ 新增 `REVERSED` 枚举值（`DESIGN_BASIS §9.14` 已定义；`DESIGN_REVIEW.md`：已裁定）；① 复用 `CANCELLED` **否决**（`CONFIRMED` 后不可直接作废）；② 仅作为 ③ 的**补充标记**（是否新增 `reversed_at`/`reversed_by` 见 `DATABASE_DESIGN.md §5.20`） | 影响到货单查询与审计 |
 | **建议新增 `D-39`** | 冲销后采购单状态是否允许"回退" | ① 允许按派生重算（`RECEIVED → PARTIALLY_RECEIVED → ORDERED`，**与 `§9.13`"终态不可变"张力大**）；② 维护独立 `reversed` 汇总，**状态保持终态不变**（推荐，与 `§9.13` 兼容） | 影响两个状态机的兼容性 |
 | **建议新增 `D-40`** | 是否新增审计常量 `PURCHASE_ORDER_ORDERED` / `GOODS_RECEIPT_REVERSE` | ① 新增（推荐，审计完整）；② 复用 `PURCHASE_ORDER_CONFIRM` / `INVENTORY_REVERSAL`（会丢失语义） | 影响审计可读性 |
 | **建议新增 `D-41`** | 手工创建采购单是否也需要 `APPROVER` 确认？ | ① 需要（与建议转采购一致，**推荐**）；② 手工单可由 `OPERATOR` 直接 `PENDING` | 影响权限矩阵与审批隔离 |
