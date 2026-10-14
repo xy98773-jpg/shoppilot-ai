@@ -465,7 +465,7 @@
 | `return_qty` | `DECIMAL(18,3)` | 否 | `0` | 退货数量 | **upsert 覆盖** |
 | `sales_amount` | `DECIMAL(18,2)` | 是 | `NULL` | 销售金额 | **upsert 覆盖** |
 | `order_count` | `INT UNSIGNED` | 是 | `NULL` | 订单数（可选） | **upsert 覆盖** |
-| `source` | `VARCHAR(32)` | 否 | `'IMPORT'` | 数据来源：`IMPORT` / `MANUAL` / `API` | **upsert 覆盖** |
+| `source` | `VARCHAR(32)` | 否 | `'IMPORT'` | 数据来源：`IMPORT` / `MANUAL` / `PLATFORM`（`SalesSource`，`DESIGN_BASIS §9.17`） | **upsert 覆盖** |
 | `batch_id` | `BIGINT UNSIGNED` | 是 | `NULL` | 来源导入批次（逻辑关联） | **upsert 覆盖** |
 
 - **主键**：`id`。**外键**：`fk_sales_warehouse (warehouse_id) → warehouses(id)`、`fk_sales_sku (sku_id) → skus(id)`，均 `RESTRICT`。`product_id` / `batch_id` 为逻辑关联。
