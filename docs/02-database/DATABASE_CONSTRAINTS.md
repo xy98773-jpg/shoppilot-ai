@@ -306,7 +306,7 @@ ALTER TABLE skus
 | `ck_imp_status` | `import_batches` | `status` | `UPLOADED`,`PARSED`,`MAPPED`,`VALIDATED`,`IMPORTING`,`COMPLETED`,`PARTIAL_SUCCESS`,`FAILED`,`CANCELLED`,`DUPLICATE_REJECTED` | `§9.5` |
 | `ck_imp_biz_type` | `import_batches` | `biz_type` | `PRODUCT`,`SKU`,`SUPPLIER`,`WAREHOUSE`,`INVENTORY_SNAPSHOT`,`SALES_DAILY` | `§9.15` |
 | `ck_invtxn_type` | `inventory_transactions` | `txn_type` | `INIT_IMPORT`,`PURCHASE_INBOUND`,`SALE_OUTBOUND`,`COUNT_ADJUST`,`MANUAL_ADJUST`,`REVERSAL` | `§9.6` |
-| `ck_invtxn_biz_type` | `inventory_transactions` | `biz_type` | `GOODS_RECEIPT`,`COUNT`,`MANUAL`,`IMPORT`,`SALE`,`REVERSAL` ⚠️（`§9` 未定义，`D-14`） | — |
+| `ck_invtxn_biz_type` | `inventory_transactions` | `biz_type` | `GOODS_RECEIPT`,`COUNT`,`MANUAL`,`IMPORT`,`SALE`,`REVERSAL` | — |
 | `ck_run_status` | `analysis_runs` | `status` | `PENDING`,`RUNNING`,`SUCCEEDED`,`DEGRADED`,`FAILED`,`TIMEOUT`,`CANCELLED` | `§9.7` |
 | `ck_run_llm_status` | `analysis_runs` | `llm_status` | `NOT_REQUESTED`,`PENDING`,`SUCCEEDED`,`FAILED`,`TIMEOUT`,`VALIDATION_FAILED`,`SKIPPED` | `§9.8` |
 | `ck_run_scope_type` | `analysis_runs` | `scope_type` | `ALL_ACTIVE`,`SELECTED_SKUS`,`CATEGORY` | `§9.16` |
@@ -320,7 +320,7 @@ ALTER TABLE skus
 | `ck_po_status` | `purchase_orders` | `status` | `DRAFT`,`PENDING`,`ORDERED`,`PARTIALLY_RECEIVED`,`RECEIVED`,`CANCELLED` | `§9.13` |
 | `ck_po_source` | `purchase_orders` | `source` | `MANUAL`,`REPLENISHMENT` ⚠️（`D-14`） | — |
 | `ck_gr_status` | `goods_receipts` | `status` | `DRAFT`,`CONFIRMED`,`CANCELLED` | `§9.14` |
-| `ck_sales_source` | `sales_daily` | `source` | `IMPORT`,`MANUAL`,`API` ⚠️（`D-14`） | — |
+| `ck_sales_source` | `sales_daily` | `source` | `IMPORT`,`MANUAL`,`PLATFORM` | — |
 | `ck_ire_level` | `import_row_errors` | `error_level` | `ERROR`,`WARNING` ⚠️（`D-14`） | — |
 | `ck_al_result` | `audit_logs` | `result` | `SUCCESS`,`FAILURE` ⚠️（`D-14`） | — |
 

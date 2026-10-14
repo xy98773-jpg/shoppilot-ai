@@ -410,7 +410,7 @@
 | `return_qty` | 退货数量 | `DECIMAL(18,3)` | 否 | `0` | `CK:ck_sales_return_non_negative` | upsert 覆盖 |
 | `sales_amount` | 销售金额 | `DECIMAL(18,2)` | 是 | `NULL` | `CK:ck_sales_amount_non_negative` | 金额两位小数 |
 | `order_count` | 订单数 | `INT UNSIGNED` | 是 | `NULL` | — | 可选字段 |
-| `source` | 数据来源 | `VARCHAR(32)` | 否 | `'IMPORT'` | `CK:ck_sales_source` | `IMPORT`/`MANUAL`/`API`；**仅诊断，不参与统计口径** |
+| `source` | 数据来源 | `VARCHAR(32)` | 否 | `'IMPORT'` | `CK:ck_sales_source` | `IMPORT`/`MANUAL`/`PLATFORM`；**仅诊断，不参与统计口径** |
 | `batch_id` | 来源导入批次 | `BIGINT UNSIGNED` | 是 | `NULL` | 逻辑关联 `import_batches.id`、`IDX` | upsert 覆盖时更新为最新批次 |
 | `created_at` | 创建时间 | `DATETIME(3)` | 否 | `CURRENT_TIMESTAMP(3)` | — | 集合 A |
 | `updated_at` | 更新时间 | `DATETIME(3)` | 否 | `CURRENT_TIMESTAMP(3)` `ON UPDATE CURRENT_TIMESTAMP(3)` | — | 集合 A |
@@ -808,7 +808,7 @@
 | 17 | `AnalysisScopeType` | `ALL_ACTIVE`、`SELECTED_SKUS`、`CATEGORY` | `§9.16` | `analysis_runs.scope_type` |
 | 18 | `LeadTimeSource` ⚠️ | `POLICY`、`SKU`、`SUPPLIER`、`DEFAULT` | ⚠️ **`§9` 未定义**；`§10.2`/`§11.2` 要求标注。建议补充（`D-14`） | `analysis_items.lead_time_source` |
 | 19 | `InventoryBizType` ⚠️ | `GOODS_RECEIPT`、`COUNT`、`MANUAL`、`IMPORT`、`SALE`、`REVERSAL` | ⚠️ **`§9` 未定义**；建议补充（`D-14`） | `inventory_transactions.biz_type` |
-| 20 | `SalesSource` ⚠️ | `IMPORT`、`MANUAL`、`API` | ⚠️ **`§9` 未定义**；建议补充（`D-14`） | `sales_daily.source` |
+| 20 | `SalesSource` ⚠️ | `IMPORT`、`MANUAL`、`PLATFORM` | ⚠️ **`§9` 未定义**；建议补充（`D-14`） | `sales_daily.source` |
 | 21 | `PurchaseOrderSource` ⚠️ | `MANUAL`、`REPLENISHMENT` | ⚠️ **`§9` 未定义**；建议补充（`D-14`） | `purchase_orders.source` |
 | 22 | 审计常量（`action` / `result` / `biz_type`）⚠️ | `action` 27 个常量见 `DATABASE_DESIGN.md §6-J.1`；`result`：`SUCCESS`/`FAILURE` | ⚠️ **`§9` 未定义**；建议由 `audit` 模块维护并在 `§9` 备案（`D-14`） | `audit_logs.*` |
 | 23 | 导入错误级别 ⚠️ | `ERROR`、`WARNING` | ⚠️ **`§9` 未定义**；建议补充（`D-14`） | `import_row_errors.error_level` |

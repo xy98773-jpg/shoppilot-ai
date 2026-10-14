@@ -497,10 +497,11 @@ identity ← catalog ← {inventory, sales} ← analysis ← replenishment ← p
 | `LeadTimeSource` | 交期取值来源（用于可解释性标记） | `SKU`（SKU 级）/ `SUPPLIER`（供应商级）/ `POLICY`（策略表覆盖）/ `DEFAULT`（全局默认，需在结果中提示） |
 | `DataQualityGrade` | 分析输入数据质量分级 | `GOOD` / `FAIR` / `POOR` / `INSUFFICIENT`（判定规则见 `ANALYSIS_CONTRACT.md`） |
 | `SalesSource` | `sales_daily.source` | `IMPORT`（导入）/ `MANUAL`（手工录入）/ `PLATFORM`（未来平台接入，首期不产生） |
-| `InventoryBizType` | `inventory_transactions.biz_type` | `IMPORT_BATCH` / `PURCHASE_ORDER` / `GOODS_RECEIPT` / `SALES_IMPORT` / `MANUAL_ADJUSTMENT` / `STOCK_COUNT` / `REVERSAL` |
+| `InventoryBizType` | `inventory_transactions.biz_type` | `IMPORT` / `SALE` / `MANUAL` / `COUNT` / `GOODS_RECEIPT` / `REVERSAL` |
 | `PurchaseOrderSource` | `purchase_orders.source` | `REPLENISHMENT`（由补货建议生成）/ `MANUAL`（手工创建） |
 | `ImportRowErrorLevel` | `import_row_errors.error_level` | `ERROR`（阻止该行入库）/ `WARNING`（入库但提示，如库存快照累加） |
 | `AuditAction` | `audit_logs.action` 常量清单 | 至少包含：`AUTH_LOGIN`、`AUTH_LOGIN_FAILED`、`TEAM_MEMBER_ADD`、`TEAM_MEMBER_ROLE_CHANGE`、`TEAM_MEMBER_REMOVE`、`CATALOG_PRODUCT_CREATE_UPDATE`、`CATALOG_SKU_CREATE_UPDATE`、`CATALOG_SUPPLIER_CREATE_UPDATE`、`CATALOG_WAREHOUSE_CREATE_UPDATE`、`IMPORT_BATCH_CONFIRM`、`IMPORT_BATCH_FORCE_REIMPORT`、`INVENTORY_ADJUST`、`INVENTORY_REVERSE`、`ANALYSIS_RUN_CREATE`、`ANALYSIS_RUN_CANCEL`、`REPLENISHMENT_ITEM_EDIT`、`REPLENISHMENT_SUBMIT`、`REPLENISHMENT_WITHDRAW`、`REPLENISHMENT_APPROVE`、`REPLENISHMENT_REJECT`、`REPLENISHMENT_CANCEL`、`PURCHASE_ORDER_CREATE`、`PURCHASE_ORDER_CONFIRM`、`PURCHASE_ORDER_ORDERED`、`PURCHASE_ORDER_CANCEL`、`GOODS_RECEIPT_CONFIRM`、`GOODS_RECEIPT_REVERSE`、`GOODS_RECEIPT_CANCEL` |
+| `AuditResult` | `audit_logs.result` | `SUCCESS`（操作成功）/ `FAILURE`（操作失败） |
 | `RuleCode` | 风险规则代码（§11） | `R-STOCKOUT` / `R-LOWSTOCK` / `R-OVERSTOCK` / `R-SLOWMOVING` / `R-SALESANOMALY` / `R-DATAINSUFFICIENT` |
 
 ---

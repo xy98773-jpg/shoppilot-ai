@@ -2260,7 +2260,7 @@ X-Request-Id: req_gr_002
 | --- | --- | --- |
 | `LeadTimeSource` | `analysis_items.lead_time_source` | `POLICY`/`SKU`/`SUPPLIER`/`DEFAULT` |
 | `InventoryBizType` | `inventory_transactions.biz_type` | `GOODS_RECEIPT`/`COUNT`/`MANUAL`/`IMPORT`/`SALE`/`REVERSAL` |
-| `SalesSource` | `sales_daily.source` | `IMPORT`/`MANUAL`/`API` |
+| `SalesSource` | `sales_daily.source` | `IMPORT`/`MANUAL`/`PLATFORM` |
 | `PurchaseOrderSource` | `purchase_orders.source` | `MANUAL`/`REPLENISHMENT` |
 | 导入错误级别 | `import_row_errors.error_level` | `ERROR`/`WARNING` |
 | 审计常量 | `audit_logs.action` | 27 个，见 `DATABASE_DESIGN.md §6-J.1` |
