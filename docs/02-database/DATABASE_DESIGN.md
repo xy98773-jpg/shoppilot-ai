@@ -812,6 +812,8 @@
 | `confirmed_at` | `DATETIME(3)` | 是 | `NULL` | 确认时间 | `CONFIRMED` 时写入 |
 | `confirmed_by` | `BIGINT UNSIGNED` | 是 | `NULL` | 确认人 | `CONFIRMED` 时写入 |
 | `cancelled_at` | `DATETIME(3)` | 是 | `NULL` | 作废时间 | `CANCELLED` 时写入 |
+| `reversed_at` | `DATETIME(3)` | 是 | `NULL` | 冲销时间 | `CONFIRMED → REVERSED` 时写入（冲销事务内） |
+| `reversed_by` | `BIGINT UNSIGNED` | 是 | `NULL` | 冲销人 | `CONFIRMED → REVERSED` 时写入，逻辑关联 `users.id` |
 
 - **主键**：`id`。**外键**：`fk_gr_po (purchase_order_id) → purchase_orders(id)`、`fk_gr_warehouse (warehouse_id) → warehouses(id)`，均 `RESTRICT`。
 - **唯一约束**：`uk_gr_team_no (team_id, receipt_no)`、`uk_gr_team_idem (team_id, idempotency_key)`。**`idempotency_key` 为 `NOT NULL`**（与 `purchase_orders.idempotency_key` 可空不同）：到货确认会产生**不可逆的库存变更**，必须强制幂等保护。

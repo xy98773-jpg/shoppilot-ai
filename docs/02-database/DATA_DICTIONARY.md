@@ -717,6 +717,8 @@
 | `confirmed_at` | 确认时间 | `DATETIME(3)` | 是 | `NULL` | — | `CONFIRMED` 时写入 |
 | `confirmed_by` | 确认人 | `BIGINT UNSIGNED` | 是 | `NULL` | 逻辑关联 `users.id` | `CONFIRMED` 时写入 |
 | `cancelled_at` | 作废时间 | `DATETIME(3)` | 是 | `NULL` | — | 仅 `DRAFT → CANCELLED` |
+| `reversed_at` | 冲销时间 | `DATETIME(3)` | 是 | `NULL` | — | 仅 `CONFIRMED → REVERSED`（冲销事务内写入） |
+| `reversed_by` | 冲销人 | `BIGINT UNSIGNED` | 是 | `NULL` | 逻辑关联 `users.id` | 仅 `CONFIRMED → REVERSED` |
 | `created_at` | 创建时间 | `DATETIME(3)` | 否 | `CURRENT_TIMESTAMP(3)` | — | 集合 A |
 | `updated_at` | 更新时间 | `DATETIME(3)` | 否 | `CURRENT_TIMESTAMP(3)` `ON UPDATE CURRENT_TIMESTAMP(3)` | — | 集合 A |
 | `created_by` | 创建人 | `BIGINT UNSIGNED` | 是 | `NULL` | 逻辑关联 `users.id` | — |
@@ -838,12 +840,12 @@
 | 17 | `replenishment_reviews` | 13 | B（2） | 否 | 15 |
 | 18 | `purchase_orders` | 19 | A（4） | 是 | 24 |
 | 19 | `purchase_order_items` | 13 | A（4） | 是 | 18 |
-| 20 | `goods_receipts` | 15 | A（4） | 是 | 20 |
+| 20 | `goods_receipts` | 17 | A（4） | 是 | 22 |
 | 21 | `goods_receipt_items` | 10 | B（2） | 否 | 12 |
 | 22 | `audit_logs` | 20 | B（2） | 否 | 22 |
-| | **合计** | **338** | A×16 表 / B×6 表 | **12 张** | **426** |
+| | **合计** | **340** | A×16 表 / B×6 表 | **12 张** | **428** |
 
-> 「业务字段数」含 `id` 主键，不含公共审计字段（按集合 A/B 单列）。合计口径：`338 + 16×4 + 6×2 + 12（version）= 426`。
+> 「业务字段数」含 `id` 主键，不含公共审计字段（按集合 A/B 单列）。合计口径：`340 + 16×4 + 6×2 + 12（version）= 428`。
 
 > **完整性声明**：本表覆盖 `DESIGN_BASIS §8` 全部 **22 张表**与全部字段，无省略。任何字段变更必须同步 `DATABASE_DESIGN.md` 与 `DATABASE_CONSTRAINTS.md`（`§16`）。
 
