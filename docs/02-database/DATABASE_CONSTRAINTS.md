@@ -46,10 +46,10 @@
 
 | # | 约束名 | 表 | 字段（顺序） | 类型 | 业务含义 | 冲突错误码 | 说明 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `uk_users_username` | `users` | `username` | 自然唯一 | 登录名全局唯一 | `COM-0001`（⚠️ 建议新增 `AUTH-1004`，`D-14`） | `§8`；**无 `team_id`**（`§6` 规则 1 例外） |
-| 2 | `uk_users_email` | `users` | `email` | 自然唯一 | 邮箱全局唯一 | `COM-0001`（⚠️ 建议新增 `AUTH-1005`，`D-14`） | 可空列 → 允许多行 `NULL` |
-| 3 | `uk_teams_code` | `teams` | `code` | 自然唯一 | 团队编码全局唯一 | `COM-0001`（⚠️ 建议新增 `TEAM-2004`，`D-14`） | `teams` 自身即团队 |
-| 4 | `uk_tm_team_user` | `team_members` | `team_id`, `user_id` | 防重 + 团队隔离 | 一个用户在一个团队只有一行 | `COM-0001`（⚠️ 建议新增 `TEAM-2005`，`D-14`） | 重新加入**复活同一行** |
+| 1 | `uk_users_username` | `users` | `username` | 自然唯一 | 登录名全局唯一 | `COM-0001`（⚠️ 冲突码待统一：候选 `AUTH-1007`「用户名已存在」，见审查发现 F-39） | `§8`；**无 `team_id`**（`§6` 规则 1 例外） |
+| 2 | `uk_users_email` | `users` | `email` | 自然唯一 | 邮箱全局唯一 | `COM-0001`（⚠️ 冲突码待统一：候选 `AUTH-1008`「邮箱已被占用」，见 F-39） | 可空列 → 允许多行 `NULL` |
+| 3 | `uk_teams_code` | `teams` | `code` | 自然唯一 | 团队编码全局唯一 | `COM-0001`（⚠️ 冲突码待统一：候选 `TEAM-2008`「团队编码已存在」，见 F-39） | `teams` 自身即团队 |
+| 4 | `uk_tm_team_user` | `team_members` | `team_id`, `user_id` | 防重 + 团队隔离 | 一个用户在一个团队只有一行 | `COM-0001`（⚠️ 冲突码待统一：候选 `TEAM-2005`「用户已是团队成员」，见 F-39） | 重新加入**复活同一行** |
 | 5 | `uk_wh_team_code` | `warehouses` | `team_id`, `code` | 团队隔离 | 团队内仓库编码唯一 | `CAT-3002` | `§6` 规则 2 |
 | 6 | `uk_sup_team_code` | `suppliers` | `team_id`, `code` | 团队隔离 | 团队内供应商编码唯一 | `CAT-3002` | 同上 |
 | 7 | `uk_prod_team_code` | `products` | `team_id`, `product_code` | 团队隔离 | 团队内商品编码唯一 | `CAT-3002` | 同上 |
@@ -57,9 +57,9 @@
 | 9 | `uk_pol_team_sku_wh` | `replenishment_policies` | `team_id`, `sku_id`, `warehouse_id` | 防重 + 团队隔离 | 一 SKU 一仓库至多一条策略 | **不报错**（upsert 吸收） | 保存走 `INSERT ... ON DUPLICATE KEY UPDATE` |
 | 10 | `uk_invbal_team_wh_sku` | `inventory_balances` | `team_id`, `warehouse_id`, `sku_id` | 防重 + 团队隔离 | 一 SKU 一仓库一行余额 | **不报错**（并发首建吸收） | 冲突后改为读取 + 走乐观锁路径 |
 | 11 | `uk_invtxn_team_idem` | `inventory_transactions` | `team_id`, `idempotency_key` | **幂等** + 团队隔离 | 同一团队同一幂等键只产生一条流水 | `INV-5003`（内容不一致）/ 成功返回原流水（内容一致） | `§8`；5 类幂等之二 |
-| 12 | `uk_invtxn_team_reversed` ⚠️ | `inventory_transactions` | `team_id`, `reversed_txn_id` | 防重 + 团队隔离 | **一笔流水只能被冲销一次** | `INV-5009` | ⚠️ **`§8` 未列出，本设计建议新增**（`D-13`）；可空列 → 允许多行 `NULL` |
+| 12 | `uk_invtxn_team_reversed` | `inventory_transactions` | `team_id`, `reversed_txn_id` | 防重 + 团队隔离 | **一笔流水只能被冲销一次** | `INV-5009` | ✅ 已列入 `DESIGN_BASIS §8`（裁定见 `§15.2`；旧编号 `D-13` 作废）；可空列 → 允许多行 `NULL` |
 | 13 | `uk_sales_team_wh_sku_date` | `sales_daily` | `team_id`, `warehouse_id`, `sku_id`, `sale_date` | 防重 + 团队隔离 | 日粒度唯一（**upsert 落点**） | **不报错**（upsert 覆盖） | `§6-D.2` |
-| 14 | `uk_imp_team_hash_biz` | `import_batches` | `team_id`, `dedupe_hash`, `biz_type` | **幂等** + 团队隔离 | 同团队同内容同类型的"有效批次"唯一 | `IMP-4004` | ⚠️ 物理列用可空槽位 `dedupe_hash`，见 `INC-1`/`D-09`；5 类幂等之一 |
+| 14 | `uk_imp_team_hash_biz` | `import_batches` | `team_id`, `dedupe_hash`, `biz_type` | **幂等** + 团队隔离 | 同团队同内容同类型的"有效批次"唯一 | `IMP-4004` | 物理列用可空槽位 `dedupe_hash`（已裁定，见 `DESIGN_BASIS §8` 补充说明与 `§9.5`；旧编号 `D-09` 作废）；5 类幂等之一 |
 | 15 | `uk_run_team_no` | `analysis_runs` | `team_id`, `run_no` | 自然唯一 + 团队隔离 | 团队内运行编号唯一 | `COM-0002` | 编号冲突时重新生成（`D-16`） |
 | 16 | `uk_run_team_idem` | `analysis_runs` | `team_id`, `idempotency_key` | **幂等** + 团队隔离 | 同一团队同一幂等键只创建一次运行 | `COM-0009` | 可空 → 多行 `NULL` 允许；5 类幂等之三 |
 | 17 | `uk_ai_run_sku_wh` | `analysis_items` | `run_id`, `sku_id`, `warehouse_id` | 防重 | 一次运行内每 SKU×仓库一条快照 | `COM-0002`（内部缺陷，不应发生） | `§8`；**未带 `team_id`**（`INC-2`/`D-10`） |
@@ -678,9 +678,9 @@ L5 租户插件   TenantLineInnerInterceptor 自动追加 ← 兜底（防手写
 
 | 检查项 | 结论 |
 | --- | --- |
-| 唯一约束 | 与 `DESIGN_BASIS §8` 一致（23 条）；新增 1 条 `uk_invtxn_team_reversed` 已登记 `D-13` |
-| 状态枚举取值 | `CHECK` 取值与 `§9` **逐字符一致**；`§9` 未定义的 5 类常量已在 §4.1 标注 ⚠️ 并登记 `D-14` |
-| 错误码 | 只使用 `§12.3` 已列出的错误码；建议新增的 5 个码（`AUTH-1004`/`AUTH-1005`/`TEAM-2004`/`TEAM-2005`/`IMP-4006` 等）登记 `D-14` |
+| 唯一约束 | 与 `DESIGN_BASIS §8` 一致；`uk_invtxn_team_reversed` **已裁定并入 `§8`**（裁定见 `§15.2`，旧编号 `D-13` 作废） |
+| 状态枚举取值 | `CHECK` 取值与 `§9` **逐字符一致**；`LeadTimeSource` / `InventoryBizType` / `SalesSource` / `PurchaseOrderSource` / `AuditAction` 等已由 `§9.17` 统一定义（旧编号 `D-14` 作废） |
+| 错误码 | 只使用 `ERROR_CODES.md §2` 已定义的错误码（固化成员以 `§12.3` 为准，`§12.3` 为成员资格权威）；4 条唯一键冲突码语义待统一（见审查发现 F-39） |
 | 团队隔离 | 6 条硬规则逐条落地（§6.1）；2 处必要例外（`idx_run_timeout`、5 条无 `team_id` 前缀的唯一键）已显式声明 |
 | 金额/数量/时间精度 | 与 `§14` 一致 |
 | 不一致与待决策 | 见 `DATABASE_DESIGN.md §11`（`INC-1`~`INC-3`、`D-09`~`D-16`） |

@@ -1547,7 +1547,7 @@ replenishment_items.status = 'APPROVED'
 | 7 | **审批通过 / 驳回** | `ReplenishmentReviewAppService.approve()` / `reject()` | ① 权限校验（`APPROVER`）；② 状态守卫 `PENDING_REVIEW→APPROVED` / `→REJECTED`；③ INSERT `replenishment_reviews`（`APPROVE`/`REJECT`，`REJECT` 必填 `comment`）；④ 审计 | 状态守卫（**双审批并发时只有 1 条成功**） | 非 `PENDING_REVIEW` → `RPL-8001`；重复审批 → `RPL-8002`；无权限 → `TEAM-2003` |
 | 8 | **创建采购单（由建议转采购）** | `PurchaseOrderAppService.createFromReplenishment()` | ① 幂等键检查/唯一约束；② 校验建议状态为 `APPROVED`；③ INSERT `purchase_orders`（`DRAFT`）+ INSERT `purchase_order_items`（各持 `replenishment_item_id`）；④ 建议状态守卫 `APPROVED→CONVERTED` + 回填 `converted_po_item_ids`；⑤ 审计 | 建议**乐观锁 + 状态守卫**；采购单唯一约束 `uk_po_team_idem` | 建议已转 → `PO-9001`；建议状态非法 → `RPL-8001`；重复提交 → 唯一约束吸收（返回原采购单） |
 | 9 | **确认到货** | 同 #1 | 同 #1 | 同 #1 | 同 #1 |
-| 10 | **库存冲销** | `InventoryReversalAppService.reverse()` | ① 定位原流水（`idx_invtxn_team_biz`）；② 校验未被冲销（不存在 `reversed_txn_id = 原 id` 的流水）；③ INSERT `REVERSAL` 流水（`qty_delta = -原 qty_delta`，`reversed_txn_id = 原 id`）；④ 余额 UPDATE | 余额乐观锁 + **原流水唯一性校验**（"一笔流水只能冲一次"由 `reversed_txn_id` 上的**唯一索引**保证：`uk_invtxn_team_reversed (team_id, reversed_txn_id)`，⚠️ 该索引**未在 `DESIGN_BASIS §8` 中列出，属本设计新增建议**，登记 `D-13`） | 重复冲销 → `INV-5009`；冲销导致负库存 → `INV-5006` |
+| 10 | **库存冲销** | `InventoryReversalAppService.reverse()` | ① 定位原流水（`idx_invtxn_team_biz`）；② 校验未被冲销（不存在 `reversed_txn_id = 原 id` 的流水）；③ INSERT `REVERSAL` 流水（`qty_delta = -原 qty_delta`，`reversed_txn_id = 原 id`）；④ 余额 UPDATE | 余额乐观锁 + **原流水唯一性校验**（"一笔流水只能冲一次"由 `reversed_txn_id` 上的**唯一索引**保证：`uk_invtxn_team_reversed (team_id, reversed_txn_id)`，✅ 已列入 `DESIGN_BASIS §8`，裁定见 `§15.2`） | 重复冲销 → `INV-5009`；冲销导致负库存 → `INV-5006` |
 | 11 | **手工调整库存** | `InventoryWriteService.applyManualAdjust()` | ① 权限校验（`ADMIN`+，`§9.6`）；② `reason` 必填校验；③ 流水 INSERT（`MANUAL_ADJUST`）+ 余额 UPDATE；④ 审计 | 余额乐观锁 | 原因缺失 → `COM-0001`；无权限 → `TEAM-2003` |
 | 12 | **策略 upsert** | `ReplenishmentPolicyAppService.upsert()` | ① 同团队校验；② `INSERT ... ON DUPLICATE KEY UPDATE`；③ 审计 | 唯一约束 `uk_pol_team_sku_wh` | 冲突被 upsert 吸收（无错误） |
 
@@ -1627,9 +1627,9 @@ replenishment_items.status = 'APPROVED'
 | 15 | `replenishment_reviews.action` | `ReviewAction` | `§9.12` | 5 |
 | 16 | `purchase_orders.status` | `PurchaseOrderStatus` | `§9.13` | 6 |
 | 17 | `goods_receipts.status` | `GoodsReceiptStatus` | `§9.14` | 4 |
-| 18 | `analysis_items.lead_time_source` | **本设计引入的取源标记** | ⚠️ **`§9` 未定义该枚举**，`§10.2`/`§11.2` 只要求"标注 `lead_time_source = DEFAULT`"。本设计取值 `POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`。**建议在 `§9` 补充定义 `LeadTimeSource`**，登记 `D-14` | 4 |
-| 19 | `sales_daily.source` / `purchase_orders.source` | **本设计引入的来源标记** | ⚠️ `§9` 未定义。取值见各表字段表。**建议在 `§9` 补充**，登记 `D-14` | — |
-| 20 | `inventory_transactions.biz_type` | **本设计引入的单据来源标记** | ⚠️ `§9` 未定义。**建议在 `§9` 补充 `InventoryBizType`**，登记 `D-14` | 6 |
+| 18 | `analysis_items.lead_time_source` | `LeadTimeSource` | ✅ `§9.17` | 4 |
+| 19 | `sales_daily.source` / `purchase_orders.source` | `SalesSource` / `PurchaseOrderSource` | ✅ `§9.17` | 3 / 2 |
+| 20 | `inventory_transactions.biz_type` | `InventoryBizType` | ✅ `§9.17` | 6 |
 | 21 | `audit_logs.action` / `result` / `biz_type` | `AuditAction`（35 条）/ `AuditResult` / 领域名 | ✅ `§9.17` 已定义：`action` 35 条常量的**成员资格**以 `§9.17` 为唯一权威，**语义/`biz_type`/`result`** 见本节 `§6-J.1`（一一对应） | 35 / 2 / — |
 
 ---
@@ -1763,7 +1763,7 @@ replenishment_items.status = 'APPROVED'
 | **`D-11`** | 无团队上下文操作（登录/登出/全局定时任务）在 `audit_logs.team_id` 上的取值 | **`team_id = 0` 表示系统域**，并固化常量 | ① 允许 `team_id` 为 `NULL`（与 §6 规则 1 冲突）；② 单独建系统审计表（新增表，违反 22 张清单） | 影响审计查询口径与前端展示 | `INC-3` |
 | **`D-12`** | 需要补充若干导入类错误码：覆盖告警（`IMP-4006`）、日期缺口告警（`IMP-4014`）等 | **在 `ERROR_CODES.md` 与 `DESIGN_BASIS §12.3` 补充** | 复用现有 `COM-0001`（则无法区分"格式错误"与"覆盖告警"） | 影响前端能否给出精确提示与用户决策 | §6-D / §6-E |
 | **`D-13`** | `inventory_transactions` 是否需要"一笔流水只能被冲销一次"的 DB 级唯一约束 `uk_invtxn_team_reversed (team_id, reversed_txn_id)` | **建议新增该唯一索引**（可空列上的唯一索引允许多行 `NULL`） | 仅在应用层校验（并发冲销可能双写） | 影响冲销的幂等强度；属 `§8` 之外的新增约束 | §7.2 #10 |
-| **`D-14`** | 以下枚举/常量在 `§9` 中**未定义**，但本设计为完整表达需要固化：`LeadTimeSource`（`POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`）、`InventoryBizType`（`GOODS_RECEIPT`/`COUNT`/`MANUAL`/`IMPORT`/`SALE`/`REVERSAL`）、`sales_daily.source`（`IMPORT`/`MANUAL`/`API`）、`purchase_orders.source`（`MANUAL`/`REPLENISHMENT`）、审计 `action` 常量表 | **在 `DESIGN_BASIS §9` 补充这些枚举/常量定义**（保持"只定义一次"原则） | 在各文档各写一份（违反 SSOT 原则，必然漂移） | 影响 `CHECK` 约束的可写性与跨文档一致性 | §8 |
+| **`D-14`**（旧编号，已作废） | 以下枚举/常量在 `§9` 中**未定义**，但本设计为完整表达需要固化：`LeadTimeSource`、`InventoryBizType`、`sales_daily.source`、`purchase_orders.source`、审计 `action` 常量表 | ✅ **已裁定**：统一补入 `DESIGN_BASIS §9.17`（`LeadTimeSource` / `InventoryBizType` / `SalesSource` / `PurchaseOrderSource` / `AuditAction` 35 条 / `AuditResult`），裁定记录见 `§15.2` | ~~在各文档各写一份~~（**已否决**：违反 SSOT 原则，必然漂移） | 影响 `CHECK` 约束的可写性——**已消除** | §8 |
 | **`D-15`** | `analysis_items` / `inventory_transactions` 等只增表的**保留期与归档策略** | **首期全部保留**（追溯优先，P10）；M7 评估保留期与归档 | 首期即引入保留期（会破坏追溯链，且与 `replenishment_items` 的外键 `RESTRICT` 冲突） | 影响存储成本与查询性能 | R10 / R11 |
 | **`D-16`** | 业务编号（`po_no` / `receipt_no` / `batch_no` / `run_no`）的生成策略 | **应用层生成**（团队前缀 + 日期 + 序列/随机），唯一约束兜底 + 冲突重试 3 次 | ① 引入"编号序列表"（新增表，违反 22 张清单）；② 用 `AUTO_INCREMENT` 拼号（会暴露全局业务量） | 影响多实例并发下的可用性与编号可读性 | R12 |
 

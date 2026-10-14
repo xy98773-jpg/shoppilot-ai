@@ -498,7 +498,7 @@ COMMIT;
 | `D-06` | `DRAFT → PENDING` 确认角色 / 是否"确认即审批" | §8.4 的实现前提 |
 | `D-09` | 四眼原则 | 影响由建议转采购时"审批人 ≠ 创建人"是否校验 |
 | `D-13` | `uk_invtxn_team_reversed` 唯一约束是否新增 | §8.7 冲销幂等强度 |
-| `D-14` | `InventoryBizType`（含 `GOODS_RECEIPT`）等未在 `§9` 定义 | §8.5 流水 `biz_type` 取值来源 |
+| ~~`D-14`~~（旧编号，已作废） | ✅ 已裁定：`InventoryBizType`（含 `GOODS_RECEIPT`）等已统一补入 `DESIGN_BASIS §9.17`（裁定见 `§15.2`） | §8.5 流水 `biz_type` 取值来源已明 |
 | `D-15` | 只增表保留期/归档 | 长期存储 |
 
 ### 12.2 发现的不一致（**不改 SSOT**，仅标注）

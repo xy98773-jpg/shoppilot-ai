@@ -645,8 +645,8 @@ stateDiagram-v2
 | ~~INC-A~~ | **已解决**（M0 审查裁定）：`SUGGESTED → REJECTED` **不允许**，驳回必须经 `PENDING_REVIEW` | 曾与 `DESIGN_BASIS §9.11` 存在张力 | **裁定**：SSOT §9.11 已修正为 `SUGGESTED → {PENDING_REVIEW, SUPERSEDED, CANCELLED}`；同时 §5 规则 6 明确驳回权归 `APPROVER`。前端不暴露「直接驳回」按钮。状态机图已同步（见 §6.3 的注释） |
 | INC-B | ✅ **已闭环**（F-28）：`§9.17` 已含 `REPLENISHMENT_WITHDRAW` / `REPLENISHMENT_CANCEL` 审计常量，与 `§9.12` `WITHDRAW`/`CANCEL` 对应 | `DESIGN_BASIS §9.12` vs `§9.17` | 已固化于 `§9.17` #30 / #31，语义见 `DATABASE_DESIGN.md §6-J.1`，见 §8 |
 | INC-C | **`D-09` 编号被两处复用**：`DATABASE_DESIGN.md` 用 `D-09` 表示"导入幂等槽位"，`USER_ROLES.md` 用 `D-09` 表示"四眼原则" | `DATABASE_DESIGN.md §11` vs `USER_ROLES.md §7.2` | 编号冲突，需统一（本文档按"四眼原则"理解） |
-| INC-D | **`analysis_items.lead_time_source` 取值 `POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`** 未在 `§9` 定义（`D-14` 已登记），但 `§10.2` 的三级回退表已隐含使用 | `DESIGN_BASIS §10.2` vs `§9` | 建议在 `§9` 补充 `LeadTimeSource`（并入 `D-14`） |
-| INC-E | **`§5.3` 的 `data_quality` 分级**（`GOOD`/`FAIR`/`POOR`/`INSUFFICIENT`，见 `ANALYSIS_CONTRACT.md`）未在 `DESIGN_BASIS §9` 定义 | `ANALYSIS_CONTRACT.md` vs `DESIGN_BASIS §9` | 建议补充 `DataQualityGrade` 枚举（并入 `D-14` 或新增） |
+| INC-D | ✅ **已闭环**：`analysis_items.lead_time_source` 取值 `POLICY`/`SKU`/`SUPPLIER`/`DEFAULT` 已由 `LeadTimeSource`（`DESIGN_BASIS §9.17`）定义 | `DESIGN_BASIS §10.2` vs `§9.17` | 已固化于 `§9.17`（旧编号 `D-14` 作废） |
+| INC-E | ✅ **已闭环**：`§5.3` 的 `data_quality` 分级（`GOOD`/`FAIR`/`POOR`/`INSUFFICIENT`）已由 `DataQualityGrade`（`DESIGN_BASIS §9.17`）定义 | `ANALYSIS_CONTRACT.md` vs `DESIGN_BASIS §9.17` | 已固化于 `§9.17`（旧编号 `D-14` 作废） |
 
 ### 9.3 建议新增待决策项（沿用 SSOT §15 编号风格）
 

@@ -2252,9 +2252,9 @@ X-Request-Id: req_gr_002
 
 本文档采用任务书给定的资源路径（`/api/v1/import/batches`、`/api/v1/purchasing/orders`、`/api/v1/purchasing/receipts`、`/api/v1/teams/{teamId}/members`、`/api/v1/audit/logs`、`/api/v1/inventory/adjustments`），与 §13.1 一致。
 
-### 13.3 `DESIGN_BASIS §9` 未定义的枚举（沿用 `DATA_DICTIONARY.md §6` 的提示）
+### 13.3 本文档引用的 `DESIGN_BASIS §9.17` 辅助枚举
 
-以下枚举被本文档字段引用，但 `DESIGN_BASIS §9` 未定义，建议补充（`D-14`）：
+以下枚举**已由 `DESIGN_BASIS §9.17` 统一定义**（原"未定义，建议补充"提示与旧编号 `D-14` 一并作废），本文档**只引用不定义**：
 
 | 枚举 | 出现位置 | 取值 |
 | --- | --- | --- |

@@ -496,9 +496,9 @@ avg-ma-3sigma-v1+risk-rules-v1+replen-calc-v1
 | # | 现象 | 建议 |
 | --- | --- | --- |
 | 1 | ~~`analysis_items` 无 `llm_status`/`llm_evidence`/`warnings` 列~~ | ✅ **已解决**：`DESIGN_BASIS §8` 补充说明已裁定新增 `analysis_items.llm_detail_json`，`DATABASE_DESIGN.md §5.15` 与 `DATA_DICTIONARY.md §5.15` 均已落库；本文档 §9.1 映射表与 §9.3 已同步（`D-21` 对应方案为"增列"，已采纳） |
-| 2 | `DESIGN_BASIS §9` 未定义 `LeadTimeSource`（`analysis_items.lead_time_source`） | 本文档 §1.2/§2.1 采用 `POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`；建议 `DESIGN_BASIS §9` 补充（**`D-14`**） |
+| 2 | ✅ **已闭环**：`LeadTimeSource`（`analysis_items.lead_time_source`）已由 `DESIGN_BASIS §9.17` 定义 | 本文档 §1.2/§2.1 采用 `POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`，与 `§9.17` 一致（旧编号 `D-14` 作废） |
 | 3 | `DESIGN_BASIS §10.6` 未定义 `ANOMALY_SIGMA` 与数据质量分级阈值（0.8/0.5 等） | 本文档 §4 给出 `data_quality` 判定阈值（0.8/0.5、异常值 5%/15%），**属新增约定**；建议登记 `DESIGN_BASIS §15`（**建议 `D-27`**） |
-| 4 | `data_quality` 的四个取值（`GOOD`/`FAIR`/`POOR`/`INSUFFICIENT`）不在 `DESIGN_BASIS §9` | 建议作为**新枚举**在 `§9` 备案（**建议 `D-27`**） |
+| 4 | ✅ **已闭环**：`data_quality` 的四个取值已由 `DESIGN_BASIS §9.17` 的 `DataQualityGrade` 定义 | 本文档**引用** `GOOD`/`FAIR`/`POOR`/`INSUFFICIENT`；阈值仍属本文档 §4（见 `D-19`） |
 
 **新增待决策**：
 

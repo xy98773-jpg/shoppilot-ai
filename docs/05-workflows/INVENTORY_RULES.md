@@ -706,8 +706,8 @@ SKU-05: SS=7×4=28 ; Q_base = 7×14 + 28 − 10 = 98 + 18 = 116
 | --- | --- | --- | --- |
 | ~~INC-R1~~ | **已解决**：`R-LOWSTOCK` 与 `R-STOCKOUT` 是否互斥 | **裁定为可共存**（与 GC-02 一致）；SSOT `§11` 已删除「且不满足 `R-STOCKOUT`」条件 | 已落实于 `DESIGN_BASIS §11` |
 | INC-R2 | **`in_transit_qty` 派生 vs 物化**（同 `PURCHASING_WORKFLOW §12.1 INC-P1`），且口径状态集 `§3`(`ORDERED/PENDING`) ≠ `§10.4`(`PENDING/ORDERED/PARTIALLY_RECEIVED`) | `DESIGN_BASIS §3` vs `§10.4` vs `DATABASE_DESIGN §5.9` | 统一口径，并明确"补货只用 `§10.4`" |
-| INC-R3 | **`data_quality` / `DataQualityGrade` 未在 `§9` 定义**（`GOOD`/`FAIR`/`POOR`/`INSUFFICIENT` 见 `ANALYSIS_CONTRACT.md`） | `ANALYSIS_CONTRACT.md` vs `DESIGN_BASIS §9` | 补充枚举定义（并入 `D-14`） |
-| INC-R4 | **`lead_time_source` 取值未在 `§9` 定义**（`POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`） | `DESIGN_BASIS §10.2`/`§11.2` vs `§9` | 补充 `LeadTimeSource`（已登记 `D-14`） |
+| INC-R3 | ✅ **已闭环**：`DataQualityGrade`（`GOOD`/`FAIR`/`POOR`/`INSUFFICIENT`）已由 `DESIGN_BASIS §9.17` 定义 | `ANALYSIS_CONTRACT.md` vs `DESIGN_BASIS §9.17` | 已固化于 `§9.17`（旧编号 `D-14` 作废） |
+| INC-R4 | ✅ **已闭环**：`LeadTimeSource`（`POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`）已由 `DESIGN_BASIS §9.17` 定义 | `DESIGN_BASIS §10.2`/`§11.2` vs `§9.17` | 已固化于 `§9.17`（旧编号 `D-14` 作废） |
 | INC-R5 | **预算截断破坏采购倍数约束**：`§10.5` 先套倍数再截断，截断后 `Q_suggest` 可能非 `order_multiple` 整数倍 | `DESIGN_BASIS §10.5` 内部 | 明确"截断优先于倍数"或"截断后回退到最近的倍数"，见 `D-44` |
 | INC-R6 | **`SS` 采用值字段名**：`analysis_items` 用 `safety_stock_qty`，`§10.3` 用 `SS`，`policies.safety_stock_qty` 为覆盖项，三者同名易混 | `DATABASE_DESIGN §5.15` vs `DESIGN_BASIS §10.3` | 文档中明确"`analysis_items.safety_stock_qty` = 采用的 `SS`，与 `policies.safety_stock_qty` 语义不同" |
 

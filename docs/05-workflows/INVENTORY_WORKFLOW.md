@@ -473,9 +473,9 @@ flowchart TD
 | # | 位置 | 现象 | 处理 / 建议 |
 | --- | --- | --- | --- |
 | 1 | `DESIGN_BASIS.md §5` vs `§9.6` | `§5` 将"库存调整"整体列入 `OPERATOR` 权限概述，而 `§9.6` 规定 `MANUAL_ADJUST` 需 `ADMIN`+ | **与 `DESIGN_BASIS.md §5` 表述未尽一致，建议修订**（`USER_ROLES.md §7.3` 第 1 条已登记）。本文档 §6 按 `§9.6` 细化。 |
-| 2 | `DATABASE_DESIGN.md §7.2` #10 | "一笔流水只能冲销一次"的 DB 级唯一约束 `uk_invtxn_team_reversed` 未在 `§8` 列出 | **属 `§8` 之外新增约束建议**，登记 `D-13`。本文档 §5.6 引用。 |
-| 3 | `DESIGN_BASIS.md §9.6` | `inventory_transactions.biz_type` 取值（`GOODS_RECEIPT`/`COUNT`/`MANUAL`/`IMPORT`/`SALE`/`REVERSAL`）未在 `§9` 定义 | **与 `DESIGN_BASIS.md §9` 未覆盖，建议补充 `InventoryBizType`**，登记 `D-14`（`DATABASE_DESIGN.md §8` #20）。 |
-| 4 | `DESIGN_BASIS.md §9` | `LeadTimeSource`（`POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`）未定义 | 建议补充，登记 `D-14`。 |
+| 2 | `DATABASE_DESIGN.md §7.2` #10 | ✅ **已闭环**：`uk_invtxn_team_reversed` **已列入 `DESIGN_BASIS §8`** | 裁定见 `§15.2`（旧编号 `D-13` 作废）；本文档 §5.6 引用 |
+| 3 | `DESIGN_BASIS.md §9.6` | ✅ **已闭环**：`inventory_transactions.biz_type` 已由 `InventoryBizType`（`§9.17`）定义 | 取值 `GOODS_RECEIPT`/`COUNT`/`MANUAL`/`IMPORT`/`SALE`/`REVERSAL`（旧编号 `D-14` 作废） |
+| 4 | `DESIGN_BASIS.md §9` | ✅ **已闭环**：`LeadTimeSource` 已由 `§9.17` 定义 | 取值 `POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`（旧编号 `D-14` 作废） |
 | 5 | 待决策编号冲突 | `DATABASE_DESIGN.md §11.2` 的 `D-09`（导入幂等槽位列）与 `USER_ROLES.md §7.2` 的 `D-09`（四眼原则）冲突 | **跨文档编号冲突**，建议改号并统一登记到 `DESIGN_BASIS.md §15`。 |
 | 6 | 出库触发方式 | SSOT 未定义首期出库的对外入口 | 本文档明确"首期无独立出库接口、`SALE_OUTBOUND` 为预留写入口"（§5.4），属**新增设计结论**，建议在 `DESIGN_BASIS.md §15` 或 ADR 备案。 |
 
@@ -488,7 +488,7 @@ flowchart TD
 | `D-07` | `DESIGN_BASIS.md §15` | 是否引入 Redis；决定库存并发方案能否使用分布式锁 |
 | `D-08` ✅ **已裁定** | `DESIGN_BASIS.md §15` / §15.1 | **不允许负库存**（`on_hand_qty >= 0` 约束 + 各写路径应用层校验 + DB `CHECK` 兜底）；本文档 §5.4/§7 直接依赖 |
 | `D-13` | `DATABASE_DESIGN.md §11.2` | `uk_invtxn_team_reversed` 唯一索引；§5.6 冲销唯一性 |
-| `D-14` | `DATABASE_DESIGN.md §11.2` | `InventoryBizType` / `LeadTimeSource` 等枚举补充 |
+| ~~`D-14`~~（旧编号，已作废） | `DESIGN_BASIS §9.17` | ✅ 已裁定：`InventoryBizType` / `LeadTimeSource` / `DataQualityGrade` / 审计常量等统一补入 `§9.17`（裁定见 `§15.2`），本文档**引用不重定义** |
 | `D-15` | `DATABASE_DESIGN.md §11.2` | `inventory_transactions` 保留期与归档策略 |
 | `D-16` | `DATABASE_DESIGN.md §11.2` | 业务编号生成策略（不影响本流程的幂等键构造） |
 

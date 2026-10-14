@@ -380,7 +380,7 @@
 | `qty_delta` | 变更量 | `DECIMAL(18,3)` | 否 | — | `CK:ck_invtxn_delta_non_zero` | 带符号（`+` / `−`）；不得为 0 |
 | `qty_before` | 变更前数量 | `DECIMAL(18,3)` | 否 | — | `CK:ck_invtxn_before_non_negative` | 与余额当时的 `on_hand_qty` 一致 |
 | `qty_after` | 变更后数量 | `DECIMAL(18,3)` | 否 | — | `CK:ck_invtxn_after_non_negative` | 与余额更新后的 `on_hand_qty` 一致 |
-| `biz_type` | 来源单据类型 | `VARCHAR(32)` | 否 | — | `CK:ck_invtxn_biz_type`、`IDX` | `GOODS_RECEIPT`/`COUNT`/`MANUAL`/`IMPORT`/`SALE`/`REVERSAL`（见 `D-14`） |
+| `biz_type` | 来源单据类型 | `VARCHAR(32)` | 否 | — | `CK:ck_invtxn_biz_type`、`IDX` | `InventoryBizType`（`§9.17`）：`GOODS_RECEIPT`/`COUNT`/`MANUAL`/`IMPORT`/`SALE`/`REVERSAL` |
 | `biz_ref_id` | 来源单据 ID | `BIGINT UNSIGNED` | 是 | `NULL` | `IDX`、**逻辑关联（多态）** | 目标表由 `biz_type` 决定，无法建外键 |
 | `biz_ref_no` | 来源单据编号 | `VARCHAR(64)` | 是 | `NULL` | — | 冗余，免 JOIN 展示 |
 | `idempotency_key` | 幂等键 | `VARCHAR(128)` | 否 | — | `UK:uk_invtxn_team_idem`(后缀) | `<txn_type>:<biz_type>:<biz_ref_id>:<sku_id>[:<suffix>]`；**禁止用 UUID** |
@@ -550,7 +550,7 @@
 | `total_sales_qty` | 窗口总销量 | `DECIMAL(18,3)` | 是 | `NULL` | — | — |
 | `cv` | 波动率 `CV` | `DECIMAL(18,4)` | 是 | `NULL` | — | `mean = 0` 时为 `NULL` |
 | `lead_time_days` | 采用值 `L` | `INT UNSIGNED` | 是 | `NULL` | `CK:ck_ai_lead_time` | — |
-| `lead_time_source` | `L` 来源 | `VARCHAR(32)` | 是 | `NULL` | `CK:ck_ai_lead_time_source` | `POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`（`§11.2`；`D-14`） |
+| `lead_time_source` | `L` 来源 | `VARCHAR(32)` | 是 | `NULL` | `CK:ck_ai_lead_time_source` | `LeadTimeSource`（`§9.17`）：`POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`（取值口径见 `§11.2`） |
 | `coverage_days` | 采用值 `R` | `INT UNSIGNED` | 是 | `NULL` | `CK:ck_ai_coverage` | — |
 | `safety_stock_qty` | 采用值 `SS` | `DECIMAL(18,3)` | 是 | `NULL` | `CK:ck_ai_ss` | `§10.3` |
 | `volatility_adjusted` | 高波动上浮标记 | `TINYINT(1)` | 否 | `0` | `CK:ck_ai_vol_adj` | `§10.3` |
