@@ -125,7 +125,7 @@ flowchart TD
 - **理由**：`inventory_balances` 是**可推导物化状态**，只能由流水驱动（`DATABASE_DESIGN.md §5.9` 设计要点 2）；若直接覆盖 `on_hand_qty` 而不写流水，将破坏"余额可由流水推导"（`§3.1` 第 4 条）与对账能力。
 - **对重复导入的处理**：`INVENTORY_SNAPSHOT` 命中已存在余额行 → 在 `VALIDATED` 阶段产生 **`WARNING`（`IMP-4006`）**"该 `(仓库, SKU)` 已有库存记录，本次将**按数量增量累加**；如需以快照为准请使用盘点调整"。
 - **幂等**：流水幂等键 `<txn_type>:<biz_type>:<biz_ref_id>:<sku_id>`（`biz_type = IMPORT`，`biz_ref_id = batch_id`），同一批次重复确认不重复累加；冲突且内容不一致 → `INV-5003`。
-- **负库存**：`INIT_IMPORT` 只会增加，不会触发 `INV-5001`。
+- **负库存**：`INIT_IMPORT` 只会增加，不会触发 `INV-5006`。
 
 ---
 
@@ -235,7 +235,7 @@ flowchart TD
     E --> F["计算 qty_delta = target − qty_before<br/>（手工调整直接用 qtyDelta）"]
     F --> G{"qty_delta = 0?"}
     G -- "是" --> G1["不写流水（幂等），直接返回成功"]
-    G -- "否" --> H["校验 qty_after = qty_before + qty_delta ≥ 0<br/>否则 INV-5006 / INV-5001"]
+    G -- "否" --> H["校验 qty_after = qty_before + qty_delta ≥ 0<br/>否则 INV-5006"]
     H --> I["reason 必填校验（否则 INV-5011）"]
     I --> J["写 inventory_transactions（COUNT_ADJUST/MANUAL_ADJUST）"]
     J --> K["更新 inventory_balances（乐观锁 / 批量调整用悲观锁）"]
@@ -278,14 +278,14 @@ flowchart TD
     D -- "否" --> E{"原流水是否可冲销?"}
     E -- "原流水本身为 REVERSAL / 状态不允许" --> E1["INV-5010"]
     E -- "可冲销" --> F["写 REVERSAL 流水<br/>qty_delta = −原 qty_delta<br/>reversed_txn_id = 原 id"]
-    F --> G["校验 qty_after ≥ 0（冲销导致负库存 → INV-5001）"]
+    F --> G["校验 qty_after ≥ 0（冲销导致负库存 → INV-5006）"]
     G --> H["更新 inventory_balances（乐观锁）"]
     H --> I["写审计 INVENTORY_REVERSAL"]
 ```
 
 | 步骤 | 输入 | 输出 | 状态变化 | 事务边界 | 失败处理 | 接口 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 原流水 ID + `reason` + `Idempotency-Key` | 新 `REVERSAL` 流水 ID | — | **单事务** | `INV-5008`/`INV-5009`/`INV-5010`/`INV-5001`、`TEAM-2003` | `POST /api/v1/inventory/transactions/{id}/reverse` |
+| 1 | 原流水 ID + `reason` + `Idempotency-Key` | 新 `REVERSAL` 流水 ID | — | **单事务** | `INV-5008`/`INV-5009`/`INV-5010`/`INV-5006`、`TEAM-2003` | `POST /api/v1/inventory/transactions/{id}/reverse` |
 
 **一笔流水只能冲销一次的约束**
 
@@ -366,7 +366,7 @@ flowchart TD
 
 1. 定位余额行（`team_id + warehouse_id + sku_id`）。
 2. **乐观锁**读取（`version`）。
-3. 校验 `qty_after = qty_before + qty_delta >= 0`（否则 `INV-5001`）。
+3. 校验 `qty_after = qty_before + qty_delta >= 0`（否则出库 `INV-5001` / 调整·冲销 `INV-5006`）。
 4. **写流水**：`qty_before = 余额当前 on_hand_qty`、`qty_after = qty_before + qty_delta`。
 5. `UPDATE inventory_balances SET on_hand_qty = qty_after, last_txn_id = ?, last_txn_at = ?, version = version + 1 WHERE id = ? AND version = ?`。
 6. 检查影响行数 = 1；否则抛 `INV-5002` 并由调用方重试（最多 3 次，指数退避）。
@@ -459,7 +459,7 @@ flowchart TD
 | 3 | 销售出库 | `InventoryWriteService.applyOutbound()` | 校验 `on_hand − qty ≥ 0` + `SALE_OUTBOUND` 流水 + 余额 UPDATE | 余额乐观锁 | 库存不足 `INV-5001`；并发 `INV-5002` |
 | 4 | 盘点调整 | `InventoryCountAppService.adjust()` | 批量读目标余额 + 逐行差额 + `COUNT_ADJUST` 流水 + 余额 UPDATE | 同一 SKU 多行：悲观锁；跨 SKU 升序加锁 | 差额 0 → 不写流水（幂等）；冲突 `INV-5002` |
 | 5 | 手工调整 | `InventoryWriteService.applyManualAdjust()` | 权限（`ADMIN`+）+ `reason` 必填 + `MANUAL_ADJUST` 流水 + 余额 UPDATE + 审计 | 余额乐观锁 | 原因缺失 `COM-0001`/`INV-5011`；无权限 `TEAM-2003` |
-| 6 | 库存冲销 | `InventoryReversalAppService.reverse()` | 定位原流水 + 校验未冲销 + `REVERSAL` 流水 + 余额 UPDATE | 余额乐观锁 + 原流水唯一性（`reversed_txn_id` 唯一索引） | 重复冲销 `INV-5009`；导致负库存 `INV-5001` |
+| 6 | 库存冲销 | `InventoryReversalAppService.reverse()` | 定位原流水 + 校验未冲销 + `REVERSAL` 流水 + 余额 UPDATE | 余额乐观锁 + 原流水唯一性（`reversed_txn_id` 唯一索引） | 重复冲销 `INV-5009`；导致负库存 `INV-5006` |
 | 7 | 策略 upsert | `ReplenishmentPolicyAppService.upsert()` | 同团队校验 + `INSERT ... ON DUPLICATE KEY UPDATE` + 审计 | 唯一约束 `uk_pol_team_sku_wh` | 冲突被 upsert 吸收（无错误） |
 
 - **隔离级别**：`READ COMMITTED`（`§7.1`；避免 `REPEATABLE READ` 的间隙锁在"按 team_id 范围查询 + 插入"路径上死锁）。
@@ -486,7 +486,7 @@ flowchart TD
 | `D-02` | `DESIGN_BASIS.md §15` | 多仓库（同团队多仓）：数据模型支持但 UI 只暴露默认仓；影响本流程的 `warehouse_id` 必填策略 |
 | `D-05` | `DESIGN_BASIS.md §15` | 审计日志独立 DB 账号；影响库存变更审计的强制手段 |
 | `D-07` | `DESIGN_BASIS.md §15` | 是否引入 Redis；决定库存并发方案能否使用分布式锁 |
-| `D-08` | `DESIGN_BASIS.md §15` | **不允许负库存**（`on_hand_qty >= 0` 约束 + 出库校验）；本文档 §5.4/§7 直接依赖 |
+| `D-08` ✅ **已裁定** | `DESIGN_BASIS.md §15` / §15.1 | **不允许负库存**（`on_hand_qty >= 0` 约束 + 各写路径应用层校验 + DB `CHECK` 兜底）；本文档 §5.4/§7 直接依赖 |
 | `D-13` | `DATABASE_DESIGN.md §11.2` | `uk_invtxn_team_reversed` 唯一索引；§5.6 冲销唯一性 |
 | `D-14` | `DATABASE_DESIGN.md §11.2` | `InventoryBizType` / `LeadTimeSource` 等枚举补充 |
 | `D-15` | `DATABASE_DESIGN.md §11.2` | `inventory_transactions` 保留期与归档策略 |

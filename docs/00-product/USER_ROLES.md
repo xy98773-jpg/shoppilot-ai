@@ -195,7 +195,7 @@ OWNER ⊃ ADMIN ⊃ APPROVER ⊃ OPERATOR ⊃ VIEWER
 
 | 高风险操作 | 额外服务端校验要求 | 相关错误码 |
 | --- | --- | --- |
-| **库存调整**（盘点和手工） | ① 校验角色满足 `COUNT_ADJUST` / `MANUAL_ADJUST` 的类型要求（见 §2.3）；② 校验目标 SKU 与仓库同团队且状态可操作；③ 校验出库方向不使 `on_hand_qty < 0`（见待决策 `D-08`）；④ 校验 `idempotency_key` 唯一；⑤ 校验 `team_id` 一致 | `TEAM-2001`、`TEAM-2003`、`INV-5001`、`INV-5002`、`INV-5003` |
+| **库存调整**（盘点和手工） | ① 校验角色满足 `COUNT_ADJUST` / `MANUAL_ADJUST` 的类型要求（见 §2.3）；② 校验目标 SKU 与仓库同团队且状态可操作；③ 校验调整不使 `on_hand_qty < 0`（**`D-08` 已裁定：不允许负库存**）；④ 校验 `idempotency_key` 唯一；⑤ 校验 `team_id` 一致 | `TEAM-2001`、`TEAM-2003`、`INV-5006`、`INV-5002`、`INV-5003` |
 | **审批**（通过/驳回） | ① 校验审批人角色；② 校验建议当前状态为 `PENDING_REVIEW`（否则 `RPL-8001`）；③ 校验审批人与提交人可分离（建议默认要求，见 §7 新增决策）；④ 校验乐观锁版本未变（否则 `RPL-8003`）；⑤ 驳回必填 `review_comment`（否则 `COM-0001`） | `TEAM-2003`、`RPL-8001`、`RPL-8002`、`RPL-8003`、`COM-0001` |
 | **确认到货** | ① 校验操作者角色；② 校验到货数量不超过待收数量（否则 `PO-9002`）；③ 校验采购单状态允许（否则 `PO-9003`）；④ 校验 `goods_receipts` 幂等键唯一；⑤ 校验跨表同团队 | `TEAM-2003`、`PO-9002`、`PO-9003`、`PO-9001` |
 | **取消采购单** | ① 仅 `APPROVER` / `ADMIN` / `OWNER`（取消影响在途与 `IP`）；② 校验采购单状态允许取消（`DRAFT`/`PENDING`/`ORDERED`/`PARTIALLY_RECEIVED`）；③ 已全部到货（`RECEIVED`）不可取消（否则 `PO-9003`）；④ 提示对在途量与后续补货计算的影响 | `TEAM-2003`、`PO-9003` |

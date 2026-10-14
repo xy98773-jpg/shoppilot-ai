@@ -188,7 +188,7 @@ importdata → {catalog, inventory, sales} → catalog → identity → common
 | **禁止的反向依赖** | 禁止依赖 `purchasing`、`analysis`、`replenishment`、`importdata` |
 | **关键事务边界** | **单笔库存变更 = 单事务**：校验（含 `on_hand_qty ≥ 0`）→ 写 `inventory_transactions`（含幂等键唯一约束）→ 更新 `inventory_balances`（乐观锁）→ 提交。余额与流水**必须同事务**（保证可对账） |
 
-> **`InventoryWriteService` 的实现要点**：① 所有方法必须带 `idempotencyKey`，命中 `uk_invtxn_team_idem` 时若内容一致返回既有结果，否则 `INV-5003`；② 乐观锁失败返回 `INV-5002`；③ 出库导致负库存返回 `INV-5001`（结合待决策 `D-08`）。
+> **`InventoryWriteService` 的实现要点**：① 所有方法必须带 `idempotencyKey`，命中 `uk_invtxn_team_idem` 时若内容一致返回既有结果，否则 `INV-5003`；② 乐观锁失败返回 `INV-5002`；③ 出库导致负库存返回 `INV-5001`（`D-08` **已裁定：不允许负库存**；调整/冲销方向为 `INV-5006`）。
 
 ### 2.6 `sales`（销售数据）
 

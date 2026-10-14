@@ -345,7 +345,7 @@ flowchart TD
 
 | 规则主题 | 关键点 | 权威定义位置 |
 | --- | --- | --- |
-| 库存一致性 | 余额 `inventory_balances` 必须能由流水 `inventory_transactions` 推导；`on_hand_qty ≥ 0` 不允许负库存 | `DESIGN_BASIS.md §3.1 第 4 条`、待决策 `D-08` |
+| 库存一致性 | 余额 `inventory_balances` 必须能由流水 `inventory_transactions` 推导；`on_hand_qty ≥ 0` 不允许负库存 | `DESIGN_BASIS.md §3.1 第 4 条`、**`D-08` 已裁定（不允许负库存）** |
 | 幂等 | 导入文件级幂等（`team_id + file_hash + biz_type`）；库存/采购/到货均有 `idempotency_key` 唯一约束 | `DESIGN_BASIS.md §9.5`、`§8`（表清单唯一约束列） |
 | 状态机 | 分析运行、补货建议、采购单、到货单、导入批次均为显式状态机 | `DESIGN_BASIS.md §9.5`、`§9.7`、`§9.11`、`§9.13`、`§9.14` |
 | 补货公式 | `D`、`Q_base`、`SS`、`effective_in_transit_qty`、`Q_suggest` | `DESIGN_BASIS.md §10.1–§10.5` |
@@ -512,7 +512,9 @@ flowchart TD
 ### 11.2 与 `DESIGN_BASIS.md` 相关的开放问题
 
 本文档所有待决策项均引用 `DESIGN_BASIS.md §15` 的编号，未新增编号：
-`D-01`（认证方案）、`D-02`（多仓 UI）、`D-03`（趋势修正）、`D-04`（安全库存公式）、`D-05`（审计独立账号）、`D-06`（采购审批流）、`D-07`（Redis）、`D-08`（负库存）。
+`D-01`（认证方案）、`D-02`（多仓 UI）、`D-03`（趋势修正）、`D-04`（安全库存公式）、`D-05`（审计独立账号）、`D-06`（采购审批流）、`D-07`（Redis）。
+
+> **`D-08`（负库存）已从本列举中移出**：已由用户裁定为**不允许负库存**，留档见 `DESIGN_BASIS.md §15.1`。
 
 ### 11.3 本文档发现的与 `DESIGN_BASIS.md` 不一致之处
 

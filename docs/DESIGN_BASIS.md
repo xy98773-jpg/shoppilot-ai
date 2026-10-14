@@ -804,7 +804,7 @@ effective_in_transit_qty = Σ(poi.ordered_qty − poi.received_qty)
 | `D-05` | 审计日志是否使用独立数据库账号（仅 INSERT） | **M3 前采用"应用层禁止 UPDATE/DELETE + 独立 Mapper"，M7 视需要加 DB 级权限** | 首期即建独立 DB 账号 | 影响部署复杂度 |
 | `D-06` | 采购单是否需要独立审批流（`PENDING_APPROVAL`） | **首期不设**：`APPROVER` 直接确认 `DRAFT → PENDING` 视为审批 | 加独立采购审批状态与审批表 | 影响状态机与页面数量 |
 | `D-07` | 是否引入 Redis | **首期不引入**（见 ADR-001） | 用于分析任务状态缓存 / 分布式锁 | 影响依赖数量与部署复杂度 |
-| `D-08` | 库存余额是否允许负数 | **不允许**（`on_hand_qty >= 0` 约束 + 出库校验） | 允许负库存以容忍后补数据 | 影响流水冲销顺序与导入容错 |
+| `D-08` ✅ **已裁定** | 库存余额是否允许负数 | **不允许**（`on_hand_qty >= 0` 约束 + 各写路径应用层校验 + DB `CHECK` 兜底） | 允许负库存以容忍后补数据 | 影响流水冲销顺序与导入容错 |
 | `D-09` | 是否强制"提交人与审批人分离"（四眼原则） | **首期不强制**：`APPROVER` 可审批自己提交的建议，但审计日志与审批记录必须留痕操作者 | 强制"不得自审"（单人团队需引入额外配置） | 影响小团队可用性与合规强度 |
 | `D-10` | Spring Boot 基线版本停在 3.x 还是升到 4.x | **停留 3.5.x**（任务书明确要求 3.x 基线；3.5.x 为 3.x 最后一支） | 升级 Spring Boot 4.x | 影响依赖生态成熟度、升级工作量与安全补丁窗口 |
 | `D-11` | MySQL 版本 8.0.x 还是 8.4 LTS | **8.0.x**（与 MyBatis-Plus / Flyway / Testcontainers 生态验证最充分） | 8.4 LTS（更长支持窗口） | 影响镜像版本与长期维护成本 |
@@ -848,6 +848,7 @@ effective_in_transit_qty = Σ(poi.ordered_qty − poi.received_qty)
 | — | 分析完成→生成建议的编排入口归属 | 由 `replenishment` 模块编排（`analysis` 不反向调用 `replenishment`） | `MODULE_BOUNDARIES.md`、ADR-001 |
 | — | 采购在途数据如何被 `analysis` 使用 | `purchasing` 通过 `InventoryWriteService` 投影写入在途缓存，`analysis` 只读 `inventory` 口径 | `MODULE_BOUNDARIES.md`、ADR-001 |
 | — | LLM 输出结构校验失败的处理 | 重试 1 次，仍失败置 `llm_status = VALIDATION_FAILED`，Java 侧 run 置 `DEGRADED` 并保留规则结果 | `PROMPT_DESIGN.md`、`AI_SERVICE_CONTRACT.md` |
+| `D-08` | 库存余额是否允许负数 | **不允许**（`on_hand_qty >= 0` 约束 + 各写路径应用层校验 + DB `CHECK` 兜底）；出库/销售方向拒绝码 `INV-5001`，调整/冲销方向拒绝码 `INV-5006` | 本文档 §3.1 第 4 条、`DATABASE_CONSTRAINTS.md §4.2` |
 
 ### 15.2 待决策编号规则（**强制**）
 

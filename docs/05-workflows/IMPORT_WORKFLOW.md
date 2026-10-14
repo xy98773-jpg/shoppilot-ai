@@ -532,7 +532,7 @@ flowchart TD
 | 22 | `SAL-6003` | ERROR | 销售日期超出允许范围（未来日期） | 销售日期不合法 |
 | 23 | `SAL-6004` | ERROR | 同一 SKU 同一天存在重复记录 | 同一 SKU 同一天存在重复记录 |
 | 24 | `SAL-6005` | ERROR | SKU/仓库不属于当前团队 | 所选 SKU 或仓库不属于当前团队 |
-| 25 | `INV-5001` | ERROR | 库存变更将导致负库存（理论上本类型不触发，兜底） | 库存不足，无法完成出库 |
+| 25 | `INV-5006` | ERROR | 库存变更将导致负库存（理论上本类型不触发，兜底） | 调整后 `on_hand_qty < 0` |
 | 26 | `INV-5004` | ERROR | 指定 `(wh, sku)` 无余额行（手工调整场景） | 未找到对应库存记录 |
 
 ### 11.3 错误报告导出格式（CSV）
@@ -627,7 +627,7 @@ stateDiagram-v2
 | --- | --- | --- |
 | `DESIGN_BASIS.md §15` | `D-05` | 审计日志是否使用独立 DB 账号（仅 INSERT）；影响导入审计写入的强制手段 |
 | `DESIGN_BASIS.md §15` | `D-07` | 是否引入 Redis；若不在首期，导入幂等与并发控制不能依赖分布式锁 |
-| `DESIGN_BASIS.md §15` | `D-08` | 库存余额是否允许负数；影响 `INVENTORY_SNAPSHOT` 的边界（首期不允许负库存） |
+| `DESIGN_BASIS.md §15` | `D-08` ✅ **已裁定：不允许负库存** | ~~库存余额是否允许负数~~；影响 `INVENTORY_SNAPSHOT` 的边界（首期不允许负库存） |
 | `DATABASE_DESIGN.md §11.2` | `D-09` | `import_batches` 文件级幂等的物理实现（可空槽位列 `dedupe_hash`）；**与本文档 §8.9/§8.10 直接相关** |
 | `DATABASE_DESIGN.md §11.2` / `ERROR_CODES.md §5` | `D-12` | 需补充导入类 WARNING 错误码（`IMP-4006` 覆盖告警、`IMP-4014` 缺口告警）；`§12.3` 已固化 |
 | `DATABASE_DESIGN.md §11.2` | `D-15` | 只增表（含 `import_row_errors`）的保留期与归档策略；影响错误报告的历史可查性 |

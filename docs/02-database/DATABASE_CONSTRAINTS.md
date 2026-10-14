@@ -318,11 +318,11 @@ ALTER TABLE skus
 | `ck_rr_from_status` / `ck_rr_to_status` | `replenishment_reviews` | `from_status`/`to_status` | 同 `ReplenishmentItemStatus` | `§9.11` |
 | `ck_rr_role` | `replenishment_reviews` | `reviewer_role` | 同 `TeamRole` | `§9.3` |
 | `ck_po_status` | `purchase_orders` | `status` | `DRAFT`,`PENDING`,`ORDERED`,`PARTIALLY_RECEIVED`,`RECEIVED`,`CANCELLED` | `§9.13` |
-| `ck_po_source` | `purchase_orders` | `source` | `MANUAL`,`REPLENISHMENT` ⚠️（`D-14`） | — |
+| `ck_po_source` | `purchase_orders` | `source` | `MANUAL`,`REPLENISHMENT` | `§9.17` |
 | `ck_gr_status` | `goods_receipts` | `status` | `DRAFT`,`CONFIRMED`,`REVERSED`,`CANCELLED` | `§9.14` |
 | `ck_sales_source` | `sales_daily` | `source` | `IMPORT`,`MANUAL`,`PLATFORM` | — |
-| `ck_ire_level` | `import_row_errors` | `error_level` | `ERROR`,`WARNING` ⚠️（`D-14`） | — |
-| `ck_al_result` | `audit_logs` | `result` | `SUCCESS`,`FAILURE` ⚠️（`D-14`） | — |
+| `ck_ire_level` | `import_row_errors` | `error_level` | `ERROR`,`WARNING` | `§9.17` |
+| `ck_al_result` | `audit_logs` | `result` | `SUCCESS`,`FAILURE` | `§9.17` |
 
 ### 4.2 数量非负与一致性类
 
@@ -346,7 +346,7 @@ ALTER TABLE purchase_order_items
 
 | 约束名 | 表 | 表达式 | 依据 | 备注 |
 | --- | --- | --- | --- | --- |
-| `ck_invbal_on_hand_non_negative` | `inventory_balances` | `on_hand_qty >= 0` | `D-08`（不允许负库存） | 应用层先校验（`INV-5001`），DB 兜底 |
+| `ck_invbal_on_hand_non_negative` | `inventory_balances` | `on_hand_qty >= 0` | `D-08`（不允许负库存） | 应用层先校验（出库 `INV-5001` / 调整·冲销 `INV-5006`），DB 兜底 |
 | `ck_invbal_in_transit_non_negative` | `inventory_balances` | `in_transit_qty >= 0` | `§3` | — |
 | `ck_invbal_committed_non_negative` | `inventory_balances` | `committed_qty >= 0` | `§3` | — |
 | `ck_invtxn_consistency` | `inventory_transactions` | `qty_after = qty_before + qty_delta` | `§6-C.2` | **流水自证**，对账的第一道防线 |
