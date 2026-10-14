@@ -482,9 +482,9 @@ flowchart TD
 | `SALES_DAILY` | `sale_date` **不得为未来日期** | `SAL-6003` | ERROR |
 | `SALES_DAILY` | 同一 `(wh, sku, date)` 文件内唯一 | `SAL-6004` | ERROR |
 | `SALES_DAILY` | 命中库内已有行 → 提示将覆盖 | `IMP-4006` | WARNING |
-| `SALES_DAILY` | 日期缺口（同 SKU 区间内缺失 > 30%） | `IMP-4007` | WARNING |
+| `SALES_DAILY` | 日期缺口（同 SKU 区间内缺失 > 30%） | `IMP-4014` | WARNING |
 
-> **数据质量与 `D` 的关系**：`SALES_DAILY` 的日期缺口检查是保证 `§10.1` 的 `n`（有效天数）口径可信的关键（`DATABASE_DESIGN.md §6-E.6`）。`IMP-4007` 为 `WARNING`，不阻断导入但提示用户补齐零销量日。
+> **数据质量与 `D` 的关系**：`SALES_DAILY` 的日期缺口检查是保证 `§10.1` 的 `n`（有效天数）口径可信的关键（`DATABASE_DESIGN.md §6-E.6`）。`IMP-4014` 为 `WARNING`，不阻断导入但提示用户补齐零销量日。
 
 ---
 
@@ -515,7 +515,7 @@ flowchart TD
 | 5 | `IMP-4004` | 批次级 | 重复导入（同团队+同哈希+同类型） | 该文件已导入过，如需重新导入请使用强制重导 |
 | 6 | `IMP-4005` | 批次级 | 批次状态不允许该操作 | 当前批次状态不允许该操作 |
 | 7 | `IMP-4006` | WARNING | 将覆盖/累加已有数据（`SALES_DAILY` 覆盖 / `INVENTORY_SNAPSHOT` 累加） | 本次导入将影响 N 行已有数据，请确认 |
-| 8 | `IMP-4007` | WARNING | 销售日期缺口 > 30% | 数据存在日期缺口，可能影响日均销量估算 |
+| 8 | `IMP-4014` | WARNING | 销售日期缺口 > 30% | 数据存在日期缺口，可能影响日均销量估算 |
 | 9 | `IMP-4008` | 批次级 | 字段映射不完整或非法 | 字段映射不完整或存在非法项 |
 | 10 | `IMP-4009` | 批次级 | 存在 ERROR 行未处理即确认导入 | 存在错误行，请先修正或跳过后再导入 |
 | 11 | `IMP-4010` | 批次级 | 全部数据行校验失败 | 所有数据行均未通过校验，请检查模板与数据 |
@@ -629,7 +629,7 @@ stateDiagram-v2
 | `DESIGN_BASIS.md §15` | `D-07` | 是否引入 Redis；若不在首期，导入幂等与并发控制不能依赖分布式锁 |
 | `DESIGN_BASIS.md §15` | `D-08` | 库存余额是否允许负数；影响 `INVENTORY_SNAPSHOT` 的边界（首期不允许负库存） |
 | `DATABASE_DESIGN.md §11.2` | `D-09` | `import_batches` 文件级幂等的物理实现（可空槽位列 `dedupe_hash`）；**与本文档 §8.9/§8.10 直接相关** |
-| `DATABASE_DESIGN.md §11.2` / `ERROR_CODES.md §5` | `D-12` | 需补充导入类 WARNING 错误码（`IMP-4006` 覆盖告警、`IMP-4007` 缺口告警）；`§12.3` 未固化 |
+| `DATABASE_DESIGN.md §11.2` / `ERROR_CODES.md §5` | `D-12` | 需补充导入类 WARNING 错误码（`IMP-4006` 覆盖告警、`IMP-4014` 缺口告警）；`§12.3` 已固化 |
 | `DATABASE_DESIGN.md §11.2` | `D-15` | 只增表（含 `import_row_errors`）的保留期与归档策略；影响错误报告的历史可查性 |
 | `DATABASE_DESIGN.md §11.2` | `D-16` | 业务编号（`batch_no`）生成策略；影响多实例并发下编号冲突与重试 |
 
@@ -645,7 +645,7 @@ stateDiagram-v2
 | 2 | `DESIGN_BASIS.md §9.5` | `DUPLICATE_REJECTED` 行描述"→ `FORCE_REIMPORT`"，但 `FORCE_REIMPORT` 未作为枚举值定义（`USER_ROLES.md §7.3` 第 2 条同样指出） | **与 `DESIGN_BASIS.md §9.5` 表述不完整，建议修订**：明确 `FORCE_REIMPORT` 为"动作"（对应 `/reimport`），而非 `ImportBatchStatus` 取值。本文档按"动作"处理。 |
 | 3 | `DESIGN_BASIS.md §8` vs `§9.5` | `import_batches` 唯一约束写作 `uk_imp_team_hash_biz (team_id, file_hash, biz_type)`，与 `DUPLICATE_REJECTED` / `FORCE_REIMPORT` 物理上不可同时满足 | **与 `DESIGN_BASIS.md §8 不一致，建议修订**（已在 `DATABASE_DESIGN.md §11.1` INC-1 登记为 `D-09`）。本文档沿用约束名与业务语义，物理列按 `dedupe_hash` 槽位方案。 |
 | 4 | 待决策编号冲突 | `DATABASE_DESIGN.md §11.2` 用 `D-09` 表示"导入幂等槽位列"；`USER_ROLES.md §7.2` / `API_CONTRACT.md §11.7` / `ERROR_CODES.md` 用 `D-09` 表示"四眼原则" | **跨文档编号冲突**：两个互不相关的决策占用了同一编号。**建议**：为一者改号并统一登记到 `DESIGN_BASIS.md §15`。本文档引用 `D-09` 时**明确标注语义**（导入幂等槽位列）。 |
-| 5 | 导入 WARNING 码 | `IMP-4006`/`IMP-4007` 已存在于 `ERROR_CODES.md §2.5`，但 `DESIGN_BASIS.md §12.3` 未固化 | **与 `DESIGN_BASIS.md §12.3` 未覆盖，建议补充**（登记 `D-12`）。本文档按 `ERROR_CODES.md` 使用。 |
+| 5 | 导入 WARNING 码 | `IMP-4006`/`IMP-4014` 已存在于 `ERROR_CODES.md §2.5`，并已固化于 `DESIGN_BASIS.md §12.3` | **已解决**：`DESIGN_BASIS.md §12.3` 已覆盖 `IMP-4006`/`IMP-4014`（登记 `D-12`）。本文档按 `ERROR_CODES.md` 使用。 |
 | 6 | 异步导入 | SSOT 未定义"异步导入任务" | 本文档明确**首期不做异步导入任务**（§8.5），属**新增设计结论**，建议在 `DESIGN_BASIS.md §15` 或 ADR 备案。 |
 
 ---

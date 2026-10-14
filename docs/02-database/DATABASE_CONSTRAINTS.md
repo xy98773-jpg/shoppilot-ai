@@ -57,7 +57,7 @@
 | 9 | `uk_pol_team_sku_wh` | `replenishment_policies` | `team_id`, `sku_id`, `warehouse_id` | 防重 + 团队隔离 | 一 SKU 一仓库至多一条策略 | **不报错**（upsert 吸收） | 保存走 `INSERT ... ON DUPLICATE KEY UPDATE` |
 | 10 | `uk_invbal_team_wh_sku` | `inventory_balances` | `team_id`, `warehouse_id`, `sku_id` | 防重 + 团队隔离 | 一 SKU 一仓库一行余额 | **不报错**（并发首建吸收） | 冲突后改为读取 + 走乐观锁路径 |
 | 11 | `uk_invtxn_team_idem` | `inventory_transactions` | `team_id`, `idempotency_key` | **幂等** + 团队隔离 | 同一团队同一幂等键只产生一条流水 | `INV-5003`（内容不一致）/ 成功返回原流水（内容一致） | `§8`；5 类幂等之二 |
-| 12 | `uk_invtxn_team_reversed` ⚠️ | `inventory_transactions` | `team_id`, `reversed_txn_id` | 防重 + 团队隔离 | **一笔流水只能被冲销一次** | `INV-5003` | ⚠️ **`§8` 未列出，本设计建议新增**（`D-13`）；可空列 → 允许多行 `NULL` |
+| 12 | `uk_invtxn_team_reversed` ⚠️ | `inventory_transactions` | `team_id`, `reversed_txn_id` | 防重 + 团队隔离 | **一笔流水只能被冲销一次** | `INV-5009` | ⚠️ **`§8` 未列出，本设计建议新增**（`D-13`）；可空列 → 允许多行 `NULL` |
 | 13 | `uk_sales_team_wh_sku_date` | `sales_daily` | `team_id`, `warehouse_id`, `sku_id`, `sale_date` | 防重 + 团队隔离 | 日粒度唯一（**upsert 落点**） | **不报错**（upsert 覆盖） | `§6-D.2` |
 | 14 | `uk_imp_team_hash_biz` | `import_batches` | `team_id`, `dedupe_hash`, `biz_type` | **幂等** + 团队隔离 | 同团队同内容同类型的"有效批次"唯一 | `IMP-4004` | ⚠️ 物理列用可空槽位 `dedupe_hash`，见 `INC-1`/`D-09`；5 类幂等之一 |
 | 15 | `uk_run_team_no` | `analysis_runs` | `team_id`, `run_no` | 自然唯一 + 团队隔离 | 团队内运行编号唯一 | `COM-0002` | 编号冲突时重新生成（`D-16`） |
@@ -536,7 +536,7 @@ L5 租户插件   TenantLineInnerInterceptor 自动追加 ← 兜底（防手写
 | 8 | **盘点调整**（同 SKU 批量） | 同一行多次更新 | **悲观锁**（按 `sku_id` 升序加锁防死锁） | 串行执行 | `COM-0002`（超时） |
 | 9 | **盘点调整**（差额为 0） | 无意义写入 | **应用层幂等** | 不写流水，返回成功 | — |
 | 10 | **手工调整** | 并发扣减/增加 | **乐观锁 `version`** | 重试 3 次 | `INV-5002` |
-| 11 | **库存冲销**（重复冲销同一流水） | 重复请求 | **唯一约束 `uk_invtxn_team_reversed`**（`D-13`）+ 幂等键 | 报错（或返回既有冲销流水） | `INV-5003` |
+| 11 | **库存冲销**（重复冲销同一流水） | 重复请求 | **唯一约束 `uk_invtxn_team_reversed`**（`D-13`）+ 幂等键 | 报错（或返回既有冲销流水） | `INV-5009` |
 | 12 | **导入落库**（余额首次建行） | 并发插同一行 | **唯一约束 `uk_invbal_team_wh_sku`** | 捕获冲突 → 改为读取 + 乐观锁路径 | —（静默吸收） |
 | 13 | **导入落库**（销售 upsert） | 同 `(wh, sku, date)` 并发写 | **唯一约束 `uk_sales_team_wh_sku_date` + upsert** | 覆盖（最后写入者胜，符合设计语义） | — |
 | 14 | **导入落库**（批次重复上传） | 并发同文件上传 | **唯一约束 `uk_imp_team_hash_biz`** | 一个成功、一个报重复 | `IMP-4004` |
@@ -603,7 +603,7 @@ L5 租户插件   TenantLineInnerInterceptor 自动追加 ← 兜底（防手写
 | U-11 | 两条不同 `run_id` 的同 `(sku, wh)` 快照 | 都成功（历史快照必须保留） |
 | U-12 | 同一采购单两条同 `line_no` 明细 | 第二条冲突 |
 | U-13 | 同一到货单两条同 `purchase_order_item_id` 明细 | 第二条冲突 |
-| U-14 | 已知被冲销的流水再次冲销 | 冲突 → `INV-5003`（`D-13` 生效后） |
+| U-14 | 已知被冲销的流水再次冲销 | 冲突 → `INV-5009`（`D-13` 生效后） |
 | U-15 | `idempotency_key = NULL` 的 `purchase_orders` 多行插入 | 都成功（可空唯一索引允许多 `NULL`） |
 
 ### 8.2 `CHECK` 约束测试

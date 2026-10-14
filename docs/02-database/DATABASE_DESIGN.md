@@ -1156,7 +1156,7 @@ import_batches（1 行 = 一次导入）
 
 | 检查 | 触发 | 级别 |
 | --- | --- | --- |
-| 日期缺口 | 同一 SKU 的导入日期区间内缺失日期 > 30% | `WARNING`（`error_code = 'IMP-4007'`，⚠️ 建议新增，登记 `D-12`） |
+| 日期缺口 | 同一 SKU 的导入日期区间内缺失日期 > 30% | `WARNING`（`error_code = 'IMP-4014'`，⚠️ 建议新增，登记 `D-12`） |
 | 未来日期 | `sale_date > 今天（团队时区）` | `ERROR`（`COM-0001`） |
 | 数量为负 | `qty < 0` | `ERROR`（`COM-0001`）；退货必须写 `return_qty` |
 | SKU 不存在 | `sku_code` 在团队内查不到 | `ERROR`（`CAT-3001`） |
@@ -1532,7 +1532,7 @@ replenishment_items.status = 'APPROVED'
 | 7 | **审批通过 / 驳回** | `ReplenishmentReviewAppService.approve()` / `reject()` | ① 权限校验（`APPROVER`）；② 状态守卫 `PENDING_REVIEW→APPROVED` / `→REJECTED`；③ INSERT `replenishment_reviews`（`APPROVE`/`REJECT`，`REJECT` 必填 `comment`）；④ 审计 | 状态守卫（**双审批并发时只有 1 条成功**） | 非 `PENDING_REVIEW` → `RPL-8001`；重复审批 → `RPL-8002`；无权限 → `TEAM-2003` |
 | 8 | **创建采购单（由建议转采购）** | `PurchaseOrderAppService.createFromReplenishment()` | ① 幂等键检查/唯一约束；② 校验建议状态为 `APPROVED`；③ INSERT `purchase_orders`（`DRAFT`）+ INSERT `purchase_order_items`（各持 `replenishment_item_id`）；④ 建议状态守卫 `APPROVED→CONVERTED` + 回填 `converted_po_item_ids`；⑤ 审计 | 建议**乐观锁 + 状态守卫**；采购单唯一约束 `uk_po_team_idem` | 建议已转 → `PO-9001`；建议状态非法 → `RPL-8001`；重复提交 → 唯一约束吸收（返回原采购单） |
 | 9 | **确认到货** | 同 #1 | 同 #1 | 同 #1 | 同 #1 |
-| 10 | **库存冲销** | `InventoryReversalAppService.reverse()` | ① 定位原流水（`idx_invtxn_team_biz`）；② 校验未被冲销（不存在 `reversed_txn_id = 原 id` 的流水）；③ INSERT `REVERSAL` 流水（`qty_delta = -原 qty_delta`，`reversed_txn_id = 原 id`）；④ 余额 UPDATE | 余额乐观锁 + **原流水唯一性校验**（"一笔流水只能冲一次"由 `reversed_txn_id` 上的**唯一索引**保证：`uk_invtxn_team_reversed (team_id, reversed_txn_id)`，⚠️ 该索引**未在 `DESIGN_BASIS §8` 中列出，属本设计新增建议**，登记 `D-13`） | 重复冲销 → `INV-5003`；冲销导致负库存 → `INV-5001` |
+| 10 | **库存冲销** | `InventoryReversalAppService.reverse()` | ① 定位原流水（`idx_invtxn_team_biz`）；② 校验未被冲销（不存在 `reversed_txn_id = 原 id` 的流水）；③ INSERT `REVERSAL` 流水（`qty_delta = -原 qty_delta`，`reversed_txn_id = 原 id`）；④ 余额 UPDATE | 余额乐观锁 + **原流水唯一性校验**（"一笔流水只能冲一次"由 `reversed_txn_id` 上的**唯一索引**保证：`uk_invtxn_team_reversed (team_id, reversed_txn_id)`，⚠️ 该索引**未在 `DESIGN_BASIS §8` 中列出，属本设计新增建议**，登记 `D-13`） | 重复冲销 → `INV-5009`；冲销导致负库存 → `INV-5001` |
 | 11 | **手工调整库存** | `InventoryWriteService.applyManualAdjust()` | ① 权限校验（`ADMIN`+，`§9.6`）；② `reason` 必填校验；③ 流水 INSERT（`MANUAL_ADJUST`）+ 余额 UPDATE；④ 审计 | 余额乐观锁 | 原因缺失 → `COM-0001`；无权限 → `TEAM-2003` |
 | 12 | **策略 upsert** | `ReplenishmentPolicyAppService.upsert()` | ① 同团队校验；② `INSERT ... ON DUPLICATE KEY UPDATE`；③ 审计 | 唯一约束 `uk_pol_team_sku_wh` | 冲突被 upsert 吸收（无错误） |
 

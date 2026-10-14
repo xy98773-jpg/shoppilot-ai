@@ -298,7 +298,7 @@ identity ← catalog ← {inventory, sales} ← analysis ← replenishment ← p
 | 7 | `skus` | SKU | catalog | ✅ | id | `uk_sku_team_code (team_id,sku_code)` |
 | 8 | `replenishment_policies` | 补货策略参数 | inventory | ✅ | id | `uk_pol_team_sku_wh (team_id,sku_id,warehouse_id)` |
 | 9 | `inventory_balances` | 库存余额 | inventory | ✅ | id | `uk_invbal_team_wh_sku (team_id,warehouse_id,sku_id)` |
-| 10 | `inventory_transactions` | 库存流水 | inventory | ✅ | id | `uk_invtxn_team_idem (team_id,idempotency_key)`、`uk_invtxn_team_reversal (team_id,reversal_of_txn_id)`（`reversal_of_txn_id` 可空且唯一 → **一笔流水只能被冲销一次**） |
+| 10 | `inventory_transactions` | 库存流水 | inventory | ✅ | id | `uk_invtxn_team_idem (team_id,idempotency_key)`、`uk_invtxn_team_reversed (team_id,reversed_txn_id)`（`reversed_txn_id` 可空且唯一 → **一笔流水只能被冲销一次**） |
 | 11 | `sales_daily` | 日销售 | sales | ✅ | id | `uk_sales_team_wh_sku_date (team_id,warehouse_id,sku_id,sale_date)` |
 | 12 | `import_batches` | 导入批次 | importdata | ✅ | id | `uk_imp_team_hash_biz (team_id,file_hash,biz_type)` |
 | 13 | `import_row_errors` | 导入行错误 | importdata | ✅ | id | 无（普通索引） |
@@ -820,7 +820,7 @@ effective_in_transit_qty = Σ(poi.ordered_qty − poi.received_qty)
 | — | `uk_ai_run_sku_wh` 等唯一键不含 `team_id` | 声明"父对象已确定团队"的豁免条款（4 个键） | 本文档 §6 规则 2 |
 | — | 无团队上下文记录的 `team_id` 取值 | 保留哨兵 `team_id = 0`（系统域） | 本文档 §6 规则 1 |
 | — | `IMP-4006` / `IMP-4007` 等错误码缺失 | 补入 §12.3，并新增 `AI-xxxx` 内部错误域 | 本文档 §12.3 |
-| — | 一笔流水是否可被多次冲销 | 新增 `uk_invtxn_team_reversal (team_id, reversal_of_txn_id)` | 本文档 §8 |
+| — | 一笔流水是否可被多次冲销 | 新增 `uk_invtxn_team_reversed (team_id, reversed_txn_id)` | 本文档 §8 |
 | — | `LeadTimeSource` / `DataQualityGrade` / `InventoryBizType` / `SalesSource` / `Source` / 审计动作常量 未定义 | 统一补入 §9.17 | 本文档 §9.17 |
 | — | `SUGGESTED` 是否允许直接 `REJECTED` | **不允许**，驳回必须经 `PENDING_REVIEW` | 本文档 §5 规则 6、§9.11 补充规则 |
 | — | `R-LOWSTOCK` 与 `R-STOCKOUT` 是否互斥 | **可同时命中**，`risk_types` 为数组 | 本文档 §11 |
