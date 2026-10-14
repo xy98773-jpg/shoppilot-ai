@@ -635,6 +635,7 @@
 | `risk_detail_json` | `JSON` | 是 | `NULL` | 命中规则明细（规则代码 → 判定值），用于解释与测试 | 不可变 |
 | `data_quality_json` | `JSON` | 是 | `NULL` | 数据质量检查结果（缺口、异常值、样本量） | 不可变 |
 | `llm_explanation` | `TEXT` | 是 | `NULL` | LLM 生成的解释文本（降级时为 `NULL`） | 不可变 |
+| `llm_detail_json` | `JSON` | 是 | `NULL` | 条目级 LLM 结果明细：`llm_status`、置信度、不确定项、检查清单（`DESIGN_BASIS §8` 补充说明）；降级时为 `NULL` | 不可变 |
 
 - **主键**：`id`。**外键**：`fk_ai_run (run_id) → analysis_runs(id)`、`fk_ai_sku (sku_id) → skus(id)`、`fk_ai_warehouse (warehouse_id) → warehouses(id)`，均 `RESTRICT`。`product_id` 逻辑关联。
 - **唯一约束**：`uk_ai_run_sku_wh (run_id, sku_id, warehouse_id)`（`§8`）。

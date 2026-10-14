@@ -564,6 +564,7 @@
 | `risk_detail_json` | 规则命中明细 | `JSON` | 是 | `NULL` | — | 规则代码 → 判定值 |
 | `data_quality_json` | 数据质量结果 | `JSON` | 是 | `NULL` | — | 缺口/异常值/样本量 |
 | `llm_explanation` | LLM 解释文本 | `TEXT` | 是 | `NULL` | — | 降级时为 `NULL` |
+| `llm_detail_json` | 条目级 LLM 明细 | `JSON` | 是 | `NULL` | — | `llm_status`、置信度、不确定项、检查清单（`DESIGN_BASIS §8`）；降级时为 `NULL` |
 | `created_at` | 创建时间 | `DATETIME(3)` | 否 | `CURRENT_TIMESTAMP(3)` | — | 集合 B |
 | `created_by` | 创建人 | `BIGINT UNSIGNED` | 是 | `NULL` | 逻辑关联 `users.id` | 集合 B |
 
@@ -835,7 +836,7 @@
 | 12 | `import_batches` | 23 | A（4） | 否 | 27 |
 | 13 | `import_row_errors` | 9 | B（2） | 否 | 11 |
 | 14 | `analysis_runs` | 30 | A（4） | 否 | 34 |
-| 15 | `analysis_items` | 32 | B（2） | 否 | 34 |
+| 15 | `analysis_items` | 33 | B（2） | 否 | 35 |
 | 16 | `replenishment_items` | 23 | A（4） | 是 | 28 |
 | 17 | `replenishment_reviews` | 13 | B（2） | 否 | 15 |
 | 18 | `purchase_orders` | 19 | A（4） | 是 | 24 |
@@ -843,9 +844,9 @@
 | 20 | `goods_receipts` | 17 | A（4） | 是 | 22 |
 | 21 | `goods_receipt_items` | 10 | B（2） | 否 | 12 |
 | 22 | `audit_logs` | 20 | B（2） | 否 | 22 |
-| | **合计** | **340** | A×16 表 / B×6 表 | **12 张** | **428** |
+| | **合计** | **341** | A×16 表 / B×6 表 | **12 张** | **429** |
 
-> 「业务字段数」含 `id` 主键，不含公共审计字段（按集合 A/B 单列）。合计口径：`340 + 16×4 + 6×2 + 12（version）= 428`。
+> 「业务字段数」含 `id` 主键，不含公共审计字段（按集合 A/B 单列）。合计口径：`341 + 16×4 + 6×2 + 12（version）= 429`。
 
 > **完整性声明**：本表覆盖 `DESIGN_BASIS §8` 全部 **22 张表**与全部字段，无省略。任何字段变更必须同步 `DATABASE_DESIGN.md` 与 `DATABASE_CONSTRAINTS.md`（`§16`）。
 

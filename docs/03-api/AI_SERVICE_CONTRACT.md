@@ -756,7 +756,7 @@ model_config = ConfigDict(
 **细化规则**：
 
 1. **run 级 LLM 状态为部分成功时**：只要**有任一** item 解释成功，run 级记 `SUCCEEDED`（若其余成功的 item 亦为成功）或按**最差**归并（推荐：**若存在 `FAILED`/`TIMEOUT`/`VALIDATION_FAILED`，run 级记该值**；若全部为 `SKIPPED` 或 `NOT_REQUESTED`，记 `SKIPPED`/`NOT_REQUESTED`）。
-2. **item 级 `llm_status` 必须逐条落库**（`analysis_items` 无 `llm_status` 列 → 落到 `risk_detail_json` 或 `data_quality_json` 的同级自定义字段；**推荐**在 `risk_detail_json` 内加 `llm` 子对象，见 `ANALYSIS_CONTRACT.md §Java 落库映射表`）。⚠️ 见 §11 差异说明。
+2. **item 级 `llm_status` 必须逐条落库** → 写入 `analysis_items.llm_detail_json`（`DESIGN_BASIS §8` 补充说明：保存该条目的 `llm_status`、置信度、不确定项、检查清单）。**不得**塞进 `risk_detail_json` 或 `data_quality_json` 的子对象；降级时该列为 `NULL`。
 3. **`DEGRADED` 业务可用**：采购建议照常可提交/审批/转采购；仅"解释"缺失。
 4. **规则计算阶段失败**（`execution_status=FAILED` 且 `error.code ∈ {AI-3001, AI-4001}`）→ run 置 `FAILED`，**不落库**（无完整规则结果）。
 5. **`enable_llm=false`** → 请求不带 LLM，Python 直接返回 `llm_status=SKIPPED`，Java 记 `SUCCEEDED`。
@@ -827,9 +827,9 @@ model_config = ConfigDict(
 
 `DESIGN_BASIS §13.1` 只列了 `validate` / `runs`（创建）/ 状态查询 / 取消**四个**接口，**未列**"取结果"接口。本文档新增 `GET /internal/v1/analysis/runs/{analysis_run_id}/result`。建议在 `DESIGN_BASIS §13.1` 补充该接口（**建议编号 `D-20`**）。理由：Java 需要一次拿到全量结构化结果才能落库（§3.5）。
 
-### 11.2 `analysis_items` 无 `llm_status` 列（建议修订）
+### 11.2 `analysis_items` 无 `llm_status` 列（✅ 已解决）
 
-`DATA_DICTIONARY.md §5.15` 的 `analysis_items` **没有** `llm_status` 列，但本文档 §8 要求**逐 item** 记录 LLM 状态。当前处置：把 item 级 `llm_status`、`llm_evidence`、`warnings` 放入 `risk_detail_json` 的子对象（如 `{"llm": {"status": "...", "evidence": [...]}}`）。**建议**：在 `analysis_items` 增加 `llm_status VARCHAR(32)` 列，或在 `DATABASE_DESIGN.md` 明确"item 级 LLM 状态存放于 `risk_detail_json.llm`"。**不改动他人文档**，仅记录。
+`DESIGN_BASIS §8` 补充说明已裁定：新增 `analysis_items.llm_detail_json`（`JSON`），保存该条目的 `llm_status`、置信度、不确定项、检查清单；`DATABASE_DESIGN.md §5.15` 与 `DATA_DICTIONARY.md §5.15` 均已落该列。**不再**采用「`risk_detail_json.llm` 子对象」这一替代方案（§8 细化规则 2 已同步改指 `llm_detail_json`）。
 
 ### 11.3 `execution_status` vs `AnalysisRunStatus`（命名区分，勿混用）
 
