@@ -352,7 +352,7 @@ MIN(received_qty / ordered_qty) = 1  →  RECEIVED
 | ④ 余额回退 | `inventory_balances` 乐观锁 UPDATE |
 | ⑤ 采购汇总回退 | `poi.received_qty −= 本次冲销量`；`po.received_qty = Σ`；**采购单状态重算** |
 | ⑥ 到货单标记 | 建议置 `CANCELLED`（业务动作）或保留并标记"已冲销"（**建议新增字段/标记，见 §10.3 `建议新增 D-38`**） |
-| ⑦ 审计 | 两条：`GOODS_RECEIPT_REVERSE`（业务侧，`biz_type=GOODS_RECEIPT`）+ `INVENTORY_REVERSAL`（库存侧，`biz_type=INVENTORY_TRANSACTION`，由 `inventory` 模块写入） |
+| ⑦ 审计 | 两条：`GOODS_RECEIPT_REVERSE`（业务侧，`biz_type=GOODS_RECEIPT`）+ `INVENTORY_REVERSE`（库存侧，`biz_type=INVENTORY_TRANSACTION`，由 `inventory` 模块写入） |
 
 **约束**：
 - **一笔流水只能冲销一次**：由 `uk_invtxn_team_reversed (team_id, reversed_txn_id)` 保证（⚠️ 该索引不在 `§8`，登记 `D-13`）；重复 → `INV-5009`；
@@ -471,7 +471,7 @@ COMMIT;
 
 ## 11. 审计记录点
 
-> `action` 常量的**成员资格见 `DESIGN_BASIS §9.17`（`AuditAction`，34 条）**，语义见 `DATABASE_DESIGN.md §6-J.1`。本文档**引用不重定义**；下表 `#` 为 `§6-J.1` 的稳定编号。
+> `action` 常量的**成员资格见 `DESIGN_BASIS §9.17`（`AuditAction`，35 条）**，语义见 `DATABASE_DESIGN.md §6-J.1`。本文档**引用不重定义**；下表 `#` 为 `§6-J.1` 的稳定编号。
 
 | # | 操作 | `action` | `biz_type` | `result` |
 | --- | --- | --- | --- | --- |
@@ -482,10 +482,10 @@ COMMIT;
 | 25 | 采购单取消 | `PURCHASE_ORDER_CANCEL` | `PURCHASE_ORDER` | SUCCESS |
 | 26 | 到货单确认（入库） | `GOODS_RECEIPT_CONFIRM` | `GOODS_RECEIPT` | SUCCESS |
 | 33 | 到货单冲销（业务侧） | `GOODS_RECEIPT_REVERSE` | `GOODS_RECEIPT` | SUCCESS |
-| 13 | 库存流水冲销（库存侧） | `INVENTORY_REVERSAL` | `INVENTORY_TRANSACTION` | SUCCESS |
+| 13 | 库存流水冲销（库存侧） | `INVENTORY_REVERSE` | `INVENTORY_TRANSACTION` | SUCCESS |
 | 27 | 到货单作废 | `GOODS_RECEIPT_CANCEL` | `GOODS_RECEIPT` | SUCCESS |
 
-> ✅ **原「缺失的审计点」已闭环**（`D-40` 已裁定为"新增"）：`PENDING → ORDERED` 用 `#32 PURCHASE_ORDER_ORDERED`；到货冲销**业务侧**用 `#33 GOODS_RECEIPT_REVERSE`，与库存侧 `#13 INVENTORY_REVERSAL` **分两条记录**（前者 `biz_type = GOODS_RECEIPT`，后者 `biz_type = INVENTORY_TRANSACTION`），避免"库存冲销"与"到货冲销"语义混用。
+> ✅ **原「缺失的审计点」已闭环**（`D-40` 已裁定为"新增"）：`PENDING → ORDERED` 用 `#32 PURCHASE_ORDER_ORDERED`；到货冲销**业务侧**用 `#33 GOODS_RECEIPT_REVERSE`，与库存侧 `#13 INVENTORY_REVERSE` **分两条记录**（前者 `biz_type = GOODS_RECEIPT`，后者 `biz_type = INVENTORY_TRANSACTION`），避免"库存冲销"与"到货冲销"语义混用。
 
 ---
 
@@ -509,7 +509,7 @@ COMMIT;
 | INC-P2 | **在途状态集合不一致**：`§3` 用 `{ORDERED, PENDING}`，`§10.4` 用 `{PENDING, ORDERED, PARTIALLY_RECEIVED}` | `DESIGN_BASIS §3` vs `§10.4` | 统一为 `{PENDING, ORDERED, PARTIALLY_RECEIVED}`（部分收货的剩余未收部分仍在途） |
 | INC-P3 | **`§9.13` 未定义"冲销后采购单状态回退"**：`PARTIALLY_RECEIVED` / `RECEIVED` 冲销后如何回退无明文 | `DESIGN_BASIS §9.13` | 补充状态回退规则（或明确"冲销只减 `received_qty`，状态由派生重算"） |
 | INC-P4 | **`goods_receipts` 无"已冲销"标记**：`§9.14` 只有 `DRAFT/CONFIRMED/CANCELLED`，冲销后到货单状态语义不明 | `DESIGN_BASIS §9.14` vs `INVENTORY_WORKFLOW.md §5.6` | 明确"冲销后到货单置 `CANCELLED`"或新增标记 |
-| INC-P5 | ✅ **已闭环**（F-28）：下单用 `PURCHASE_ORDER_ORDERED`；到货冲销业务侧用 `GOODS_RECEIPT_REVERSE`，与库存侧 `INVENTORY_REVERSAL` 分列 | `DESIGN_BASIS §9.17`（`AuditAction` 34 条） | 已固化于 `§9.17` #32 / #33，语义见 `DATABASE_DESIGN.md §6-J.1`，见 §11 |
+| INC-P5 | ✅ **已闭环**（F-28）：下单用 `PURCHASE_ORDER_ORDERED`；到货冲销业务侧用 `GOODS_RECEIPT_REVERSE`，与库存侧 `INVENTORY_REVERSE` 分列 | `DESIGN_BASIS §9.17`（`AuditAction` 35 条） | 已固化于 `§9.17` #32 / #33，语义见 `DATABASE_DESIGN.md §6-J.1`，见 §11 |
 | INC-P6 | **`purchase_orders.idempotency_key` 可空**，但到货单强制 `NOT NULL` | `DATABASE_DESIGN.md §5.18` vs `§5.20` | 属**有意差异**（到货不可逆），建议在 `§5.18` 附近补一句说明理由，避免被误读为遗漏 |
 
 ### 12.3 建议新增待决策项
@@ -518,7 +518,7 @@ COMMIT;
 | --- | --- | --- | --- |
 | **建议新增 `D-38`**（✅ **已裁定**） | 已冲销到货单的状态与标记方式 | ③ 新增 `REVERSED` 枚举值（`DESIGN_BASIS §9.14` 已定义；`DESIGN_REVIEW.md`：已裁定）；① 复用 `CANCELLED` **否决**（`CONFIRMED` 后不可直接作废）；② 仅作为 ③ 的**补充标记**（是否新增 `reversed_at`/`reversed_by` 见 `DATABASE_DESIGN.md §5.20`） | 影响到货单查询与审计 |
 | **建议新增 `D-39`** | 冲销后采购单状态是否允许"回退" | ① 允许按派生重算（`RECEIVED → PARTIALLY_RECEIVED → ORDERED`，**与 `§9.13`"终态不可变"张力大**）；② 维护独立 `reversed` 汇总，**状态保持终态不变**（推荐，与 `§9.13` 兼容） | 影响两个状态机的兼容性 |
-| **建议新增 `D-40`**（✅ **已裁定：① 新增**；✅ **已固化**） | 是否新增审计常量 `PURCHASE_ORDER_ORDERED` / `GOODS_RECEIPT_REVERSE` | ① 新增（推荐，审计完整）；② 复用 `PURCHASE_ORDER_CONFIRM` / `INVENTORY_REVERSAL`（会丢失语义） | 影响审计可读性。已落地：`DESIGN_BASIS §9.17` #32 / #33 |
+| **建议新增 `D-40`**（✅ **已裁定：① 新增**；✅ **已固化**） | 是否新增审计常量 `PURCHASE_ORDER_ORDERED` / `GOODS_RECEIPT_REVERSE` | ① 新增（推荐，审计完整）；② 复用 `PURCHASE_ORDER_CONFIRM` / `INVENTORY_REVERSE`（会丢失语义） | 影响审计可读性。已落地：`DESIGN_BASIS §9.17` #32 / #33 |
 | **建议新增 `D-41`** | 手工创建采购单是否也需要 `APPROVER` 确认？ | ① 需要（与建议转采购一致，**推荐**）；② 手工单可由 `OPERATOR` 直接 `PENDING` | 影响权限矩阵与审批隔离 |
 | **建议新增 `D-42`** | `PARTIALLY_RECEIVED` 采购单取消时，未收部分是否需在途回退审计？ | ① 是（推荐）；② 否 | 影响审计完整性 |
 

@@ -762,7 +762,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | `id` | 主键 | `BIGINT UNSIGNED` | 否 | `AUTO_INCREMENT` | `PK` | 不可变 |
 | `team_id` | 团队 ID | `BIGINT UNSIGNED` | 否 | — | `IDX`、逻辑关联 `teams.id` | `0` = **系统域**（无团队上下文，`D-11`）；**不接受客户端传入** |
-| `action` | 动作常量 | `VARCHAR(64)` | 否 | — | `IDX` | 34 条，成员资格见 `DESIGN_BASIS §9.17` `AuditAction`；语义见 `DATABASE_DESIGN.md §6-J.1` |
+| `action` | 动作常量 | `VARCHAR(64)` | 否 | — | `IDX` | 35 条，成员资格见 `DESIGN_BASIS §9.17` `AuditAction`；语义见 `DATABASE_DESIGN.md §6-J.1` |
 | `biz_type` | 业务对象类型 | `VARCHAR(64)` | 否 | — | `IDX` | 表名或领域名（如 `REPLENISHMENT_ITEM`） |
 | `biz_id` | 业务对象 ID | `BIGINT UNSIGNED` | 是 | `NULL` | `IDX`、**逻辑关联（多态）** | 目标表由 `biz_type` 决定 |
 | `biz_no` | 业务编号快照 | `VARCHAR(64)` | 是 | `NULL` | — | 对象可能已软停用 |
@@ -813,7 +813,7 @@
 | 19 | `InventoryBizType` | `GOODS_RECEIPT`、`COUNT`、`MANUAL`、`IMPORT`、`SALE`、`REVERSAL` | `§9.17` | `inventory_transactions.biz_type` |
 | 20 | `SalesSource` | `IMPORT`、`MANUAL`、`PLATFORM` | `§9.17` | `sales_daily.source` |
 | 21 | `PurchaseOrderSource` | `MANUAL`、`REPLENISHMENT` | `§9.17` | `purchase_orders.source` |
-| 22 | 审计常量（`action` / `result` / `biz_type`） | `action`：`AuditAction` 34 条，成员资格见 `DESIGN_BASIS §9.17`（语义见 `DATABASE_DESIGN.md §6-J.1`）；`result`：`AuditResult` = `SUCCESS`/`FAILURE` | `§9.17` | `audit_logs.action` / `audit_logs.result` |
+| 22 | 审计常量（`action` / `result` / `biz_type`） | `action`：`AuditAction` 35 条，成员资格见 `DESIGN_BASIS §9.17`（语义见 `DATABASE_DESIGN.md §6-J.1`）；`result`：`AuditResult` = `SUCCESS`/`FAILURE` | `§9.17` | `audit_logs.action` / `audit_logs.result` |
 | 23 | 导入错误级别 | `ERROR`、`WARNING` | `§9.17` | `import_row_errors.error_level` |
 
 ---

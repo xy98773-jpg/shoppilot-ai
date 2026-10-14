@@ -1813,7 +1813,7 @@ X-Request-Id: req_rpl_002
 }
 ```
 
-**业务行为与权限**：`submit`/`withdraw` 需 `OPERATOR`+；`approve`/`reject` 需 `APPROVER`/`ADMIN`/`OWNER`（`USER_ROLES.md §2.2` #7/#8）。状态机 `ReplenishmentItemStatus`（`DESIGN_BASIS §9.11`）。每次动作写 `replenishment_reviews`（含 `reviewer_role` 快照、`from_status`/`to_status`、`qty_before`/`qty_after`）。写审计 `REPLENISHMENT_SUBMIT`/`REPLENISHMENT_APPROVE`/`REPLENISHMENT_REJECT`。**四眼原则**（`D-09` 建议）：若启用，提交人不得作为同一建议的审批人，否则 `RPL-8007`。
+**业务行为与权限**：`submit`/`withdraw` 需 `OPERATOR`+；`approve`/`reject` 需 `APPROVER`/`ADMIN`/`OWNER`（`USER_ROLES.md §2.2` #7/#8）。状态机 `ReplenishmentItemStatus`（`DESIGN_BASIS §9.11`）。每次动作写 `replenishment_reviews`（含 `reviewer_role` 快照、`from_status`/`to_status`、`qty_before`/`qty_after`）。写审计 `REPLENISHMENT_SUBMIT`/`REPLENISHMENT_WITHDRAW`/`REPLENISHMENT_APPROVE`/`REPLENISHMENT_REJECT`（`withdraw` 对应 `§9.17` #30）。**四眼原则**（`D-09` 建议）：若启用，提交人不得作为同一建议的审批人，否则 `RPL-8007`。
 
 ---
 
@@ -1951,7 +1951,7 @@ X-Request-Id: req_po_002
 }
 ```
 
-**业务行为与权限**：`from-replenishment` 与 `confirm` 均需 `APPROVER`/`ADMIN`/`OWNER`（`DESIGN_BASIS §5.1` 第 2 条；`OPERATOR` 仅能起草 `DRAFT`）。生成采购单时校验 `sku.team_id == po.team_id`、`supplier.team_id == po.team_id`（`§6` 规则 4）。建议 `APPROVED → CONVERTED`，写 `converted_po_item_ids`。`PENDING→ORDERED` 由 `POST .../{id}/order` 触发，写入 `ordered_at`，此时该 PO 的 `ordered_qty − received_qty` 进入 `effective_in_transit_qty` 口径（`DESIGN_BASIS §10.4`）。写审计 `PURCHASE_ORDER_CREATE`/`PURCHASE_ORDER_CONFIRM`/`REPLENISHMENT_CONVERT`。
+**业务行为与权限**：`from-replenishment` 与 `confirm` 均需 `APPROVER`/`ADMIN`/`OWNER`（`DESIGN_BASIS §5.1` 第 2 条；`OPERATOR` 仅能起草 `DRAFT`）。生成采购单时校验 `sku.team_id == po.team_id`、`supplier.team_id == po.team_id`（`§6` 规则 4）。建议 `APPROVED → CONVERTED`，写 `converted_po_item_ids`。`PENDING→ORDERED` 由 `POST .../{id}/order` 触发，写入 `ordered_at`，此时该 PO 的 `ordered_qty − received_qty` 进入 `effective_in_transit_qty` 口径（`DESIGN_BASIS §10.4`）。写审计 `PURCHASE_ORDER_CREATE`/`PURCHASE_ORDER_CONFIRM`/`PURCHASE_ORDER_ORDERED`/`REPLENISHMENT_CONVERT`（`PURCHASE_ORDER_ORDERED` 对应 `§9.17` #32）。
 
 ---
 
@@ -2263,7 +2263,7 @@ X-Request-Id: req_gr_002
 | `SalesSource` | `sales_daily.source` | `IMPORT`/`MANUAL`/`PLATFORM` |
 | `PurchaseOrderSource` | `purchase_orders.source` | `MANUAL`/`REPLENISHMENT` |
 | 导入错误级别 | `import_row_errors.error_level` | `ERROR`/`WARNING` |
-| 审计常量 | `audit_logs.action` | `AuditAction` 34 条，成员资格见 `DESIGN_BASIS §9.17`（语义见 `DATABASE_DESIGN.md §6-J.1`） |
+| 审计常量 | `audit_logs.action` | `AuditAction` 35 条，成员资格见 `DESIGN_BASIS §9.17`（语义见 `DATABASE_DESIGN.md §6-J.1`） |
 
 ### 13.4 新增待决策（本文档发现）
 

@@ -29,7 +29,7 @@
 - **不定义**公式/规则/阈值（`DESIGN_BASIS.md §10`/`§11`）。
 - **不定义**输入/输出数据契约（`ANALYSIS_CONTRACT.md`）。
 - **不定义**内部 HTTP 接口（`AI_SERVICE_CONTRACT.md`）。
-- **不定义** 34 条审计动作常量（`AuditAction`，`DESIGN_BASIS §9.17`）。
+- **不定义** 35 条审计动作常量（`AuditAction`，`DESIGN_BASIS §9.17`）。
 
 ---
 

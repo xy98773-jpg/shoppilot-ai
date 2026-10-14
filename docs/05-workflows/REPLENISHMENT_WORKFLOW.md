@@ -603,7 +603,7 @@ stateDiagram-v2
 
 ## 8. 审计记录点
 
-> 审计 `action` 常量的**成员资格见 `DESIGN_BASIS §9.17`（`AuditAction`，34 条）**，语义见 `DATABASE_DESIGN.md §6-J.1`。本文档**引用不重定义**；下表 `#` 为 `§6-J.1` 的稳定编号。与补货相关的：
+> 审计 `action` 常量的**成员资格见 `DESIGN_BASIS §9.17`（`AuditAction`，35 条）**，语义见 `DATABASE_DESIGN.md §6-J.1`。本文档**引用不重定义**；下表 `#` 为 `§6-J.1` 的稳定编号。与补货相关的：
 
 | # | 操作 | `action` | `biz_type` | `result` |
 | --- | --- | --- | --- | --- |
@@ -618,7 +618,7 @@ stateDiagram-v2
 | 21 | 建议驳回 | `REPLENISHMENT_REJECT` | `REPLENISHMENT_ITEM` | SUCCESS |
 | 22 | 建议转采购 | `REPLENISHMENT_CONVERT` | `REPLENISHMENT_ITEM` | SUCCESS |
 
-> ✅ `action` 常量**已由 `DESIGN_BASIS §9.17` `AuditAction`（34 条）统一定义**（原 `D-14` 该子项已注销）；本文档**引用而非重定义**。
+> ✅ `action` 常量**已由 `DESIGN_BASIS §9.17` `AuditAction`（35 条）统一定义**（原 `D-14` 该子项已注销）；本文档**引用而非重定义**。
 >
 > ✅ **撤回 / 作废已闭环**（原 INC-B）：`#30 REPLENISHMENT_WITHDRAW` / `#31 REPLENISHMENT_CANCEL` 已入 `§9.17`，与 `§9.12` `ReviewAction` 的 `WITHDRAW`/`CANCEL` 对应。
 
@@ -635,7 +635,7 @@ stateDiagram-v2
 | `D-06` | 采购单 `DRAFT → PENDING` 的确认角色 | 影响 §6.6 转采购后的下一步（见 `PURCHASING_WORKFLOW.md`） |
 | `D-09` | **四眼原则**（提交人与审批人不得同一人） | §6.6 场景 5 首期宽松实现 |
 | `D-10` | `uk_ai_run_sku_wh` / `uk_repl_run_sku_wh` 是否豁免 `team_id` 前缀 | 影响唯一约束定义，不改流程 |
-| `D-14`（⚠️ **旧编号**，指"数据库文档侧的枚举/常量补充"；权威 `D-14` = 同团队并发分析运行数上限） | `LeadTimeSource` 等枚举与审计常量在 `§9` 未定义 | ✅ 已裁定：全部补入 `DESIGN_BASIS §9.17`（含审计常量 34 条），§8 审计常量来源已明；`lead_time_source` 取值见 `§9.17`（编号迁移待 `M1-T01` 统一） |
+| `D-14`（⚠️ **旧编号**，指"数据库文档侧的枚举/常量补充"；权威 `D-14` = 同团队并发分析运行数上限） | `LeadTimeSource` 等枚举与审计常量在 `§9` 未定义 | ✅ 已裁定：全部补入 `DESIGN_BASIS §9.17`（含审计常量 35 条），§8 审计常量来源已明；`lead_time_source` 取值见 `§9.17`（编号迁移待 `M1-T01` 统一） |
 | `D-15` | 只增表保留期与归档策略 | 首期全部保留；影响长期存储 |
 
 ### 9.2 发现的不一致（本文档**不改 SSOT**，仅标注）

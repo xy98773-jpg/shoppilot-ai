@@ -280,7 +280,7 @@ flowchart TD
     E -- "可冲销" --> F["写 REVERSAL 流水<br/>qty_delta = −原 qty_delta<br/>reversed_txn_id = 原 id"]
     F --> G["校验 qty_after ≥ 0（冲销导致负库存 → INV-5006）"]
     G --> H["更新 inventory_balances（乐观锁）"]
-    H --> I["写审计 INVENTORY_REVERSAL"]
+    H --> I["写审计 INVENTORY_REVERSE"]
 ```
 
 | 步骤 | 输入 | 输出 | 状态变化 | 事务边界 | 失败处理 | 接口 |

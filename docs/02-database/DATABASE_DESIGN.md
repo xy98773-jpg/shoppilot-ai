@@ -863,7 +863,7 @@
 | --- | --- | --- | --- | --- | --- |
 | `id` | `BIGINT UNSIGNED` | 否 | AUTO_INCREMENT | 主键 | 不可变 |
 | `team_id` | `BIGINT UNSIGNED` | 否 | — | 团队 ID（`0` = **系统域**，无团队上下文的操作） | 不可变 |
-| `action` | `VARCHAR(64)` | 否 | — | 动作常量（34 条，成员资格见 `DESIGN_BASIS §9.17` `AuditAction`；语义见 §6-J.1） | 不可变 |
+| `action` | `VARCHAR(64)` | 否 | — | 动作常量（35 条，成员资格见 `DESIGN_BASIS §9.17` `AuditAction`；语义见 §6-J.1） | 不可变 |
 | `biz_type` | `VARCHAR(64)` | 否 | — | 业务对象类型（表名或领域名，如 `REPLENISHMENT_ITEM`） | 不可变 |
 | `biz_id` | `BIGINT UNSIGNED` | 是 | `NULL` | 业务对象 ID（**多态，逻辑关联**） | 不可变 |
 | `biz_no` | `VARCHAR(64)` | 是 | `NULL` | 业务编号快照（对象可能已被软停用） | 不可变 |
@@ -1439,7 +1439,7 @@ replenishment_items.status = 'APPROVED'
 
 #### J.1 记录哪些操作（审计点与 `action` 常量）
 
-> 本节给出每条常量的**语义、`biz_type`、`result`**；**成员资格（共 34 条）的唯一权威是 `DESIGN_BASIS §9.17` 的 `AuditAction`**，本节与其一一对应。编号 `#1`–`#34` **稳定不变**（下游流程文档按编号引用），新增常量只能追加编号。
+> 本节给出每条常量的**语义、`biz_type`、`result`**；**成员资格（共 35 条）的唯一权威是 `DESIGN_BASIS §9.17` 的 `AuditAction`**，本节与其一一对应。编号 `#1`–`#35` **稳定不变**（下游流程文档按编号引用），新增常量只能追加编号。
 
 | # | 操作 | `action` 常量 | `biz_type` | `result` |
 | --- | --- | --- | --- | --- |
@@ -1452,10 +1452,10 @@ replenishment_items.status = 'APPROVED'
 | 7 | 补货策略变更 | `REPLENISHMENT_POLICY_UPSERT` | `REPLENISHMENT_POLICY` | SUCCESS |
 | 8 | 导入批次创建 | `IMPORT_BATCH_CREATE` | `IMPORT_BATCH` | SUCCESS |
 | 9 | 导入落库完成 | `IMPORT_BATCH_COMPLETE` | `IMPORT_BATCH` | SUCCESS/FAILURE |
-| 10 | 强制重导 | `IMPORT_FORCE_REIMPORT` | `IMPORT_BATCH` | SUCCESS |
+| 10 | 强制重导 | `IMPORT_BATCH_FORCE_REIMPORT` | `IMPORT_BATCH` | SUCCESS |
 | 11 | 库存手工调整 | `INVENTORY_MANUAL_ADJUST` | `INVENTORY_BALANCE` | SUCCESS |
 | 12 | 库存盘点调整 | `INVENTORY_COUNT_ADJUST` | `INVENTORY_BALANCE` | SUCCESS |
-| 13 | 库存冲销 | `INVENTORY_REVERSAL` | `INVENTORY_TRANSACTION` | SUCCESS |
+| 13 | 库存冲销 | `INVENTORY_REVERSE` | `INVENTORY_TRANSACTION` | SUCCESS |
 | 14 | 库存对账不一致 | `INVENTORY_RECONCILE_MISMATCH` | `INVENTORY_BALANCE` | FAILURE（系统任务，`operator_id = NULL`） |
 | 15 | 分析任务创建 | `ANALYSIS_RUN_CREATE` | `ANALYSIS_RUN` | SUCCESS |
 | 16 | 分析任务终态 | `ANALYSIS_RUN_FINISH` | `ANALYSIS_RUN` | SUCCESS（`FAILED`/`TIMEOUT` 记 FAILURE） |
@@ -1477,8 +1477,11 @@ replenishment_items.status = 'APPROVED'
 | 32 | 采购单标记已下单 | `PURCHASE_ORDER_ORDERED` | `PURCHASE_ORDER` | SUCCESS |
 | 33 | 到货单冲销 | `GOODS_RECEIPT_REVERSE` | `GOODS_RECEIPT` | SUCCESS |
 | 34 | 审计/业务数据导出 | `AUDIT_LOG_EXPORT` | `AUDIT_LOG` | SUCCESS |
+| 35 | 转采购前重复采购冲突的显式确认 | `PURCHASE_ORDER_CONFLICT_ACK` | `PURCHASE_ORDER` | SUCCESS |
 
-> 覆盖"至少 12 个"的要求（实际 34 个，与 `DESIGN_BASIS §9.17` 一致）。**审计点选择原则**：改变**权限**、**状态**、**数量/金额**、或**数据可见性**的操作必须审计；纯查询不审计（**唯一例外**是 `#34` 导出——导出会造成批量数据外流，故破例审计）。
+> 覆盖"至少 12 个"的要求（实际 35 个，与 `DESIGN_BASIS §9.17` 一致）。**审计点选择原则**：改变**权限**、**状态**、**数量/金额**、或**数据可见性**的操作必须审计；纯查询不审计（**唯一例外**是 `#34` 导出——导出会造成批量数据外流，故破例审计）。
+>
+> `#35 PURCHASE_ORDER_CONFLICT_ACK` 是 `D-16`「同 SKU×仓库冲突提示 + 转采购前显式确认」的**审计证据**，与 `#23 PURCHASE_ORDER_CREATE` **分两条记录**（先确认、后创建）。
 
 #### J.2 字段设计要点
 
@@ -1627,7 +1630,7 @@ replenishment_items.status = 'APPROVED'
 | 18 | `analysis_items.lead_time_source` | **本设计引入的取源标记** | ⚠️ **`§9` 未定义该枚举**，`§10.2`/`§11.2` 只要求"标注 `lead_time_source = DEFAULT`"。本设计取值 `POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`。**建议在 `§9` 补充定义 `LeadTimeSource`**，登记 `D-14` | 4 |
 | 19 | `sales_daily.source` / `purchase_orders.source` | **本设计引入的来源标记** | ⚠️ `§9` 未定义。取值见各表字段表。**建议在 `§9` 补充**，登记 `D-14` | — |
 | 20 | `inventory_transactions.biz_type` | **本设计引入的单据来源标记** | ⚠️ `§9` 未定义。**建议在 `§9` 补充 `InventoryBizType`**，登记 `D-14` | 6 |
-| 21 | `audit_logs.action` / `result` / `biz_type` | `AuditAction`（34 条）/ `AuditResult` / 领域名 | ✅ `§9.17` 已定义：`action` 34 条常量的**成员资格**以 `§9.17` 为唯一权威，**语义/`biz_type`/`result`** 见本节 `§6-J.1`（一一对应） | 34 / 2 / — |
+| 21 | `audit_logs.action` / `result` / `biz_type` | `AuditAction`（35 条）/ `AuditResult` / 领域名 | ✅ `§9.17` 已定义：`action` 35 条常量的**成员资格**以 `§9.17` 为唯一权威，**语义/`biz_type`/`result`** 见本节 `§6-J.1`（一一对应） | 35 / 2 / — |
 
 ---
 
