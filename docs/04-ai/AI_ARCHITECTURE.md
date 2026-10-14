@@ -388,7 +388,7 @@ if run.status == RUNNING and now() > run.timeout_at:
 | --- | --- | --- |
 | 1 | `DESIGN_BASIS §12.3` 的 `ANL-7001` 表述为"**同一 SKU 范围**已有运行中任务"，本文档 §6 加强为"**同团队**不允许并发 run" | 加强会改变并发语义。**推荐**在 `DESIGN_BASIS §15` 明确"同团队同时运行数 ≤ 1"（**建议 `D-24`**），或收敛为 `§12.3` 原义。**未改动他人文档**。 |
 | 2 | `DESIGN_BASIS §13.1` 未列内部"取结果"接口（见 `AI_SERVICE_CONTRACT.md §11.1`） | 建议固化（`D-20`） |
-| 3 | `analysis_items` 无 `llm_status` 列（见 `AI_SERVICE_CONTRACT.md §11.2`） | 建议在 `risk_detail_json` 增加 `llm` 子对象或增列（`D-21`） |
+| 3 | ~~`analysis_items` 无 `llm_status` 列（见 `AI_SERVICE_CONTRACT.md §11.2`）~~ | ✅ **已解决**：已新增独立列 `analysis_items.llm_detail_json`（`DESIGN_BASIS §8`）；`AI_SERVICE_CONTRACT.md §11.2` 已同步（`D-21` 采纳"增列"方案） |
 | 4 | Python 步骤状态是否需持久化 | **首期不持久化**（内存 + `timeout_at` 兜底）；若引入跨请求恢复（§4.2）再评估（**建议记录为评审项**） |
 
 **新增待决策（本文档发现）**：

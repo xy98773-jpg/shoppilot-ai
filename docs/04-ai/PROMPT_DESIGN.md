@@ -589,7 +589,7 @@ class LlmSummary(BaseModel):
 | **Python 日志**（结构化 JSON，单行） | §8.1 全部字段 | 用于技术排查与成本分析（`AI_ARCHITECTURE.md §7.2`） |
 | **回传 Java 的 run 摘要** | 聚合后的 `llm_status`、`model_name`、`prompt_version`、总 `tokens`、各状态计数 | Java 落 `analysis_runs`（`llm_status`/`model_name`/`prompt_version` + `summary_json`），用于展示与审计上下文 |
 
-- **item 级** LLM 详细信息（`status`/`evidence`/`prompt_version`/`model_name`）通过结果 JSON 的 `risk_detail_json.llm` 落库（`ANALYSIS_CONTRACT.md §9.3`）。
+- **item 级** LLM 详细信息（`status`/`evidence`/`prompt_version`/`model_name`）通过结果 JSON 落库到**独立列** `analysis_items.llm_detail_json`（`ANALYSIS_CONTRACT.md §9.3`；`DESIGN_BASIS §8` 补充说明）。
 
 ### 8.3 为什么不记录完整 Prompt 正文
 
@@ -627,7 +627,7 @@ class LlmSummary(BaseModel):
 
 | # | 现象 | 建议 |
 | --- | --- | --- |
-| 1 | `DESIGN_BASIS §9.8` 未明确"item 级 `llm_status`"的存储位置 | 见 `ANALYSIS_CONTRACT.md §9.3`（`risk_detail_json.llm`）；建议 `DATABASE_DESIGN.md` 明确（`D-21`） |
+| 1 | ~~`DESIGN_BASIS §9.8` 未明确"item 级 `llm_status`"的存储位置~~ | ✅ **已解决**：`DESIGN_BASIS §8` 补充说明已裁定 `analysis_items.llm_detail_json`；见 `ANALYSIS_CONTRACT.md §9.3`（`D-21` 已采纳"增列"方案） |
 | 2 | 首期 Prompt 默认值（`explain_risk.v1`）未在 SSOT 声明 | 本文档 §2 给出；建议在 `analysis_runs.prompt_version` 默认值或配置中固化（**建议 `D-26`**） |
 | 3 | `run_summary.v1` 是否启用 | 首期**默认关闭**（§2.3）；建议在项目配置默认值中固化 |
 

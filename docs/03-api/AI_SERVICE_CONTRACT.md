@@ -840,7 +840,7 @@ Python 的 `execution_status`（`ACCEPTED`/`RUNNING`/`COMPLETED`/`FAILED`/`CANCE
 | 编号（建议） | 问题 | 推荐方案 | 影响 |
 | --- | --- | --- | --- |
 | **D-20（建议）** | 内部"取结果"接口是否固化到 `DESIGN_BASIS §13.1` | **固化** `/internal/v1/analysis/runs/{id}/result` | 影响内部契约完整性与 Java 落库设计 |
-| **D-21（建议）** | item 级 `llm_status`/`llm_evidence`/`warnings` 的落库位置 | **推荐**在 `risk_detail_json` 增加 `llm` 子对象（零 DDL 变更），或为 `analysis_items` 增列 | 影响落库映射与追溯粒度 |
+| ~~**D-21（建议）**~~ ✅ **已裁定** | ~~item 级 `llm_status`/`llm_evidence`/`warnings` 的落库位置~~ | **已裁定为「增列」**：新增 `analysis_items.llm_detail_json`（`DESIGN_BASIS §8` 补充说明），不采用 `risk_detail_json.llm` 子对象方案。见 §8 细化规则 2 与 §11.2 | 落库映射与追溯粒度已明确 |
 | **D-22（建议）** | 数量与金额对外/对内一律用**字符串**，整数用 number | 已定（本文档 §4.1）；建议固化到 `DESIGN_BASIS §14.2` 的"API 传输"列 | 影响全链路序列化实现 |
 
 ---

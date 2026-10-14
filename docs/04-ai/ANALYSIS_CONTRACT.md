@@ -434,10 +434,10 @@ avg-ma-3sigma-v1+risk-rules-v1+replen-calc-v1
 | `truncated_by_budget` | `truncated_by_budget` | TINYINT(1) | — |
 | `risk_level` | `risk_level` | VARCHAR(16) | `RiskLevel` |
 | `risk_types` | `risk_types` | JSON | 数组 |
-| `risk_findings` | `risk_detail_json` | JSON | **含 `risk_findings` 与 `llm` 子对象**（见 §9.3） |
+| `risk_findings` | `risk_detail_json` | JSON | 规则命中明细（规则代码 → 判定值）；**不含** LLM 信息 |
 | `data_quality` | `data_quality_json` | JSON | 包装为 `{"level": "...", "valid_days": n, "missing_days": m, "outlier_days": k}` |
 | `llm_explanation` | `llm_explanation` | TEXT | 降级为 `NULL` |
-| `llm_evidence` / `llm_status` / `warnings` | `risk_detail_json.llm` | JSON | 见 §9.3 |
+| `llm_evidence` / `llm_status` / `warnings` | `llm_detail_json` | JSON | 独立列（`DESIGN_BASIS §8` 补充说明），见 §9.3 |
 
 ### 9.2 输出 → `replenishment_items`（对 `q_suggest > 0` 生成，`status=SUGGESTED`）
 
@@ -457,30 +457,37 @@ avg-ma-3sigma-v1+risk-rules-v1+replen-calc-v1
 
 **`reason` 与 `llm_explanation` 的关系**：`reason` 是**短摘要**（≤500，进 `VARCHAR(500)`），`llm_explanation` 是**完整解释**（≤2000，进 `TEXT`）。Java 从 `llm_explanation` 截取前 500 字符生成 `reason`；若 LLM 降级，`reason` 用规则摘要生成（如"缺货高风险，建议补货 80 件"）。
 
-### 9.3 item 级 LLM 状态落库（`risk_detail_json` 子对象）
+### 9.3 item 级 LLM 状态落库（`llm_detail_json`）
 
-`analysis_items` **无** `llm_status`/`llm_evidence` 列（`DATA_DICTIONARY.md §5.15`），故将 item 级 LLM 信息放入 `risk_detail_json`：
+`analysis_items` 已设**独立列** `llm_detail_json`（`DESIGN_BASIS §8` 补充说明；`DATABASE_DESIGN.md §5.15` 与 `DATA_DICTIONARY.md §5.15` 均已落库）。item 级 LLM 信息**写入该列**，**不得**塞进 `risk_detail_json` 或 `data_quality_json` 的子对象。
+
+`risk_detail_json`（规则命中明细）：
 
 ```json
 {
   "findings": [
     { "rule_code": "R-STOCKOUT", "inputs": { "on_hand_qty": "8.000", "D": "6.250" }, "threshold": "on_hand_qty / D = 1.28 天 <= 2 天", "result": "HIGH" }
   ],
-  "llm": {
-    "status": "SUCCEEDED",
-    "evidence": ["on_hand_qty", "avg_daily_sales", "lead_time_days", "coverage_days", "q_suggest"],
-    "prompt_version": "explain_risk.v1",
-    "model_name": "gpt-4o-mini"
-  },
   "warnings": []
 }
 ```
 
-> **⚠️ 建议**：在 `analysis_items` 增列 `llm_status VARCHAR(32)` 或由 `DATABASE_DESIGN.md` 明确该 JSON 结构（见 §10 差异，`D-21`）。当前按上表落库，**零 DDL 变更**。
+`llm_detail_json`（条目级 LLM 结果）：
+
+```json
+{
+  "status": "SUCCEEDED",
+  "evidence": ["on_hand_qty", "avg_daily_sales", "lead_time_days", "coverage_days", "q_suggest"],
+  "prompt_version": "explain_risk.v1",
+  "model_name": "gpt-4o-mini"
+}
+```
+
+> **降级约定**：LLM 不可用时 `llm_detail_json` 与 `llm_explanation` **同为 `NULL`**，规则计算结果（`risk_detail_json` 等）**必须保留**（`DESIGN_BASIS §5.1` 硬规则）。
 
 ### 9.4 未落库字段
 
-`risk_findings[].rule_code` 中的规则**代码**不单独建列；已含于 `risk_detail_json`。`prompt_version`/`model_name` 已在 `analysis_runs` 顶层记录，item 级仅在 `risk_detail_json.llm` 冗余便于单条追溯。
+`risk_findings[].rule_code` 中的规则**代码**不单独建列；已含于 `risk_detail_json`。`prompt_version`/`model_name` 已在 `analysis_runs` 顶层记录，item 级在 `llm_detail_json` 中冗余便于单条追溯。
 
 ---
 
@@ -488,7 +495,7 @@ avg-ma-3sigma-v1+risk-rules-v1+replen-calc-v1
 
 | # | 现象 | 建议 |
 | --- | --- | --- |
-| 1 | `analysis_items` 无 `llm_status`/`llm_evidence`/`warnings` 列 | 置入 `risk_detail_json.llm`（§9.3）；建议 `DATABASE_DESIGN.md` 明确或增列（**建议 `D-21`**） |
+| 1 | ~~`analysis_items` 无 `llm_status`/`llm_evidence`/`warnings` 列~~ | ✅ **已解决**：`DESIGN_BASIS §8` 补充说明已裁定新增 `analysis_items.llm_detail_json`，`DATABASE_DESIGN.md §5.15` 与 `DATA_DICTIONARY.md §5.15` 均已落库；本文档 §9.1 映射表与 §9.3 已同步（`D-21` 对应方案为"增列"，已采纳） |
 | 2 | `DESIGN_BASIS §9` 未定义 `LeadTimeSource`（`analysis_items.lead_time_source`） | 本文档 §1.2/§2.1 采用 `POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`；建议 `DESIGN_BASIS §9` 补充（**`D-14`**） |
 | 3 | `DESIGN_BASIS §10.6` 未定义 `ANOMALY_SIGMA` 与数据质量分级阈值（0.8/0.5 等） | 本文档 §4 给出 `data_quality` 判定阈值（0.8/0.5、异常值 5%/15%），**属新增约定**；建议登记 `DESIGN_BASIS §15`（**建议 `D-27`**） |
 | 4 | `data_quality` 的四个取值（`GOOD`/`FAIR`/`POOR`/`INSUFFICIENT`）不在 `DESIGN_BASIS §9` | 建议作为**新枚举**在 `§9` 备案（**建议 `D-27`**） |
