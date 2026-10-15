@@ -26,6 +26,14 @@ spring:
 server:
   port: 8080
 
+# M2-T06：多团队数据隔离（DESIGN_BASIS §6 规则 4/5）。
+# 启用后 TenantLineInnerInterceptor 对所有含 team_id 的表自动追加/补齐 team_id 条件
+# （users / teams 是 §6 规则 1 的显式例外表，由 ShopPilotTenantLineHandler.ignoreTable 排除）。
+# 上下文缺失时**拒绝查询**（AUTH-1001），不再退化为哨兵 team_id = 0。
+shoppilot:
+  multitenancy:
+    enabled: true
+
 # M1-T06：Actuator 健康检查（TECH_STACK.md：Micrometer + Actuator，NFR-OBS）。
 # 暴露面最小化：仅 health 与 info；env / beans / configprops / loggers / threaddump /
 # heapdump / shutdown 等敏感端点一律不暴露（暴露列表即白名单，未列出者不可达）。
