@@ -505,7 +505,7 @@ identity ← catalog ← {inventory, sales} ← analysis ← replenishment ← p
 | `RuleCode` | 风险规则代码（§11） | `R-STOCKOUT` / `R-LOWSTOCK` / `R-OVERSTOCK` / `R-SLOWMOVING` / `R-SALESANOMALY` / `R-DATAINSUFFICIENT` |
 
 > **`AuditAction` 补充说明**（35 条的口径与三条收敛说明）：
-> - **权威清单**：本节是 `audit_logs.action` 的**唯一权威枚举**；每条的**语义、`biz_type`、`result`** 见 `DATABASE_DESIGN.md §6-J.1`（与本节一一对应，编号一致）。
+> - **权威清单**：本节是 `audit_logs.action` 的**唯一权威枚举**；每条的**语义、`biz_type`、`result`** 见 `DATABASE_DESIGN.md §6-J.1`，两处**成员集合一致**；每条的**编号**见 §6-J.1（本节按前缀分组排列，**顺序不等同于编号序**）。
 > - **`MASTER_DATA_STATUS_CHANGE` 覆盖主数据的创建/更新/停用/启用**（商品、SKU、供应商、仓库四类），以 `audit_logs.biz_type`（`PRODUCT`/`SKU`/`SUPPLIER`/`WAREHOUSE`）区分；不再按实体拆分独立常量（`API_CONTRACT.md` 主数据写入已按此记录）。
 > - **`AUDIT_LOG_EXPORT` 是唯一被审计的查询类操作**（导出受角色与团队隔离约束，故破例审计）；其余查询一律不审计。
 > - **`PURCHASE_ORDER_CONFLICT_ACK` 记录"重复采购冲突的显式确认"**（同 SKU×仓库已有在途采购时的转采购前确认，`D-16`），是 `D-16`「冲突提示 + 显式确认」控制手段的**审计证据**；与 `PURCHASE_ORDER_CREATE` **分开记录**（前者记确认，后者记创建）。

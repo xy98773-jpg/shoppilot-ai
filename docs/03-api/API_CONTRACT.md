@@ -1951,7 +1951,7 @@ X-Request-Id: req_po_002
 }
 ```
 
-**业务行为与权限**：`from-replenishment` 与 `confirm` 均需 `APPROVER`/`ADMIN`/`OWNER`（`DESIGN_BASIS §5.1` 第 2 条；`OPERATOR` 仅能起草 `DRAFT`）。生成采购单时校验 `sku.team_id == po.team_id`、`supplier.team_id == po.team_id`（`§6` 规则 4）。建议 `APPROVED → CONVERTED`，写 `converted_po_item_ids`。`PENDING→ORDERED` 由 `POST .../{id}/order` 触发，写入 `ordered_at`，此时该 PO 的 `ordered_qty − received_qty` 进入 `effective_in_transit_qty` 口径（`DESIGN_BASIS §10.4`）。写审计 `PURCHASE_ORDER_CREATE`/`PURCHASE_ORDER_CONFIRM`/`PURCHASE_ORDER_ORDERED`/`REPLENISHMENT_CONVERT`（`PURCHASE_ORDER_ORDERED` 对应 `§9.17` #32）。
+**业务行为与权限**：`from-replenishment` 与 `confirm` 均需 `APPROVER`/`ADMIN`/`OWNER`（`DESIGN_BASIS §5.1` 第 2 条；`OPERATOR` 仅能起草 `DRAFT`）。生成采购单时校验 `sku.team_id == po.team_id`、`supplier.team_id == po.team_id`（`§6` 规则 4）。建议 `APPROVED → CONVERTED`，写 `converted_po_item_ids`。`PENDING→ORDERED` 由 `POST .../{id}/order` 触发，写入 `ordered_at`，此时该 PO 的 `ordered_qty − received_qty` 进入 `effective_in_transit_qty` 口径（`DESIGN_BASIS §10.4`）。写审计 `PURCHASE_ORDER_CREATE`/`PURCHASE_ORDER_CONFIRM`/`PURCHASE_ORDER_ORDERED`/`REPLENISHMENT_CONVERT`。
 
 ---
 
