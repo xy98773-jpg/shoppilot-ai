@@ -7,7 +7,7 @@ import type { PageQuery, PageResult } from '@/types/common'
  * @param fetcher 接收分页查询参数、返回分页结果的异步函数。
  */
 export function usePagination<T>(fetcher: (query: PageQuery) => Promise<PageResult<T>>) {
-  const query = reactive<PageQuery>({ page: 1, size: 20 })
+  const query = reactive<PageQuery>({ page: 1, pageSize: 20 })
   const list = ref<T[]>([])
   const total = ref(0)
   const loading = ref(false)
@@ -16,7 +16,7 @@ export function usePagination<T>(fetcher: (query: PageQuery) => Promise<PageResu
     loading.value = true
     try {
       const res = await fetcher({ ...query })
-      list.value = res.records
+      list.value = res.list
       total.value = res.total
     } finally {
       loading.value = false
@@ -28,8 +28,8 @@ export function usePagination<T>(fetcher: (query: PageQuery) => Promise<PageResu
     void load()
   }
 
-  function changeSize(size: number): void {
-    query.size = size
+  function changeSize(pageSize: number): void {
+    query.pageSize = pageSize
     query.page = 1
     void load()
   }

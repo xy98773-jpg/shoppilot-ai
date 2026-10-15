@@ -3,9 +3,11 @@ package com.shoppilot.common.error;
 /**
  * 错误码常量类（基础设施）。
  *
- * <p><b>只镜像 DESIGN_BASIS §12.3 的字符串常量，绝不在此重新定义数值/语义。</b>
- * 每个常量的值即为 §12.3 的权威错误码；逐码含义、HTTP 状态码、触发条件见 {@code ERROR_CODES.md §2}
- * （冲突时以该表为准）。本类不持有任何解释性文字。
+ * <p><b>只镜像权威错误码表，绝不在此重新定义数值/语义。</b>
+ * 常量取值来源：{@code DESIGN_BASIS §12.3}（首批固化清单，仅定义成员资格）
+ * 与 {@code ERROR_CODES.md §2}（逐码权威定义：HTTP 状态码、含义、触发条件）。
+ * 二者冲突时以 {@code ERROR_CODES.md §2} 为准（§12.3 原文：「冲突时以该表为准」）。
+ * 本类不持有任何解释性文字。
  *
  * <p>AI 域错误码（AI-xxxx）属 Java↔Python 内部通信，定义见 ERROR_CODES.md §2.11，不在本类重复。
  */
@@ -15,8 +17,13 @@ public final class ErrorCodes {
     }
 
     // COM —— 通用 / 参数校验 / 系统（§12.2: 0001–0999）
+    /** 参数校验失败（400）—— Bean Validation 失败；对应响应体 details[] 逐字段说明。 */
     public static final String COM_0001 = "COM-0001";
+    /** 系统内部错误（500）—— 未捕获异常、代码缺陷（ERROR_CODES §2 明确禁止用其兜底「可归类」异常）。 */
     public static final String COM_0002 = "COM-0002";
+    /** 资源不存在（404）—— 按 team_id 过滤后查不到，不区分「不存在」与「属他人团队」（防枚举）。 */
+    public static final String COM_0003 = "COM-0003";
+    /** 幂等键冲突（409）—— 同 Idempotency-Key 重复请求但请求体不一致；**不得用于兜底其他异常**。 */
     public static final String COM_0009 = "COM-0009";
 
     // AUTH —— 认证与登录（1001–1099）
