@@ -642,9 +642,9 @@ stateDiagram-v2
 | `D-04` | 是否改用 `Z × σ × sqrt(L)` 标准安全库存 | 影响 `SS`，但不改流程 |
 | `D-06` | 采购单 `DRAFT → PENDING` 的确认角色 | 影响 §6.6 转采购后的下一步（见 `PURCHASING_WORKFLOW.md`） |
 | `D-09` | **四眼原则**（提交人与审批人不得同一人） | §6.6 场景 5 首期宽松实现 |
-| `D-10` | `uk_ai_run_sku_wh` / `uk_repl_run_sku_wh` 是否豁免 `team_id` 前缀 | 影响唯一约束定义，不改流程 |
+| `D-10`（数据库命名空间，**非** `TECH_STACK` 的 `D-10` Spring Boot 版本） | `uk_ai_run_sku_wh` / `uk_repl_run_sku_wh` 是否豁免 `team_id` 前缀 | 影响唯一约束定义，不改流程 | ✅ **已裁定**（`DESIGN_BASIS §6` 规则 2：派生业务键豁免 `team_id` 前缀；编号保留 `D-10`，无新权威号） |
 | `D-14`（⚠️ **旧编号**，指"数据库文档侧的枚举/常量补充"；权威 `D-14` = 同团队并发分析运行数上限） | `LeadTimeSource` 等枚举与审计常量在 `§9` 未定义 | ✅ 已裁定：全部补入 `DESIGN_BASIS §9.17`（含审计常量 35 条），§8 审计常量来源已明；`lead_time_source` 取值见 `§9.17`（编号迁移待 `M1-T01` 统一） |
-| `D-15` | 只增表保留期与归档策略 | 首期全部保留；影响长期存储 |
+| `D-24`（原 `D-15`，单跳重映射至权威编号） | 只增表保留期与归档策略 | 首期全部保留；影响长期存储 | ✅ **已裁定**（权威编号 `D-24`，见 `DESIGN_REVIEW.md §3.3-A`） |
 
 ### 9.2 发现的不一致（本文档**不改 SSOT**，仅标注）
 
@@ -652,7 +652,7 @@ stateDiagram-v2
 | --- | --- | --- | --- |
 | ~~INC-A~~ | **已解决**（M0 审查裁定）：`SUGGESTED → REJECTED` **不允许**，驳回必须经 `PENDING_REVIEW` | 曾与 `DESIGN_BASIS §9.11` 存在张力 | **裁定**：SSOT §9.11 已修正为 `SUGGESTED → {PENDING_REVIEW, SUPERSEDED, CANCELLED}`；同时 §5 规则 6 明确驳回权归 `APPROVER`。前端不暴露「直接驳回」按钮。状态机图已同步（见 §6.3 的注释） |
 | INC-B | ✅ **已闭环**（F-28）：`§9.17` 已含 `REPLENISHMENT_WITHDRAW` / `REPLENISHMENT_CANCEL` 审计常量，与 `§9.12` `WITHDRAW`/`CANCEL` 对应 | `DESIGN_BASIS §9.12` vs `§9.17` | 已固化于 `§9.17` #30 / #31，语义见 `DATABASE_DESIGN.md §6-J.1`，见 §8 |
-| INC-C | **`D-09` 编号被两处复用**：`DATABASE_DESIGN.md` 用 `D-09` 表示"导入幂等槽位"，`USER_ROLES.md` 用 `D-09` 表示"四眼原则" | `DATABASE_DESIGN.md §11` vs `USER_ROLES.md §7.2` | 编号冲突，需统一（本文档按"四眼原则"理解） |
+| INC-C | **`D-09` 编号被两处复用**：`DATABASE_DESIGN.md` 用 `D-09` 表示"导入幂等槽位"，`USER_ROLES.md` 用 `D-09` 表示"四眼原则" | `DATABASE_DESIGN.md §11` vs `USER_ROLES.md §7.2` | 编号冲突，需统一（本文档按"四眼原则"理解）；✅ **已闭环**（`DESIGN_REVIEW.md §3.3-D` 已分派：`USER_ROLES` 的 `D-09`=四眼原则为权威，`DATABASE_DESIGN` 的 `D-09`=导入幂等槽位为独立编号，跨域不同义） |
 | INC-D | ✅ **已闭环**：`analysis_items.lead_time_source` 取值 `POLICY`/`SKU`/`SUPPLIER`/`DEFAULT` 已由 `LeadTimeSource`（`DESIGN_BASIS §9.17`）定义 | `DESIGN_BASIS §10.2` vs `§9.17` | 已固化于 `§9.17`（旧编号 `D-14` 作废） |
 | INC-E | ✅ **已闭环**：`§5.3` 的 `data_quality` 分级（`GOOD`/`FAIR`/`POOR`/`INSUFFICIENT`）已由 `DataQualityGrade`（`DESIGN_BASIS §9.17`）定义 | `ANALYSIS_CONTRACT.md` vs `DESIGN_BASIS §9.17` | 已固化于 `§9.17`（旧编号 `D-14` 作废） |
 
@@ -660,11 +660,11 @@ stateDiagram-v2
 
 | 建议编号 | 议题 | 可选方案 | 影响 |
 | --- | --- | --- | --- |
-| **建议新增 `D-33`** | 「重试 LLM 解释」后，`analysis_runs.status` 是否从 `DEGRADED` 回退/新增态？ | ① 不改 `status`，仅更新解释字段（本文档默认）；② 新增 `llm_status` 与解释重试计数列；③ 允许 `DEGRADED → SUCCEEDED`（**违反 §9.7"终态不可再变"**，不推荐） | 影响状态机一致性与前端展示 |
+| **建议新增 `D-33`**（✅ **已并入权威 `D-22`**） | 「重试 LLM 解释」后，`analysis_runs.status` 是否从 `DEGRADED` 回退/新增态？ | ① 不改 `status`，仅更新解释字段（本文档默认）；② 新增 `llm_status` 与解释重试计数列；③ 允许 `DEGRADED → SUCCEEDED`（**违反 §9.7"终态不可再变"**，不推荐） | 影响状态机一致性与前端展示 |
 | ~~建议新增 `D-34`~~ | `SUGGESTED` 是否允许直接 `REJECT` | **已在 M0 审查中裁定，不作为待决策**：禁止，只能 `SUGGESTED → PENDING_REVIEW → REJECTED`（避免绕过审批） | 已落实于 `DESIGN_BASIS §5 规则 6`、`§9.11 补充规则` |
-| **建议新增 `D-35`** | 分析超时后是否支持"续跑/恢复"而非仅"重新发起"？ | ① 首期不支持，只能发新 run（本文档默认）；② 支持从断点续跑（复杂度高） | 影响 `analysis_runs` 结构与 Python 侧设计 |
-| **建议新增 `D-36`** | 撤回（`WITHDRAW`）是否应限制为"仅提交人"？ | ① 仅提交人（本文档默认）；② 提交人或 `ADMIN`+ 均可 | 影响权限矩阵 |
-| **建议新增 `D-37`** | `MAX_ANALYSIS_SKUS = 2000` 超限时的行为？ | ① 拒绝并提示缩小范围（推荐）；② 截断到 2000 并提示；③ 分片并行 | 影响 `§1.3` 与前端交互 |
+| **建议新增 `D-35`**（✅ **已并入权威 `D-21`**） | 分析超时后是否支持"续跑/恢复"而非仅"重新发起"？ | ① 首期不支持，只能发新 run（本文档默认）；② 支持从断点续跑（复杂度高） | 影响 `analysis_runs` 结构与 Python 侧设计 |
+| **建议新增 `D-36`**（✅ **已定**：仅提交人） | 撤回（`WITHDRAW`）是否应限制为"仅提交人"？ | ① 仅提交人（本文档默认）；② 提交人或 `ADMIN`+ 均可 | 影响权限矩阵 |
+| **建议新增 `D-37`**（✅ **已并入权威 `D-15`**） | `MAX_ANALYSIS_SKUS = 2000` 超限时的行为？ | ① 拒绝并提示缩小范围（推荐）；② 截断到 2000 并提示；③ 分片并行 | 影响 `§1.3` 与前端交互 |
 
 ---
 

@@ -209,7 +209,7 @@ stateDiagram-v2
 | 7 | 编辑到货草稿 | Java | 明细 | 到货单更新 | 不变 | 单事务 + 乐观锁 | `version` | 非 `DRAFT` → `PO-9008` | `PATCH /receipts/{id}` |
 | 8 | **确认到货入库** | Java | — | 库存流水 + 余额更新 + 采购汇总 | 到货单 `DRAFT → CONFIRMED`；采购单 `→ PARTIALLY_RECEIVED`/`RECEIVED` | **单事务（§9.1）** | `uk_gr_team_idem` + 状态守卫 | 超额 → `PO-9002`；余额冲突 → `INV-5002` | `POST /receipts/{id}/confirm` |
 | 9 | 作废到货草稿 | Java | — | `cancelled_at` | `DRAFT → CANCELLED` | 单事务 | 状态守卫 | 非 `DRAFT` → `PO-9008` | `POST /receipts/{id}/cancel` |
-| 10 | 冲销已确认到货 | Java（`inventory` 写） | 到货单 | `REVERSAL` 流水 + 余额回退 + 采购汇总重算 + 到货单置 `REVERSED` | 到货单 `CONFIRMED → REVERSED`；采购单状态回退/保持 | **单事务** | 原流水唯一性（`uk_invtxn_team_reversed`，`D-13`） | 重复冲销 → `INV-5009`；导致负库存 → `INV-5006` | `POST /receipts/{id}/reverse` |
+| 10 | 冲销已确认到货 | Java（`inventory` 写） | 到货单 | `REVERSAL` 流水 + 余额回退 + 采购汇总重算 + 到货单置 `REVERSED` | 到货单 `CONFIRMED → REVERSED`；采购单状态回退/保持 | **单事务** | 原流水唯一性（`uk_invtxn_team_reversed`，`D-13` ✅ **已裁定**：`DATABASE_DESIGN.md §8` 已定义该唯一约束） | 重复冲销 → `INV-5009`；导致负库存 → `INV-5006` | `POST /receipts/{id}/reverse` |
 | 11 | 取消采购单 | Java | 取消原因 | `cancelled_at/reason` | `→ CANCELLED` | 单事务 | 状态守卫 | 已 `RECEIVED` → `PO-9009`；状态非法 → `PO-9003` | `POST /orders/{id}/cancel` |
 | 12 | 审计 | Java | — | 审计记录 | — | 同业务事务/独立事务 | — | — | — |
 
@@ -394,7 +394,7 @@ MIN(received_qty / ordered_qty) = 1  →  RECEIVED
 | ⑦ 审计 | 两条：`GOODS_RECEIPT_REVERSE`（业务侧，`biz_type=GOODS_RECEIPT`）+ `INVENTORY_REVERSE`（库存侧，`biz_type=INVENTORY_TRANSACTION`，由 `inventory` 模块写入） |
 
 **约束**：
-- **一笔流水只能冲销一次**：由 `uk_invtxn_team_reversed (team_id, reversed_txn_id)` 保证（⚠️ 该索引不在 `§8`，登记 `D-13`）；重复 → `INV-5009`；
+- **一笔流水只能冲销一次**：由 `uk_invtxn_team_reversed (team_id, reversed_txn_id)` 保证（⚠️ 该索引原不在 `§8`，登记 `D-13`；✅ **已裁定**：`DATABASE_DESIGN.md §8` 已补 `uk_invtxn_team_reversed` 唯一约束）；重复 → `INV-5009`；
 - 冲销导致负库存 → 拒绝（`INV-5006`）；
 - 冲销**不修改** `goods_receipt_items`（`CONFIRMED` 后不可变），修正靠新增反向证据链；
 - 冲销后采购单状态：若回退到部分收货前则 `→ PARTIALLY_RECEIVED`；若全部冲销则 `→ ORDERED`（**建议在 `§9.13` 明确"状态回退"是否合法，见 §10.3 `建议新增 D-39`**）。
@@ -499,7 +499,7 @@ COMMIT;
 | 6 | 登记到货单 | `goods_receipts` + `goods_receipt_items` + `audit_logs` | 唯一约束 | 回滚 | `uk_gr_team_idem` |
 | 7 | **确认到货入库** | `goods_receipts` + `goods_receipt_items` + `inventory_transactions` + `inventory_balances` + `purchase_order_items` + `purchase_orders` + `audit_logs` | 状态守卫 + 悲观锁（`poi`）+ 乐观锁（余额、`po`） | **整体回滚** | `uk_gr_team_idem` + 状态守卫 + `uk_invtxn_team_idem` |
 | 8 | 作废到货草稿 | `goods_receipts` + `audit_logs` | 状态守卫 | 无副作用 | 状态守卫 |
-| 9 | 冲销已确认到货 | `inventory_transactions` + `inventory_balances` + `purchase_order_items` + `purchase_orders` + `goods_receipts`（标记）+ `audit_logs` | 乐观锁 + 原流水唯一性 | 整体回滚 | `uk_invtxn_team_reversed`（`D-13`） |
+| 9 | 冲销已确认到货 | `inventory_transactions` + `inventory_balances` + `purchase_order_items` + `purchase_orders` + `goods_receipts`（标记）+ `audit_logs` | 乐观锁 + 原流水唯一性 | 整体回滚 | `uk_invtxn_team_reversed`（`D-13` ✅ **已裁定**：§8 已定义） |
 | 10 | 取消采购单 | `purchase_orders`（+ 在途回退）+ `audit_logs` | 状态守卫 | 无副作用 | 状态守卫 |
 
 **关键取舍**：
@@ -540,9 +540,9 @@ COMMIT;
 | --- | --- | --- |
 | `D-06` | `DRAFT → PENDING` 确认角色 / 是否"确认即审批" | §8.4 的实现前提 |
 | `D-09` | 四眼原则 | 影响由建议转采购时"审批人 ≠ 创建人"是否校验 |
-| `D-13` | `uk_invtxn_team_reversed` 唯一约束是否新增 | §8.7 冲销幂等强度 |
+| `D-13` ✅ **已裁定** | `uk_invtxn_team_reversed` 唯一约束是否新增 | §8.7 冲销幂等强度；✅ **已裁定**：`DATABASE_DESIGN.md §8` 已新增该唯一约束（编号保留 `D-13`，无新权威号；与 `DESIGN_BASIS §15` 的 `D-13` JWT 单团队绑定为巧合同号、跨域不同义） |
 | ~~`D-14`~~（旧编号，已作废） | ✅ 已裁定：`InventoryBizType`（含 `GOODS_RECEIPT`）等已统一补入 `DESIGN_BASIS §9.17`（裁定见 `§15.2`） | §8.5 流水 `biz_type` 取值来源已明 |
-| `D-15` | 只增表保留期/归档 | 长期存储 |
+| `D-24`（原 `D-15`，单跳重映射至权威编号） | 只增表保留期/归档 | ✅ **已裁定**（权威编号 `D-24`，见 `DESIGN_REVIEW.md §3.3-A`） | 长期存储 |
 
 ### 12.2 发现的不一致（**不改 SSOT**，仅标注）
 
@@ -560,10 +560,10 @@ COMMIT;
 | 建议编号 | 议题 | 可选方案 | 影响 |
 | --- | --- | --- | --- |
 | **建议新增 `D-38`**（✅ **已裁定**） | 已冲销到货单的状态与标记方式 | ③ 新增 `REVERSED` 枚举值（`DESIGN_BASIS §9.14` 已定义；`DESIGN_REVIEW.md`：已裁定）；① 复用 `CANCELLED` **否决**（`CONFIRMED` 后不可直接作废）；② 仅作为 ③ 的**补充标记**（是否新增 `reversed_at`/`reversed_by` 见 `DATABASE_DESIGN.md §5.20`） | 影响到货单查询与审计 |
-| **建议新增 `D-39`** | 冲销后采购单状态是否允许"回退" | ① 允许按派生重算（`RECEIVED → PARTIALLY_RECEIVED → ORDERED`，**与 `§9.13`"终态不可变"张力大**）；② 维护独立 `reversed` 汇总，**状态保持终态不变**（推荐，与 `§9.13` 兼容） | 影响两个状态机的兼容性 |
+| **建议新增 `D-39`**（✅ **已裁定**：允许按派生重算回退、状态保持终态不变，与 `§9.13` 兼容） | 冲销后采购单状态是否允许"回退" | ① 允许按派生重算（`RECEIVED → PARTIALLY_RECEIVED → ORDERED`，**与 `§9.13`"终态不可变"张力大**）；② 维护独立 `reversed` 汇总，**状态保持终态不变**（推荐，与 `§9.13` 兼容） | 影响两个状态机的兼容性 |
 | **建议新增 `D-40`**（✅ **已裁定：① 新增**；✅ **已固化**） | 是否新增审计常量 `PURCHASE_ORDER_ORDERED` / `GOODS_RECEIPT_REVERSE` | ① 新增（推荐，审计完整）；② 复用 `PURCHASE_ORDER_CONFIRM` / `INVENTORY_REVERSE`（会丢失语义） | 影响审计可读性。已落地：`DESIGN_BASIS §9.17` #32 / #33 |
-| **建议新增 `D-41`** | 手工创建采购单是否也需要 `APPROVER` 确认？ | ① 需要（与建议转采购一致，**推荐**）；② 手工单可由 `OPERATOR` 直接 `PENDING` | 影响权限矩阵与审批隔离 |
-| **建议新增 `D-42`** | `PARTIALLY_RECEIVED` 采购单取消时，未收部分是否需在途回退审计？ | ① 是（推荐）；② 否 | 影响审计完整性 |
+| **建议新增 `D-41`**（✅ **已并入权威 `D-18`**） | 手工创建采购单是否也需要 `APPROVER` 确认？ | ① 需要（与建议转采购一致，**推荐**）；② 手工单可由 `OPERATOR` 直接 `PENDING` | 影响权限矩阵与审批隔离 |
+| **建议新增 `D-42`**（✅ **已定**：未收部分需在途回退审计） | `PARTIALLY_RECEIVED` 采购单取消时，未收部分是否需在途回退审计？ | ① 是（推荐）；② 否 | 影响审计完整性 |
 
 ---
 
