@@ -26,15 +26,24 @@ import org.springframework.security.web.SecurityFilterChain;
 public class SecurityConfig {
 
     /**
-     * 免认证路径白名单（骨架口径）。
+     * 免认证路径白名单。
      *
-     * <p>注：{@code API_CONTRACT.md §5.1} 还规定 {@code GET /api/v1/health} 与
-     * {@code POST /api/v1/auth/login|refresh} 为公开接口；这些端点尚未创建（M1-T06 / M2-T02），
-     * 待其落地时再行放行，本期不预先放行不存在的路径。
+     * <p>权威口径：{@code API_CONTRACT.md §5.1} 规定仅 {@code POST /api/v1/auth/login}、
+     * {@code POST /api/v1/auth/refresh}、{@code GET /api/v1/health} 三个对外接口免认证，
+     * 其余一律要求 {@code Authorization}。
+     *
+     * <p><b>★ follow-up（防联调遗漏，勿删）</b>：按“端点先落地、再放行”的顺序推进，
+     * 每落地一个免认证端点**必须**同步加入本数组，否则会被 {@code anyRequest().authenticated()} 拦成 401：
+     * <ul>
+     *   <li>✅ {@code GET /api/v1/health} —— 已于 M1-T06 落地并放行。</li>
+     *   <li>⬜ {@code POST /api/v1/auth/login}、{@code POST /api/v1/auth/refresh}
+     *       —— 属 M2-T02（{@code identity} 的 {@code AuthController}），落地时必须加入本数组。</li>
+     * </ul>
      */
     public static final String[] PERMIT_ALL_PATHS = {
-            "/actuator/**",        // M1-T06：Actuator 健康与指标端点
-            "/internal/v1/health", // 健康探针路径（与 service-ai 健康端点同名，便于统一探活）
+            "/actuator/**",        // M1-T06：Actuator 健康与指标端点（暴露面由 management.endpoints 收敛为 health,info）
+            "/api/v1/health",      // M1-T06：存活探针（API_CONTRACT.md §10.11 system，§5.1 免认证）
+            "/internal/v1/health", // 预留的探活路径（真正的 /internal/v1/health 属 service-ai，见 M1-T07）
             "/error"               // Servlet 容器错误转发路径
     };
 

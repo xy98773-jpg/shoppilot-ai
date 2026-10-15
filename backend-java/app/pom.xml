@@ -33,6 +33,13 @@
             <artifactId>spring-boot-starter</artifactId>
         </dependency>
 
+        <!-- M1-T06：Actuator 健康检查（/actuator/health；暴露面由 application.yml 收敛为 health,info）。
+             置于 app（运行时/运维能力），与 flyway / mysql-connector 同类；业务模块不感知。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
         <!-- M1-T05：数据库迁移与驱动。
              注：Spring Boot 3.x 无 spring-boot-starter-flyway（该 starter 自 Boot 4.0 起才有），
              正确做法是引入 flyway-core + flyway-mysql（MySQL 支持自 Flyway 9 起拆分为独立模块），
@@ -72,6 +79,14 @@
                     <execution>
                         <goals>
                             <goal>repackage</goal>
+                        </goals>
+                    </execution>
+                    <!-- M1-T06：生成 META-INF/build-info.properties，供 GET /api/v1/health 读取服务名与版本
+                         （BuildProperties 由 ProjectInfoAutoConfiguration 在存在该资源时装配）。 -->
+                    <execution>
+                        <id>build-info</id>
+                        <goals>
+                            <goal>build-info</goal>
                         </goals>
                     </execution>
                 </executions>

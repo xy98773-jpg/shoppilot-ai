@@ -25,3 +25,16 @@ spring:
 
 server:
   port: 8080
+
+# M1-T06：Actuator 健康检查（TECH_STACK.md：Micrometer + Actuator，NFR-OBS）。
+# 暴露面最小化：仅 health 与 info；env / beans / configprops / loggers / threaddump /
+# heapdump / shutdown 等敏感端点一律不暴露（暴露列表即白名单，未列出者不可达）。
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      # 不向调用方泄露健康组件细节（数据源地址、磁盘路径等）
+      show-details: never
