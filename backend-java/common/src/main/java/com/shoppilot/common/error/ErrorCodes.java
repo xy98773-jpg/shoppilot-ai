@@ -27,10 +27,28 @@ public final class ErrorCodes {
     public static final String COM_0009 = "COM-0009";
 
     // AUTH —— 认证与登录（1001–1099）
+    /** 未登录或 Token 失效（401）—— 缺失/格式错误的 Authorization。 */
     public static final String AUTH_1001 = "AUTH-1001";
+    /** 用户名或密码错误（401）—— **不区分**用户是否存在（防枚举，见 API_CONTRACT §11.1）。 */
     public static final String AUTH_1002 = "AUTH-1002";
+    /** 账号已禁用（403）—— users.status = DISABLED；授权链第 2 步实时校验。 */
     public static final String AUTH_1003 = "AUTH-1003";
+    /** 用户不存在（404）—— 目标 userId 不存在。 */
     public static final String AUTH_1004 = "AUTH-1004";
+    /** Access Token 已过期（401）—— exp 已过，需用 Refresh Token 换取。 */
+    public static final String AUTH_1005 = "AUTH-1005";
+    /** Refresh Token 无效或已过期（401）—— 校验失败、已轮换失效、已撤销或不存在。 */
+    public static final String AUTH_1006 = "AUTH-1006";
+    /** 用户名已存在（409）—— 创建用户时 username 冲突。 */
+    public static final String AUTH_1007 = "AUTH-1007";
+    /** 邮箱已被占用（409）—— email 冲突（uk_users_email）。 */
+    public static final String AUTH_1008 = "AUTH-1008";
+    /** 原密码不正确（400）—— 修改密码时旧密码校验失败。 */
+    public static final String AUTH_1009 = "AUTH-1009";
+    /** 无权修改该用户状态（403）—— 试图禁用自己或超出角色的用户。 */
+    public static final String AUTH_1010 = "AUTH-1010";
+    /** 凭证格式非法（401）—— Authorization 非 {@code Bearer <token>}。 */
+    public static final String AUTH_1011 = "AUTH-1011";
 
     // TEAM —— 团队与权限隔离（2001–2099）
     public static final String TEAM_2001 = "TEAM-2001";

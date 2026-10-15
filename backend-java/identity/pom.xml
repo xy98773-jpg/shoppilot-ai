@@ -41,5 +41,13 @@
             <version>${jjwt.version}</version>
             <scope>runtime</scope>
         </dependency>
+
+        <!-- M2-T02：实体/DTO 样板代码（与 common 同口径，provided 不传递，故本模块需自行声明）。
+             注意：provided 作用域在【编译期 classpath】上，注解处理（@Data 生成 getter/setter）正常工作。 -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 </project>

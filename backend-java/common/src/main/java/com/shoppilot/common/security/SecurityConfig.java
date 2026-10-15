@@ -1,5 +1,6 @@
 package com.shoppilot.common.security;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.Customizer;
@@ -7,6 +8,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 /**
  * Spring Security 过滤器链骨架（Spring Security 6.5.x，Lambda DSL）。
@@ -36,21 +38,37 @@ public class SecurityConfig {
      * 每落地一个免认证端点**必须**同步加入本数组，否则会被 {@code anyRequest().authenticated()} 拦成 401：
      * <ul>
      *   <li>✅ {@code GET /api/v1/health} —— 已于 M1-T06 落地并放行。</li>
-     *   <li>⬜ {@code POST /api/v1/auth/login}、{@code POST /api/v1/auth/refresh}
-     *       —— 属 M2-T02（{@code identity} 的 {@code AuthController}），落地时必须加入本数组。</li>
+     *   <li>✅ {@code POST /api/v1/auth/login}、{@code POST /api/v1/auth/refresh}
+     *       —— 已于 M2-T02 落地并放行（R12 闭环）。</li>
      * </ul>
+     *
+     * <p>注意：{@code /api/v1/auth/logout} 与 {@code /api/v1/auth/me} <b>不在</b>白名单中——
+     * 它们要求已认证（{@code API_CONTRACT.md §5.1}、§10.1）。
      */
     public static final String[] PERMIT_ALL_PATHS = {
-            "/actuator/**",        // M1-T06：Actuator 健康与指标端点（暴露面由 management.endpoints 收敛为 health,info）
-            "/api/v1/health",      // M1-T06：存活探针（API_CONTRACT.md §10.11 system，§5.1 免认证）
-            "/internal/v1/health", // 预留的探活路径（真正的 /internal/v1/health 属 service-ai，见 M1-T07）
-            "/error"               // Servlet 容器错误转发路径
+            "/actuator/**",                 // M1-T06：Actuator 健康与指标端点（暴露面由 management.endpoints 收敛为 health,info）
+            "/api/v1/health",               // M1-T06：存活探针（API_CONTRACT.md §10.11 system，§5.1 免认证）
+            "/api/v1/auth/login",           // M2-T02：登录（API_CONTRACT.md §10.1、§5.1 免认证）—— R12
+            "/api/v1/auth/refresh",         // M2-T02：刷新令牌（同上）—— R12
+            "/internal/v1/health",          // 预留的探活路径（真正的 /internal/v1/health 属 service-ai，见 M1-T07）
+            "/error"                        // Servlet 容器错误转发路径
     };
 
     private final JsonAuthenticationEntryPoint authenticationEntryPoint;
 
-    public SecurityConfig(JsonAuthenticationEntryPoint authenticationEntryPoint) {
+    /**
+     * 由其他模块（identity）贡献的认证过滤器。
+     *
+     * <p>用 {@link org.springframework.beans.factory.ObjectProvider} 而非 {@code List}：
+     * 该 Bean 可能不存在（如无身份的纯框架测试），此时静默为空即可。
+     * 详见 {@link SecurityFilterContributor}。
+     */
+    private final ObjectProvider<SecurityFilterContributor> filterContributors;
+
+    public SecurityConfig(JsonAuthenticationEntryPoint authenticationEntryPoint,
+                          ObjectProvider<SecurityFilterContributor> filterContributors) {
         this.authenticationEntryPoint = authenticationEntryPoint;
+        this.filterContributors = filterContributors;
     }
 
     @Bean
@@ -70,6 +88,13 @@ public class SecurityConfig {
                         .anyRequest().authenticated())
                 // 未认证统一走 JSON 出口（AUTH-1001）
                 .exceptionHandling(ex -> ex.authenticationEntryPoint(authenticationEntryPoint));
+
+        // 由业务模块（identity）贡献的认证过滤器：插入到 UsernamePasswordAuthenticationFilter 之前，
+        // 使其在授权判定之前完成「认证 + 用户/成员状态实时校验 + TeamContext 装配」。
+        // 依赖方向 identity → common，DAG 无环（见 SecurityFilterContributor）。
+        filterContributors.orderedStream().forEach(contributor ->
+                http.addFilterBefore(contributor.filter(), UsernamePasswordAuthenticationFilter.class));
+
         return http.build();
     }
 }

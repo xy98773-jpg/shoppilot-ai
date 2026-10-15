@@ -34,6 +34,17 @@ shoppilot:
   multitenancy:
     enabled: true
 
+  # M2-T02：认证配置（DESIGN_BASIS §15 D-01）。
+  # ★ 密钥红线：secret 只从环境变量 JWT_SECRET 注入，绝不入仓（ADR-001-12 风险表）。
+  #   未注入时为空串，JwtProperties#validate 会在【启动时即刻失败】，避免弱密钥静默运行。
+  # TTL 默认值即 D-01 裁定值：Access 2h = 7200s、Refresh 7d = 604800s。
+  jwt:
+    secret: ${JWT_SECRET:}
+    access-ttl-seconds: ${JWT_ACCESS_TTL:7200}
+    refresh-ttl-seconds: ${JWT_REFRESH_TTL:604800}
+    issuer: shoppilot-ai
+    audience: frontend-web
+
 # M1-T06：Actuator 健康检查（TECH_STACK.md：Micrometer + Actuator，NFR-OBS）。
 # 暴露面最小化：仅 health 与 info；env / beans / configprops / loggers / threaddump /
 # heapdump / shutdown 等敏感端点一律不暴露（暴露列表即白名单，未列出者不可达）。
