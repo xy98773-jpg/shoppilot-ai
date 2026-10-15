@@ -15,12 +15,9 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
-    # ⚠ 口径待裁定：本值按 M1-T05 指令写 true；但 DATABASE_DESIGN.md §9.5（:1694/:1699）明确
-    #   「全新环境（开发/CI）默认 baseline-on-migrate = false，从 V1 顺序执行到底」。
-    #   两者在【空库】上行为完全一致（空 schema 不会触发 baseline），差异仅在"指向非空库"时：
-    #   true 会静默基线化并跳过 V1..Vn（结构漂移风险），false 则直接报错更安全。
-    #   已登记为待审查方裁定项（见 M1-T05 交付说明；改 false 为一行改动）。
-    baseline-on-migrate: true
+    # 按 DATABASE_DESIGN.md §9.5「全新环境（开发/CI）默认 baseline-on-migrate = false，
+    # 从 V1 顺序执行到底」：指向非空库时直接报错，避免静默基线化并跳过 V1..Vn（结构漂移）。
+    baseline-on-migrate: false
     # 校验和不符即启动失败（DATABASE_DESIGN.md §9.5：宁可起不来，不允许结构漂移）
     validate-on-migrate: true
     # 禁止 clean（同 §9.5 生产约束，开发环境亦收紧）
