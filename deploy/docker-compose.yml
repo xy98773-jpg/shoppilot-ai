@@ -89,6 +89,11 @@ services:
       JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx512m}
       AI_INTERNAL_TOKEN: ${AI_INTERNAL_TOKEN:-changeme_internal_token}
       AI_BASE_URL: http://service-ai:8000
+      # M2-T02：JWT 签名密钥（DESIGN_BASIS §15 D-01 / ADR-001-12 风险表：密钥绝不入业务代码）。
+      # 集成交付必须通过环境变量注入真实密钥（此默认值仅为占位，禁止用于生产）。
+      JWT_SECRET: ${JWT_SECRET:-CHANGE_ME_jwt_secret_min_32_chars}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-7200}
+      JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-604800}
     depends_on:
       mysql:
         condition: service_healthy
