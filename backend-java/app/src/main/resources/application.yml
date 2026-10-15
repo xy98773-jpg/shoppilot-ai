@@ -2,5 +2,29 @@ spring:
   application:
     name: shoppilot-ai
 
+  # M1-T05：数据源。凭据只从环境变量读取（CODING_STANDARDS.md：密钥不入仓），
+  # 默认值仅为本地开发的占位口径，便于 M1-T09 Compose 用同一组变量注入。
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/shoppilot?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=utf8&useUnicode=true&serverTimezone=UTC&connectionTimeZone=UTC}
+    username: ${SPRING_DATASOURCE_USERNAME:root}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  # M1-T05：Flyway 基线。本期只让 Flyway 建出 flyway_schema_history 并跑通迁移链，
+  # 迁移目录内不含任何业务表 DDL（业务迁移自 M2-T01 起）。
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # ⚠ 口径待裁定：本值按 M1-T05 指令写 true；但 DATABASE_DESIGN.md §9.5（:1694/:1699）明确
+    #   「全新环境（开发/CI）默认 baseline-on-migrate = false，从 V1 顺序执行到底」。
+    #   两者在【空库】上行为完全一致（空 schema 不会触发 baseline），差异仅在"指向非空库"时：
+    #   true 会静默基线化并跳过 V1..Vn（结构漂移风险），false 则直接报错更安全。
+    #   已登记为待审查方裁定项（见 M1-T05 交付说明；改 false 为一行改动）。
+    baseline-on-migrate: true
+    # 校验和不符即启动失败（DATABASE_DESIGN.md §9.5：宁可起不来，不允许结构漂移）
+    validate-on-migrate: true
+    # 禁止 clean（同 §9.5 生产约束，开发环境亦收紧）
+    clean-disabled: true
+
 server:
   port: 8080
