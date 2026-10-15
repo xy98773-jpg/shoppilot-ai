@@ -9,6 +9,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -123,10 +124,12 @@ class TeamScopeValidatorTest {
     }
 
     @Test
-    @DisplayName("表清单：users/teams 为 §6 规则 1 例外表，team_members 等含 team_id")
+    @DisplayName("表清单：users/teams/refresh_tokens 为 §6 规则 1 例外表，team_members 等含 team_id")
     void tenantTableCatalog() {
         assertTrue(!TenantTables.hasTeamIdColumn("users"));
         assertTrue(!TenantTables.hasTeamIdColumn("teams"));
+        // R15 闭环：refresh_tokens 按 user_id 组织、无 team_id；漏登记会导致登出静默失效
+        assertFalse(TenantTables.hasTeamIdColumn("refresh_tokens"));
         assertTrue(!TenantTables.hasTeamIdColumn("`users`"));
         assertTrue(!TenantTables.hasTeamIdColumn("shoppilot.users"));
         assertTrue(!TenantTables.hasTeamIdColumn("flyway_schema_history"));

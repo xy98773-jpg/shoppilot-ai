@@ -45,10 +45,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>用真实 MySQL 8.0.36（Testcontainers）执行真实迁移与<b>真实 SQL 改写</b>，
  * 断言 {@code DESIGN_BASIS §6} 的数据库级与插件级保障：
  * <ul>
- *   <li>Flyway 应用 {@code V1.0.1__identity.sql}，三表与唯一约束/CHECK 确实生效（含负向用例）；</li>
+ *   <li>Flyway 应用 {@code V1.0.1__identity.sql} + {@code V1.0.2__refresh_tokens.sql}，
+ *       表与唯一约束/CHECK 确实生效（含负向用例）；</li>
  *   <li>对含 {@code team_id} 的表发起查询，SQL <b>被自动追加 {@code team_id = <当前团队>}</b>；</li>
  *   <li>INSERT 自动补齐 {@code team_id}；</li>
- *   <li>不含 {@code team_id} 的表（{@code users}/{@code teams}，§6 规则 1 例外）<b>不被改写</b>；</li>
+ *   <li>不含 {@code team_id} 的表（{@code users} / {@code teams} / {@code refresh_tokens}，
+ *       §6 规则 1 例外）<b>不被改写</b>；</li>
+ *   <li>{@code refresh_tokens}：{@code uk_rt_token_hash} 唯一约束负向 + {@code fk_rt_user}
+ *       级联删除负向（R15 闭环）；</li>
  *   <li>上下文缺失时<b>拒绝查询</b>（不再退化为哨兵 {@code 0}）。</li>
  * </ul>
  *
@@ -92,6 +96,7 @@ class IdentitySchemaAndTenantLineTest {
         configuration.setLogImpl(StdOutImpl.class);
         configuration.addMapper(TeamMemberMapper.class);
         configuration.addMapper(UserMapper.class);
+        configuration.addMapper(RefreshTokenMapper.class);
         factoryBean.setConfiguration(configuration);
 
         MybatisPlusInterceptor mybatisPlusInterceptor = new MybatisPlusInterceptor();
@@ -109,6 +114,7 @@ class IdentitySchemaAndTenantLineTest {
         TeamContext.clear();
         EXECUTED_SQL.clear();
         // 同一容器跨测试共享：先清表保证基数确定（删除顺序：先子表，后父表，避免外键约束）
+        execute("DELETE FROM refresh_tokens");
         execute("DELETE FROM team_members");
         execute("DELETE FROM users");
         execute("DELETE FROM teams");
@@ -133,11 +139,13 @@ class IdentitySchemaAndTenantLineTest {
         assertTrue(tables.contains("users"), "users 表应存在，实际：" + tables);
         assertTrue(tables.contains("teams"), "teams 表应存在");
         assertTrue(tables.contains("team_members"), "team_members 表应存在");
+        assertTrue(tables.contains("refresh_tokens"), "refresh_tokens 表应存在（V1.0.2）");
         assertTrue(tables.contains("flyway_schema_history"), "Flyway 历史表应存在");
 
         List<String> versions = queryStrings(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank");
-        assertEquals(List.of("1.0.0", "1.0.1"), versions, "应应用 V1.0.0 与 V1.0.1 两条迁移");
+        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2"), versions,
+                "应应用 V1.0.0 / V1.0.1 / V1.0.2 三条迁移");
 
         // CHECK 约束负向验证（MySQL 8.0.16+ 才生效，版本守卫已保证）
         try (Connection conn = dataSource.getConnection(); Statement st = conn.createStatement()) {
@@ -244,6 +252,66 @@ class IdentitySchemaAndTenantLineTest {
             assertTrue(ex.getMessage() == null || !ex.getMessage().contains("team_id = 0"),
                     "不得以 team_id = 0 兜底查询");
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // F-B4（R15 闭环）：refresh_tokens —— 无 team_id 表 + 唯一约束 + 级联
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("F-B4：refresh_tokens（无 team_id）不被追加 team_id 条件——漏登记将导致登出静默失效")
+    void refreshTokensIsNotRewrittenWithTeamId() throws Exception {
+        execute("INSERT INTO users (id, username, password_hash) VALUES (77, 'u77', 'x')");
+        execute("INSERT INTO refresh_tokens (user_id, token_hash, expires_at) "
+                + "VALUES (77, REPEAT('a', 64), '2099-01-01 00:00:00.000')");
+        TeamContext.set(TeamContext.Snapshot.of(1L, List.of("OWNER"), 77L, "u77"));
+        EXECUTED_SQL.clear();
+
+        try (SqlSession session = sqlSessionFactory.openSession(true)) {
+            session.getMapper(RefreshTokenMapper.class).selectList(null);
+        }
+
+        assertTrue(EXECUTED_SQL.stream().anyMatch(s -> s.toLowerCase().contains("from refresh_tokens")),
+                "应捕获到 refresh_tokens 查询，实际：" + EXECUTED_SQL);
+        assertTrue(EXECUTED_SQL.stream().noneMatch(s -> s.toLowerCase().contains("team_id")),
+                "refresh_tokens 无 team_id，不得被追加租户条件；否则撤销查询永远返回空行"
+                        + "（登出静默失效——不报错、只是不生效）。实际 SQL：" + EXECUTED_SQL);
+    }
+
+    @Test
+    @DisplayName("F-B4：uk_rt_token_hash 唯一约束生效——同一摘要重复插入被拒绝")
+    void refreshTokenHashIsUnique() throws Exception {
+        execute("INSERT INTO users (id, username, password_hash) VALUES (78, 'u78', 'x')");
+        List<String> uniques = queryStrings(
+                "SELECT constraint_name FROM information_schema.table_constraints "
+                        + "WHERE table_schema = DATABASE() AND table_name = 'refresh_tokens' "
+                        + "AND constraint_type = 'UNIQUE'");
+        assertTrue(uniques.contains("uk_rt_token_hash"),
+                "refresh_tokens 应存在 uk_rt_token_hash，实际：" + uniques);
+
+        String hash = "b".repeat(64);
+        execute("INSERT INTO refresh_tokens (user_id, token_hash, expires_at) "
+                + "VALUES (78, '" + hash + "', '2099-01-01 00:00:00.000')");
+        assertThrows(Exception.class,
+                () -> execute("INSERT INTO refresh_tokens (user_id, token_hash, expires_at) "
+                        + "VALUES (78, '" + hash + "', '2099-01-02 00:00:00.000')"),
+                "uk_rt_token_hash 应拒绝重复的 token_hash（防重放）");
+    }
+
+    @Test
+    @DisplayName("F-B4：fk_rt_user 级联生效——删除用户后其令牌行一并消失（防悬挂凭据）")
+    void deletingUserCascadesRefreshTokens() throws Exception {
+        execute("INSERT INTO users (id, username, password_hash) VALUES (79, 'u79', 'x')");
+        execute("INSERT INTO refresh_tokens (user_id, token_hash, expires_at) "
+                + "VALUES (79, REPEAT('c', 64), '2099-01-01 00:00:00.000'), "
+                + "        (79, REPEAT('d', 64), '2099-01-01 00:00:00.000')");
+        assertEquals(2L, queryLong("SELECT COUNT(*) FROM refresh_tokens WHERE user_id = 79"),
+                "前置：用户 79 名下应有 2 条令牌行");
+
+        execute("DELETE FROM users WHERE id = 79");
+
+        assertEquals(0L, queryLong("SELECT COUNT(*) FROM refresh_tokens WHERE user_id = 79"),
+                "ON DELETE CASCADE 应删除该用户的全部令牌行（全库唯一级联）");
     }
 
     // ---------------------------------------------------------------------
@@ -414,6 +482,60 @@ class IdentitySchemaAndTenantLineTest {
 
         public void setStatus(String status) {
             this.status = status;
+        }
+    }
+
+    /** 无 {@code team_id} 的表（refresh_tokens；R15 闭环，§6 规则 1 第 3 张例外表）。 */
+    public interface RefreshTokenMapper extends BaseMapper<RefreshTokenRow> {
+    }
+
+    @TableName("refresh_tokens")
+    public static class RefreshTokenRow {
+        @TableId(type = IdType.AUTO)
+        private Long id;
+        private Long userId;
+        private String tokenHash;
+        private java.time.LocalDateTime expiresAt;
+        private java.time.LocalDateTime revokedAt;
+
+        public Long getId() {
+            return id;
+        }
+
+        public void setId(Long id) {
+            this.id = id;
+        }
+
+        public Long getUserId() {
+            return userId;
+        }
+
+        public void setUserId(Long userId) {
+            this.userId = userId;
+        }
+
+        public String getTokenHash() {
+            return tokenHash;
+        }
+
+        public void setTokenHash(String tokenHash) {
+            this.tokenHash = tokenHash;
+        }
+
+        public java.time.LocalDateTime getExpiresAt() {
+            return expiresAt;
+        }
+
+        public void setExpiresAt(java.time.LocalDateTime expiresAt) {
+            this.expiresAt = expiresAt;
+        }
+
+        public java.time.LocalDateTime getRevokedAt() {
+            return revokedAt;
+        }
+
+        public void setRevokedAt(java.time.LocalDateTime revokedAt) {
+            this.revokedAt = revokedAt;
         }
     }
 }
