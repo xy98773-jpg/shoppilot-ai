@@ -183,7 +183,7 @@ importdata → {catalog, inventory, sales} → catalog → identity → common
 | **负责什么** | 库存余额（`inventory_balances`）与库存流水（`inventory_transactions`）的唯一写入口；各类 `InventoryTxnType` 的落账与校验；补货策略参数（`replenishment_policies`）；库存预警口径；**在途口径计算**（`effective_in_transit_qty`，见 `DESIGN_BASIS.md §10.4`） |
 | **明确不负责什么** | 不负责采购单与到货单（属 `purchasing`）；不负责分析计算；不负责基础资料维护 |
 | **拥有的表** | `inventory_balances`、`inventory_transactions`、`replenishment_policies` |
-| **对外暴露的服务接口** | **写接口（唯一入口）**：<br/>`InventoryWriteService.applyInitialImport(skuId, warehouseId, qty, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyInbound(skuId, warehouseId, qty, bizType, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyOutbound(skuId, warehouseId, qty, bizType, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyCountAdjust(skuId, warehouseId, targetQty, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyManualAdjust(skuId, warehouseId, qtyDelta, reason, idempotencyKey)`<br/>`InventoryWriteService.applyReversal(txnId, reason, idempotencyKey)`<br/>**读接口**：<br/>`InventoryQueryService.getBalance(skuId, warehouseId)` → 含 `on_hand_qty` / `committed_qty` / `available_qty`<br/>`InventoryQueryService.listBalances(filter, page)`<br/>`InventoryQueryService.listTransactions(filter, page)`<br/>`InventoryQueryService.listAlerts(filter)`<br/>**在途口径（供 analysis）**：<br/>`InventoryInTransitQueryService.getEffectiveInTransit(skuId, warehouseId, windowEndDate)`<br/>`InventoryInTransitQueryService.batchGetEffectiveInTransit(pairs, windowEndDate)`<br/>**策略**：<br/>`ReplenishmentPolicyService.getEffectivePolicy(teamId, skuId, warehouseId)` → 解析 `L` / `R` / `SS` / MOQ / `order_multiple` 三级来源 |
+| **对外暴露的服务接口** | **写接口（唯一入口）**：<br/>`InventoryWriteService.applyInitialImport(skuId, warehouseId, qty, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyInbound(skuId, warehouseId, qty, bizType, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyOutbound(skuId, warehouseId, qty, bizType, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyCountAdjust(skuId, warehouseId, targetQty, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyManualAdjust(skuId, warehouseId, qtyDelta, reason, idempotencyKey)`<br/>`InventoryWriteService.applyReversal(txnId, reason, idempotencyKey)`<br/>**读接口**：<br/>`InventoryQueryService.getBalance(skuId, warehouseId)` → 含 `on_hand_qty` / `committed_qty` / `available_qty`<br/>`InventoryQueryService.listBalances(filter, page)`<br/>`InventoryQueryService.listTransactions(filter, page)`<br/>`InventoryQueryService.listAlerts(filter)`<br/>**在途口径（供 analysis）**：<br/>`InventoryInTransitQueryService.getEffectiveInTransit(skuId, warehouseId, windowEndDate)`<br/>`InventoryInTransitQueryService.batchGetEffectiveInTransit(pairs, windowEndDate)`<br/>**策略**：<br/>`ReplenishmentPolicyService.getEffectivePolicy(teamId, skuId, warehouseId)` → 解析 `L` / `R` / `SS` / MOQ / `order_multiple` 三级来源<br/>**同口径锚点行锁（供 `purchasing`，`F-03`）**：<br/>`InventoryWriteService.lockBalanceAnchors(teamId, warehouseId, skuIdsAscending)` → `AnchorLockResult(lockedSkuIds, missingSkuIds)` |
 | **可以依赖哪些模块** | `catalog`、`common` |
 | **禁止的反向依赖** | 禁止依赖 `purchasing`、`analysis`、`replenishment`、`importdata` |
 | **关键事务边界** | **单笔库存变更 = 单事务**：校验（含 `on_hand_qty ≥ 0`）→ 写 `inventory_transactions`（含幂等键唯一约束）→ 更新 `inventory_balances`（乐观锁）→ 提交。余额与流水**必须同事务**（保证可对账） |
@@ -223,7 +223,28 @@ importdata → {catalog, inventory, sales} → catalog → identity → common
 | **负责什么** | 补货建议（`replenishment_items`）状态机；建议数量人工修改；提交/撤回/批准/驳回/作废；审核记录（`replenishment_reviews`）；沿用分析明细作为来源（`source_analysis_item_id`） |
 | **明确不负责什么** | 不负责分析计算；不负责采购单（属 `purchasing`）；不负责库存写入 |
 | **拥有的表** | `replenishment_items`、`replenishment_reviews` |
-| **对外暴露的服务接口** | `ReplenishmentGenerationService.generateFromRun(runId)` → 由分析明细生成建议（`SUGGESTED`）<br/>`ReplenishmentAppService.updateQuantity(itemId, newQty, version)`<br/>`ReplenishmentAppService.submit(itemId, comment)`<br/>`ReplenishmentAppService.withdraw(itemId)`<br/>`ReplenishmentAppService.approve(itemId, comment)`<br/>`ReplenishmentAppService.reject(itemId, comment)`（**`comment` 必填**）<br/>`ReplenishmentAppService.cancel(itemId, reason)`<br/>`ReplenishmentQueryService.listItems(filter, page)` / `getItem(itemId)`<br/>`ReplenishmentQueryService.listReviews(itemId)`<br/>`ReplenishmentAppService.markConverted(itemId, purchaseOrderId)`（供 `purchasing` 调用） |
+| **对外暴露的服务接口** | `ReplenishmentGenerationService.generateFromRun(runId)` → 由分析明细生成建议（`SUGGESTED`）<br/>`ReplenishmentAppService.updateQuantity(itemId, newQty, version)`<br/>`ReplenishmentAppService.submit(itemId, comment)`<br/>`ReplenishmentAppService.withdraw(itemId)`<br/>`ReplenishmentAppService.approve(itemId, comment)`<br/>`ReplenishmentAppService.reject(itemId, comment)`（**`comment` 必填**）<br/>`ReplenishmentAppService.cancel(itemId, reason)`<br/>`ReplenishmentQueryService.listItems(filter, page)` / `getItem(itemId)`<br/>`ReplenishmentQueryService.listReviews(itemId)`<br/>`ReplenishmentAppService.markConverted(itemId, purchaseOrderItemId)`（供 `purchasing` 调用）<br/>`ReplenishmentQueryService.getItems(itemIds)`（供 `purchasing` 步骤 ① 校验入参）<br/>`ReplenishmentQueryService.findByTeamWhSkuApproved(teamId, warehouseId, skuIds, excludeItemIds)`（供 `purchasing` 步骤 ③ 取同口径冲突候选集）<br/>`ReplenishmentAppService.lockApprovedAnchors(teamId, warehouseId, skuIds)`（供 `purchasing` 步骤 ②b 降级锚点，返回 `void`） |
+
+> **`markConverted` 的契约注记**（`F-03`）：
+> - `purchaseOrderItemId` = 本次转单**新建的 `purchase_order_items.id`**，**不是** `purchase_orders.id`。
+>   依据：`replenishment_items.converted_po_item_ids` 回填的正是「采购明细 ID」。
+> - 回填语义：`converted_po_item_ids` 是 **JSON 数组** → 实现为「读原数组 → 追加本 `poiId` → 去重」；1:1 语义下即单元素数组 `[poiId]`。
+> - ⚠️ 该字段**只是展示缓存**，权威判据仍是 `purchase_order_items.replenishment_item_id` 反查；
+>   **任何以 `converted_po_item_ids` 为准的业务判断都是错误的**。
+> - READ-MODIFY-WRITE 的正确性由**同语句状态守卫**承担：`WHERE id=? AND status='APPROVED' AND version=?`；
+>   影响行数 0 → 已被并发转单 → 整事务回滚 → `PO-9001`。
+>
+> **`lockApprovedAnchors` 的契约注记**：
+> - 只加行锁、返回 `void`、不返回业务语义、不改变任何状态、不写任何数据。
+> - **必须在调用方事务内执行**（`REQUIRED`）：`FOR UPDATE` 的锁在**事务结束时**释放；调用方若无外层事务，
+>   锁会在方法返回瞬间释放 → **静默退化为无锁**。
+> - 内部：`SELECT id FROM replenishment_items WHERE team_id=? AND warehouse_id=? AND sku_id IN (:skuIds)
+>   AND status='APPROVED' ORDER BY sku_id FOR UPDATE`。
+> - **锁取得序 = `sku_id` 升序**：走 `idx_repl_team_sku_time (team_id, sku_id, created_at)`，与
+>   `DATABASE_CONSTRAINTS.md §7.3` 死锁预防 ①「批量加锁按主键升序」一致；`warehouse_id` 与 `status` 为**索引外过滤条件**，不参与锁序。
+> - ⚠️ **不得写 `ORDER BY id FOR UPDATE`**：`id` 不在该索引前缀 → filesort，实际加锁序仍是 `(sku_id, created_at)`，与声明自相矛盾。
+> - 归属 `ReplenishmentAppService` 而非 `QueryService`：**`FOR UPDATE` 是写意图锁**，一律归该表所属模块的
+>   **业务写入入口服务**（见 §4.1 规则 1 推论）。
 | **可以依赖哪些模块** | `analysis`、`inventory`、`catalog`、`common` |
 | **禁止的反向依赖** | 禁止依赖 `purchasing`、`importdata`；禁止直接注入 `analysis` / `inventory` / `catalog` 的 Mapper |
 | **关键事务边界** | 状态流转 + 审核记录：**同一事务**（保证状态与审核记录一致）；数量修改：单事务 + 乐观锁（版本不一致返回 `RPL-8003`）；`markConverted` 与被 `purchasing` 调用的外层事务**必须同一事务**（避免建议已 `CONVERTED` 而采购单回滚） |
@@ -235,10 +256,10 @@ importdata → {catalog, inventory, sales} → catalog → identity → common
 | **负责什么** | 采购单（`purchase_orders`）与明细（`purchase_order_items`）生命周期（`PurchaseOrderStatus`）；到货单（`goods_receipts`）与到货明细（`goods_receipt_items`）；确认到货时调用 `inventory` 产生 `PURCHASE_INBOUND` 流水；部分到货支持；取消采购单 |
 | **明确不负责什么** | 不负责库存表写入（**必须调用 `InventoryWriteService`**）；不负责建议审批；不负责在途口径计算（在途由 `inventory` 从采购明细聚合，`purchasing` 只提供查询能力） |
 | **拥有的表** | `purchase_orders`、`purchase_order_items`、`goods_receipts`、`goods_receipt_items` |
-| **对外暴露的服务接口** | `PurchaseOrderAppService.createFromApprovedItems(itemIds, idempotencyKey)` → 建 `DRAFT`<br/>`PurchaseOrderAppService.confirm(poId)`（`DRAFT → PENDING`，仅 `APPROVER`+）<br/>`PurchaseOrderAppService.order(poId)`（`PENDING → ORDERED`）<br/>`PurchaseOrderAppService.cancel(poId, reason)`<br/>`PurchaseOrderQueryService.getOrder(poId)` / `listOrders(filter, page)`<br/>`GoodsReceiptAppService.createDraft(poId, lines, idempotencyKey)`<br/>`GoodsReceiptAppService.confirm(receiptId)` → 校验后调用 `InventoryWriteService.applyInbound(...)`，推进采购单状态<br/>`GoodsReceiptAppService.cancelDraft(receiptId)`（仅 `DRAFT`）<br/>`GoodsReceiptQueryService.listReceipts(filter, page)` / `getReceipt(receiptId)` |
+| **对外暴露的服务接口** | `PurchaseOrderAppService.createFromApprovedItems(itemIds, warehouseId, expectedArrivalDate, conflictAcknowledged, acknowledgedItemIds, idempotencyKey)` → 建 `DRAFT`<br/>`PurchaseOrderAppService.confirm(poId)`（`DRAFT → PENDING`，仅 `APPROVER`+）<br/>`PurchaseOrderAppService.order(poId)`（`PENDING → ORDERED`）<br/>`PurchaseOrderAppService.cancel(poId, reason)`<br/>`PurchaseOrderQueryService.getOrder(poId)` / `listOrders(filter, page)`<br/>`GoodsReceiptAppService.createDraft(poId, lines, idempotencyKey)`<br/>`GoodsReceiptAppService.confirm(receiptId)` → 校验后调用 `InventoryWriteService.applyInbound(...)`，推进采购单状态<br/>`GoodsReceiptAppService.cancelDraft(receiptId)`（仅 `DRAFT`）<br/>`GoodsReceiptQueryService.listReceipts(filter, page)` / `getReceipt(receiptId)` |
 | **可以依赖哪些模块** | `replenishment`、`inventory`、`catalog`、`common` |
 | **禁止的反向依赖** | 禁止依赖 `analysis`、`sales`、`importdata`；禁止直接 `UPDATE inventory_balances` |
-| **关键事务边界** | `createFromApprovedItems`：**单事务**（建单 + 明细 + 调用 `replenishment.markConverted`，保证 `PO-9001` 不被重复触发）；`confirm` 到货：**单事务**（写 `goods_receipts` 状态 + 调用 `InventoryWriteService` + 推进 PO 状态 + 校验 `PO-9002`）；**跨模块调用在事务内**，因此 `InventoryWriteService` 必须支持传播到外层事务 |
+| **关键事务边界** | `createFromApprovedItems`：**单事务**（建单 + 明细 + 调用 `replenishment.markConverted`，保证 `PO-9001` 不被重复触发）；内含 **3 个跨模块调用点**——② 锚点锁 `inventory.InventoryWriteService.lockBalanceAnchors`、②b/③ `replenishment.ReplenishmentAppService.lockApprovedAnchors` 与 `ReplenishmentQueryService.findByTeamWhSkuApproved`、⑧ `replenishment.ReplenishmentAppService.markConverted`——**全部 `REQUIRED`（参与外层事务），被调方不得提交/回滚外层事务**（`F-03`；步骤序见 `DATABASE_DESIGN.md §7.2 #8`）；`confirm` 到货：**单事务**（写 `goods_receipts` 状态 + 调用 `InventoryWriteService` + 推进 PO 状态 + 校验 `PO-9002`）；**跨模块调用在事务内**，因此 `InventoryWriteService` 必须支持传播到外层事务 |
 
 > **在途数据方向**：`inventory` 计算 `effective_in_transit_qty` 时需要采购明细数据。按 `DESIGN_BASIS.md §7.1` 禁止 `inventory → purchasing` 依赖，因此**在途口径由 `inventory` 定义并对外提供查询服务，采购明细的数据聚合通过"由 `purchasing` 提供的只读投影/由 `inventory` 持有的在途物化口径"实现**。这是本文件识别的**关键边界歧义**，见 §7.3 不一致 #2 与 §8.2 例外说明。
 
@@ -298,6 +319,13 @@ importdata → {catalog, inventory, sales} → catalog → identity → common
 ### 4.1 三条硬规则
 
 1. **只能调用对方 `application` 层的服务接口**（`*AppService` / `*QueryService`），**禁止直接注入对方的 Mapper**。
+   > **推论（同类问题的唯一依据，`F-03` 确立）**：**`SELECT ... FOR UPDATE` 是写意图锁**，因此凡带 `FOR UPDATE` 的方法，
+   > 一律归属「该表所属模块的**业务写入入口服务**」（`*WriteService` / `*AppService`），**不得放进任何 `*QueryService`**。
+   > 本项目两处实例：`inventory_balances` → `InventoryWriteService.lockBalanceAnchors(...)`（§2.5）；
+   > `replenishment_items` → `ReplenishmentAppService.lockApprovedAnchors(...)`（§2.8）。
+   > 依据：① 各模块已各自声明该表的「唯一写入口」（§2.5 / §2.8）；② `*QueryService` 的契约是只读，
+   > 把加锁方法放进去会让「查询服务可在只读场景任意并发调用」的假设失效（最坏情况：有人在只读 HTTP 请求里误用，
+   > 把行锁一直持有到请求结束）。
 2. **必须在调用前显式校验同团队**（`DESIGN_BASIS.md §6 第 4 条`）——不能只因为参数带了 `team_id` 就认为隔离完成；租户插件是兜底不是替代。
 3. **跨模块调用若涉及写，必须明确事务传播**：默认复用调用方事务（`REQUIRED`）；被调用方**不得**提交/回滚外层事务。
 
@@ -393,6 +421,35 @@ public interface ReplenishmentGenerationService {
 // analysis.application.AnalysisQueryService.getItemsOfRun(runId)
 ```
 
+#### 反例 4：跨模块直接 `FOR UPDATE` 对方的表（`F-03`）
+
+```text
+// ❌ 反例：purchasing 在转采购事务里直接锁 inventory 的表
+package com.shoppilot.purchasing.application;
+
+// ❌ 直接注入对方 Mapper / 直接写 SQL
+private final InventoryBalanceMapper inventoryBalanceMapper;
+
+// ❌ 或：把加锁放进对方的 *QueryService（只读契约被破坏）
+private final InventoryQueryService inventoryQueryService; // 内含 FOR UPDATE
+```
+
+```text
+// ✅ 正例：谁拥有表和锁，谁提供接口；加锁方法归"业务写入入口服务"
+package com.shoppilot.purchasing.application;
+
+// ② 锚点行锁 —— 走 inventory 的写入入口服务
+AnchorLockResult r = inventoryWriteService.lockBalanceAnchors(teamId, warehouseId, skuIdsAscending);
+// ②b 缺锚点时降级 —— 走 replenishment 的写入入口服务（不是 QueryService）
+if (!r.missingSkuIds().isEmpty()) {
+    replenishmentAppService.lockApprovedAnchors(teamId, warehouseId, r.missingSkuIds());
+}
+// ③ 候选集 —— 只读，走 QueryService
+var candidates = replenishmentQueryService.findByTeamWhSkuApproved(teamId, warehouseId, skuIds, inputItemIds);
+```
+
+> 判据见 §4.1 规则 1 的**推论**：`FOR UPDATE` 是写意图锁 → 归 `*WriteService` / `*AppService`，不进 `*QueryService`。
+
 ---
 
 ## 5. 模块间数据读取例外说明
@@ -422,6 +479,7 @@ public interface ReplenishmentGenerationService {
 | `importdata` | 主数据写入 | 直接写 `skus` / `products` 等 | 调 `catalog.CatalogWriteService` |
 | `purchasing` | 库存入库 | 直接改 `inventory_balances` | 调 `inventory.InventoryWriteService.applyInbound` |
 | `replenishment` | 分析明细来源 | 注入 `analysis_items` 的 Mapper | 调 `analysis.AnalysisQueryService.getAnalysisItem` |
+| `purchasing` | **同口径串行化锚点**（转采购，`F-03`） | 直接 `SELECT ... FROM inventory_balances FOR UPDATE` / 直读 `replenishment_items` | 调 `inventory.InventoryWriteService.lockBalanceAnchors` + `replenishment.ReplenishmentAppService.lockApprovedAnchors` / `replenishment.ReplenishmentQueryService.findByTeamWhSkuApproved` |
 
 ---
 
