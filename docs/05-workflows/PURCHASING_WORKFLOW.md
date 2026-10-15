@@ -54,10 +54,15 @@
 | 标记已下单（`PENDING → ORDERED`） | ✅ | ✅ | ✅ | ✅ | ❌ | — |
 | 取消采购单 | ✅ | ✅ | ✅ | ✅ | ❌ | 见 §8.5，`DRAFT`/`PENDING` 放宽，其余受限 |
 | 登记到货单（录入草稿） | ✅ | ✅ | ✅ | ✅ | ❌ | — |
-| **确认到货**（`DRAFT → CONFIRMED`） | ✅ | ✅ | ✅ | ✅ | ❌ | 见 §8。⚠️ 需二次确认（`USER_ROLES.md §4.4`）；`PO-9010` 为角色不足兜底 |
-| 冲销已确认到货 | ✅ | ✅ | ✅ | ❌ | ❌ | 高风险，建议 `ADMIN`+（见 §8.6） |
+| **确认到货**（`DRAFT → CONFIRMED`） | ✅ | ✅ | ✅ | ✅ | ❌ | 见 §9.1。⚠️ 需二次确认（`USER_ROLES.md §4.4`）；`PO-9010` 为角色不足兜底 |
+| 冲销已确认到货 | ✅ | ✅ | ❌ | ❌ | ❌ | 高风险；**须 `ADMIN`+**（`USER_ROLES.md §2.3`）。本操作必然触发库存冲销（`§8.7`），若放宽至 `APPROVER` 将借该路径间接取得"库存冲销"能力，绕过 `USER_ROLES.md:106` 的 ADMIN+ 要求 → 构成权限提升 |
 
 > **审批与执行分离**（`DESIGN_BASIS §5.1` 硬规则 2）：`DRAFT → PENDING` 必须由 `APPROVER` 执行，`OPERATOR` 执行则返回 `TEAM-2003`。这是"创建采购单需要审批"的落地形式。
+
+> ⚠️ **跨文档对照权限列时按列名核对，勿按位置**：本表列序为
+> `OWNER | ADMIN | APPROVER | OPERATOR | VIEWER`，与
+> `USER_ROLES.md §2.2 / §2.3` 的 `OWNER | ADMIN | OPERATOR | APPROVER | VIEWER`
+> **相反**（后两列互换）。
 
 ---
 
