@@ -2,9 +2,9 @@
 
 **电商库存决策与采购协同平台**
 
-> 当前状态：**M0（产品与架构设计）已完成**。
-> 本仓库目前**只有设计文档，没有任何业务代码、数据库迁移或可运行服务**。
-> 下一步是审查 M0 设计产出，确认后进入 M1（工程骨架与本地运行）。
+> 当前状态：**M1（工程骨架与本地运行）已完成**。
+> 全栈可经 Docker Compose 一键启动（mysql / backend-java / service-ai / frontend-web / nginx 五服务均 healthy），CI 流水线（GitHub Actions）已就位且全绿。
+> 业务接口（登录、补货、采购、导入等）尚未实现，将在 M2 落地；M1 已包含骨架、安全拦截（401）、健康检查、Flyway 基线、MySQL 版本守卫与可重复测试。
 
 ---
 
@@ -34,7 +34,7 @@ ShopPilot AI 面向**小型电商团队**，把"库存数据 → 风险识别 �
 | 前端 | Vue 3 + TypeScript + Vite + Element Plus + Pinia + Vue Router + Axios + ECharts |
 | Java 后端 | Java 21 + Spring Boot 3.5.x + Spring Security 6 + MySQL 8 + Maven + Flyway + MyBatis-Plus + JUnit 5 + Testcontainers |
 | Python AI 服务 | Python 3.11+ + FastAPI + Pydantic v2 + pandas + httpx |
-| 基础设施 | Docker Compose（MySQL / backend-java / service-ai / frontend-web） |
+| 基础设施 | Docker Compose（mysql / backend-java / service-ai / frontend-web / nginx） |
 
 选型理由与版本论证见 [`docs/01-architecture/TECH_STACK.md`](docs/01-architecture/TECH_STACK.md)。
 
@@ -45,11 +45,12 @@ ShopPilot-AI/
 ├── README.md                  # 本文件
 ├── AGENTS.md                  # 开发 必须遵守的项目规则（进入 M1 前必读）
 ├── docs/                      # 全部设计文档（当前唯一有内容的目录）
-├── backend-java/              # Java 后端（模块化单体）        [M1 起创建]
-├── service-ai/                # Python AI 分析服务             [M1 起创建]
-├── frontend-web/              # Vue 3 前端                    [M1 起创建]
-├── deploy/                    # Docker Compose 与部署配置      [M1 起创建]
-└── scripts/                   # 演示数据、健康检查等辅助脚本   [M1 起创建]
+├── backend-java/              # Java 后端（模块化单体，11 模块）    [M1 已创建]
+├── service-ai/                # Python AI 分析服务（FastAPI）       [M1 已创建]
+├── frontend-web/              # Vue 3 前端                         [M1 已创建]
+├── deploy/                    # Docker Compose 与部署配置           [M1 已创建]
+├── .github/workflows/         # CI 流水线（backend/frontend/service-ai/smoke）
+└── scripts/                   # 演示数据、健康检查等辅助脚本        [规划，尚未创建]
 ```
 
 各目录职责边界见 [`docs/01-architecture/PROJECT_STRUCTURE.md`](docs/01-architecture/PROJECT_STRUCTURE.md)。
@@ -131,14 +132,34 @@ ShopPilot-AI/
 ⑧ 全程审计留痕，分析结果可追溯到输入快照与算法/Prompt 版本
 ```
 
-## 7. 部署（M1 起）
+## 7. 本地运行（M1 已可用）
 
+### 前置条件
+- Docker Desktop（含 Docker Compose v2）。
+- 数据库须 **MySQL 8.0.16+**。Compose 内已固定 `mysql:8.0.36`；**请勿用 phpStudy 自带的 8.0.12**——版本守卫会在启动时直接阻断（`DATABASE_CONSTRAINTS.md` C-11）。
+
+### 开发栈（推荐先跑这个）
 ```bash
-cp deploy/.env.example deploy/.env     # 填写数据库口令与 AI_INTERNAL_TOKEN 等
-docker compose -f deploy/docker-compose.yml up -d
+cp deploy/.env.example deploy/.env          # 按需修改口令；.env 已被 gitignore，不会入库
+docker compose -f deploy/docker-compose.dev.yml up -d --build
+```
+启动后（默认 `NGINX_PORT=80`；宿主 80 被占用时可设 `NGINX_PORT=8081` 覆盖，compose 默认值不变）：
+- 前端：http://localhost:8081/
+- 后端 API：`http://localhost:8081/api/v1/health` → 200
+- 后端 Actuator：`http://localhost:8081/actuator/health` → `UP`
+- AI 服务内部健康：仅容器内 `service-ai:8000/internal/v1/health`，**不暴露到宿主**（PROJECT_STRUCTURE §7.1）
+
+### 集成栈
+```bash
+docker compose -f deploy/docker-compose.yml up -d --build   # 仅 nginx 对外（默认 80）
 ```
 
-> ⚠️ 上述命令为**规划中的方式**，M1 完成前无法执行。
+### 关键事实
+- Flyway 已基线化（`V1.0.0__baseline.sql`，业务 DDL 留待 M2），`baseline-on-migrate=false`（指向非空库直接报错，防结构漂移）。
+- 未认证请求受 `AUTH-1001` JSON 拦截（HTTP 401），健康端点匿名放行。
+- 停栈：`docker compose -f deploy/docker-compose.dev.yml down -v`
+
+> ⚠️ M1 尚未实现业务接口（登录、补货、采购、导入等）。`/api/v1/health` 等健康检查可访问，业务路径当前返回 401 或 404，属预期。
 
 ## 8. 给协作者的话
 
