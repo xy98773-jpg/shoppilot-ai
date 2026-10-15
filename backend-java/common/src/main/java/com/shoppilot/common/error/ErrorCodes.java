@@ -51,13 +51,30 @@ public final class ErrorCodes {
     public static final String AUTH_1011 = "AUTH-1011";
 
     // TEAM —— 团队与权限隔离（2001–2099）
+    /** 跨团队越权（403）—— 资源 team_id != JWT.team_id，或路径 {teamId} 与 JWT 不符；**先于角色判定**。 */
     public static final String TEAM_2001 = "TEAM-2001";
+    /** 团队已停用（403）—— teams.status = DISABLED。 */
     public static final String TEAM_2002 = "TEAM-2002";
+    /** 当前角色无权执行该操作（403）—— 角色不在允许集合（USER_ROLES §2.2）；或成员非 ACTIVE。 */
     public static final String TEAM_2003 = "TEAM-2003";
+    /** 团队成员不存在（404）—— 目标成员记录不存在（防枚举：先按 team_id 过滤，查不到即 404）。 */
+    public static final String TEAM_2004 = "TEAM-2004";
+    /** 用户已是团队成员（409）—— uk_tm_team_user 冲突。 */
+    public static final String TEAM_2005 = "TEAM-2005";
+    /** 不能移除团队所有者（403）—— ADMIN 试图移除/降级 OWNER（USER_ROLES §2.2 #12）。 */
+    public static final String TEAM_2006 = "TEAM-2006";
+    /** 每团队仅允许一名所有者（409）—— 试图新增第二个 OWNER（DESIGN_BASIS §5）。 */
+    public static final String TEAM_2007 = "TEAM-2007";
+    /** 团队编码已存在（409）—— uk_teams_code 冲突。 */
+    public static final String TEAM_2008 = "TEAM-2008";
+    /** 不能移除自己（403）—— 操作者移出自己（含所有者本人）。 */
+    public static final String TEAM_2009 = "TEAM-2009";
 
     // CAT —— 商品 / SKU / 供应商 / 仓库（3001–3099）
     public static final String CAT_3001 = "CAT-3001";
     public static final String CAT_3002 = "CAT-3002";
+    /** 关联对象不属于同一团队（403）—— supplier/warehouse.team_id != 当前 team_id（DESIGN_BASIS §6 规则 4）。 */
+    public static final String CAT_3005 = "CAT-3005";
 
     // IMP —— 数据导入（4001–4099）
     public static final String IMP_4001 = "IMP-4001";
