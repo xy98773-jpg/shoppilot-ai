@@ -1,0 +1,59 @@
+package com.shoppilot.common.util;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+
+/**
+ * 数量精度工具（基础设施）。
+ *
+ * <p>数量列 DECIMAL(18,3) → scale 3，统一 HALF_UP 舍入。<b>不含任何业务计算规则</b>。
+ */
+public final class QtyUtils {
+
+    public static final int SCALE = 3;
+    public static final RoundingMode ROUNDING = RoundingMode.HALF_UP;
+
+    private QtyUtils() {
+    }
+
+    public static BigDecimal of(BigDecimal value) {
+        if (value == null) {
+            return null;
+        }
+        return value.setScale(SCALE, ROUNDING);
+    }
+
+    public static BigDecimal add(BigDecimal a, BigDecimal b) {
+        if (a == null) {
+            a = BigDecimal.ZERO;
+        }
+        if (b == null) {
+            b = BigDecimal.ZERO;
+        }
+        return a.add(b).setScale(SCALE, ROUNDING);
+    }
+
+    public static BigDecimal subtract(BigDecimal a, BigDecimal b) {
+        if (a == null) {
+            a = BigDecimal.ZERO;
+        }
+        if (b == null) {
+            b = BigDecimal.ZERO;
+        }
+        return a.subtract(b).setScale(SCALE, ROUNDING);
+    }
+
+    public static int compare(BigDecimal a, BigDecimal b) {
+        BigDecimal x = a == null ? BigDecimal.ZERO : a;
+        BigDecimal y = b == null ? BigDecimal.ZERO : b;
+        return x.compareTo(y);
+    }
+
+    public static boolean isNegative(BigDecimal value) {
+        return value != null && value.signum() < 0;
+    }
+
+    public static boolean isNonNegative(BigDecimal value) {
+        return value != null && value.signum() >= 0;
+    }
+}
