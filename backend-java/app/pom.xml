@@ -90,11 +90,18 @@
             <version>1.20.4</version>
             <scope>test</scope>
         </dependency>
-        <!-- 测试内手动构造 DataSource 驱动守卫（mysql-connector-j 已 runtime 范围，测试期可用） -->
+        <!-- ★M2-Foundation 回归修复（M1-T11 遗留 P0）：spring-jdbc 必须为 compile 作用域。
+             M1-T11 为「测试内手动构造 DataSource」把本依赖声明为 test，结果按 Maven
+             「就近胜出（nearest wins）」覆盖了经
+               app → common → mybatis-plus-spring-boot3-starter → spring-boot-starter-jdbc
+             传入的 compile 传递依赖 —— 就近的 depth-1 节点胜出后，spring-jdbc/spring-tx
+             的运行期作用域被降级为 test，**不会打进 fat jar**。后果：DataSourceAutoConfiguration
+             因缺 EmbeddedDatabaseType 不匹配 → 无 DataSource bean → Flyway / MySQLVersionGuard
+             连带失败 → 应用启动即崩（CI 只跑 mvn verify，测试类路径仍可见 spring-jdbc，故看不见）。
+             此处显式声明为运行期依赖以固化该约束（版本由 spring-boot-dependencies BOM 管理）。 -->
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-jdbc</artifactId>
-            <scope>test</scope>
         </dependency>
     </dependencies>
 
