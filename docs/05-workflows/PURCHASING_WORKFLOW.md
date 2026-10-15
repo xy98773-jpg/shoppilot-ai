@@ -195,7 +195,7 @@ stateDiagram-v2
 
 | # | 步骤 | 执行方 | 输入 | 输出 | 状态变化 | 事务边界 | 幂等键 / 防重 | 失败处理 | 接口 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 由建议创建采购单 | Java（`purchasing`） | `replenishment_item_id[]`、供应商、仓库 | `purchase_orders(DRAFT)` + 明细 | 建议 `APPROVED → CONVERTED`；采购单 `→ DRAFT` | **单事务**（含建议状态流转） | 建议乐观锁 + 状态守卫；`uk_po_team_idem` | 建议已转 → `PO-9001`；状态非法 → `RPL-8001` | `POST /orders` |
+| 1 | 由建议创建采购单 | Java（`purchasing`） | `replenishment_item_id[]`、供应商、仓库 | `purchase_orders(DRAFT)` + 明细 | 建议 `APPROVED → CONVERTED`；采购单 `→ DRAFT` | **单事务**（含建议状态流转） | 建议乐观锁 + 状态守卫；`uk_po_team_idem`；跨模块锚点行锁（§7.3） | 建议已转 → `PO-9001`；状态非法 → `RPL-8001`；**同口径存在其它未转 `APPROVED` 建议且未确认 → `RPL-8012`** | `POST /orders` |
 | 2 | 手工创建采购单 | Java | 供应商、仓库、明细 | `purchase_orders(DRAFT)` | `→ DRAFT` | 单事务 | `uk_po_team_idem` | 明细为空 → `PO-9006`；供应商跨团队 → `PO-9007` | `POST /orders` |
 | 3 | 编辑草稿 | Java | 明细、期望到货日 | 采购单更新 | 不变 | 单事务 + 乐观锁 | `version` | 非 `DRAFT` → `PO-9003` | `PATCH /orders/{id}` |
 | 4 | 确认采购单 | Java | — | `confirmed_by/at` | `DRAFT → PENDING` | 单事务 | 状态守卫 | 非 `APPROVER` → `TEAM-2003`；状态非法 → `PO-9003` | `POST /orders/{id}/confirm` |
@@ -226,6 +226,40 @@ stateDiagram-v2
 | 库存变更 | `inventory_transactions`（`PURCHASE_INBOUND` / `REVERSAL`）+ `inventory_balances` |
 | 在途变化 | `inventory_balances.in_transit_qty`（见 §8.3） |
 | 审计 | `audit_logs` |
+
+### 7.3 转采购前的同口径冲突检测与显式确认（`F-03`）
+
+> 依据 `DESIGN_BASIS §9.11` 补充规则 5、`DATABASE_DESIGN.md §7.2 #8`、`DATABASE_CONSTRAINTS.md §7.1 P-33`。
+
+**检测口径**：本次入参建议集合解析出 `(warehouse_id, sku_id)` 集合 S 后，对每个 S 元素检测同
+`team_id` × `warehouse_id` × `sku_id` 下是否存在**其它**（`id NOT IN 本次入参`）`APPROVED` 且**未生成采购明细**的建议。
+「未生成采购明细」由 `purchasing` 在**自己的** `purchase_order_items` 上做 `NOT EXISTS` 判定
+（`replenishment` 禁止依赖 `purchasing`，该 join 无模块可放）。
+
+**三段调用（谁拥有表和锁，谁提供接口）**：
+
+| 段 | 调用 | 归属 |
+| --- | --- | --- |
+| 锚点行锁 | `inventory.InventoryWriteService.lockBalanceAnchors(teamId, warehouseId, skuIdsAscending)` → `AnchorLockResult(lockedSkuIds, missingSkuIds)` | `inventory` |
+| 降级锁（`missingSkuIds` 非空时） | `replenishment.ReplenishmentAppService.lockApprovedAnchors(teamId, warehouseId, skuIds)`（`void`） | `replenishment` |
+| 候选集 | `replenishment.ReplenishmentQueryService.findByTeamWhSkuApproved(teamId, warehouseId, skuIds, excludeItemIds)` | `replenishment` |
+
+> **统一判据**：`SELECT ... FOR UPDATE` 是**写意图锁**，一律归该表所属模块的**业务写入入口服务**
+> （`*WriteService` / `*AppService`），**不得放进 `*QueryService`**（`MODULE_BOUNDARIES.md §4.1` 规则 1 推论）。
+> 两侧加锁**均按 `sku_id` 升序**，与 §9.1 到货事务、盘点调整同序 → 无死锁环。
+
+**冲突处理与确认**：
+
+- 冲突集 `C ≠ ∅` 且请求未携带正确确认集（或确认集 ≠ C）→ **拒绝**，返回 `RPL-8012`（响应带 `conflict_items`）。
+- 用户确认后重发同一请求（幂等键不变），带 `conflict_acknowledged=true` + `acknowledged_item_ids`。
+- 放行后在**事务成功**（采购明细已写入 ⑦ 且本条建议已置 `CONVERTED` ⑧）之后写审计
+  **`PURCHASE_ORDER_CONFLICT_ACK`**（`action`，`biz_type=PURCHASE_ORDER`，`result=SUCCESS`；
+  `after_json` 记录冲突项快照）。
+- 该审计与业务**同事务**（不 `REQUIRES_NEW`）→ 事务回滚时一并撤销，**不会留下「已确认但未转单」的孤儿审计**。
+
+**防的是什么、不防什么**：只防「静默重复采购」。锚点锁只关闭**单事务内检测 → 写入**之间的 TOCTOU；
+不阻止合法的分批下单，也不保证同口径最终只有一张采购单。残余竞态 `R-1` / `R-2` 与两条巡检项见
+`DATABASE_CONSTRAINTS.md §7.1 P-33` 的说明。
 
 ---
 
@@ -373,8 +407,8 @@ BEGIN;
   ① UPDATE goods_receipts SET status='CONFIRMED', confirmed_by=?, confirmed_at=?
         WHERE id=? AND team_id=? AND status='DRAFT';   -- 状态守卫，影响行数=0 → 幂等返回
   ② 校验并固化 goods_receipt_items（超额校验：received_qty + 本次 ≤ ordered_qty，否则 PO-9002）
-  ③ FOR EACH 明细:
-        INSERT inventory_transactions (txn_type=PURCHASE_INBOUND, biz_type=GOODS_RECEIPT,
+   ③ FOR EACH 明细（**按 `sku_id` 升序处理**，见下方说明）:
+         INSERT inventory_transactions (txn_type=PURCHASE_INBOUND, biz_type=GOODS_RECEIPT,
                                        biz_ref_id=receipt_id, idem_key=...);
         UPDATE inventory_balances SET on_hand_qty=on_hand_qty+?, version=version+1
              WHERE ... AND version=?;                    -- 乐观锁，冲突 → INV-5002（重试 3 次）
@@ -387,6 +421,10 @@ COMMIT;
 ```
 
 **为什么安全**：全流程**无跨服务调用**（Python AI 与采购完全无关，`§13.2`），因此**要么全成、要么全回滚**，DB 不会留下中间态。
+
+> **③ 必须按 `sku_id` 升序处理明细**（`DATABASE_CONSTRAINTS.md §7.3` 死锁预防 ①「所有批量加锁按主键升序」）。
+> 若按 `line_no` 处理，两张到货单在 SKU 集合重叠而行序不同时会互相等待 → 死锁。
+> 本条也是 `§7.3` 转采购事务与到货事务**无死锁环**证明成立的前提：两侧批量加锁共用同一全局顺序（`sku_id` 升序）。
 
 ### 9.2 重复提交收货
 

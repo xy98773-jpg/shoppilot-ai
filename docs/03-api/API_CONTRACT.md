@@ -593,7 +593,7 @@ Idempotency-Key: <客户端生成的全局唯一字符串，长度 1..128>
 | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/api/v1/purchasing/orders` | 采购单列表（按状态/供应商/时间筛选） | 任何已登录成员 | ✅ | F-PO-06 | — |
 | POST | `/api/v1/purchasing/orders` | 手工创建采购单（草稿 `DRAFT`） | OPERATOR+（仅能起 `DRAFT`） | ⚠️ | F-PO-01 | `PO-9006`/`9007`/`9011`、`TEAM-2003` |
-| POST | `/api/v1/purchasing/orders/from-replenishment` | 由已审批建议生成采购单（`source=REPLENISHMENT`，草稿） | APPROVER/ADMIN/OWNER | ⚠️ | F-PO-01 | `PO-9001`/`9007`/`9011`、`TEAM-2003` |
+| POST | `/api/v1/purchasing/orders/from-replenishment` | 由已审批建议生成采购单（`source=REPLENISHMENT`，草稿） | APPROVER/ADMIN/OWNER | ⚠️ | F-PO-01 | `PO-9001`/`9007`/`9011`、`RPL-8001`/`8012`、`TEAM-2003` |
 | GET | `/api/v1/purchasing/orders/{id}` | 采购单详情（含明细与到货进度） | 任何已登录成员 | ✅ | F-PO-06 | `PO-9004` |
 | PATCH | `/api/v1/purchasing/orders/{id}` | 修改草稿（供应商、仓库、明细、备注；仅 `DRAFT`） | OPERATOR+ | ❌ | F-PO-01 | `PO-9003`/`9011`/`9007` |
 | POST | `/api/v1/purchasing/orders/{id}/confirm` | 确认采购单（`DRAFT→PENDING`，视为审批） | APPROVER/ADMIN/OWNER | ✅ | F-PO-02 | `PO-9003`、`TEAM-2003` |
@@ -1834,9 +1834,18 @@ X-Request-Id: req_po_001
   "replenishment_item_ids": [60001, 60002],
   "warehouse_id": 100,
   "expected_arrival_date": "2026-10-21",
-  "remark": "10 月第二周常规补货"
+  "remark": "10 月第二周常规补货",
+  "conflict_acknowledged": false,
+  "acknowledged_item_ids": []
 }
 ```
+
+> **`conflict_acknowledged` / `acknowledged_item_ids`（首次请求可省略，默认 `false` / `[]`）**：
+> 服务端在事务内检测同 `team_id` × `warehouse_id` × `sku_id` 下是否存在**其它** `APPROVED` 且未生成采购明细的建议。
+> 存在且未携带正确确认集 → 返回 `RPL-8012`（响应 `data.conflict_items` 给出冲突项清单）；
+> 前端展示清单并由用户**显式确认**后，用 `conflict_acknowledged=true` + `acknowledged_item_ids`（= 本次展示的冲突项 ID 列表）**重发同一请求**（幂等键不变）。
+> 服务端比对「确认集 == 当前冲突集」，不等则再次返回 `RPL-8012`（集合已变化，需重新确认）。
+> 放行后写审计 `PURCHASE_ORDER_CONFLICT_ACK`（`DESIGN_BASIS §9.17`）；该审计与业务**同事务**，事务回滚时一并撤销。
 
 **成功响应 `201`**
 
@@ -1890,6 +1899,29 @@ X-Request-Id: req_po_001
   "timestamp": "2026-10-14T08:15:00.000Z"
 }
 ```
+
+**失败响应 3 · 同 SKU×仓库存在其它已审批未转采购的建议 `409`**
+
+```json
+{
+  "code": "RPL-8012",
+  "message": "该 SKU 在本仓库还有其它已审批的补货建议，请确认是否继续",
+  "data": {
+    "warehouse_id": 100,
+    "conflict_items": [
+      { "replenishment_item_id": 60007, "sku_id": 5001, "sku_code": "SKU-5001", "qty": "60.000", "risk_level": "HIGH", "created_at": "2026-10-12T02:10:00.000Z" }
+    ],
+    "conflict_acknowledged": false
+  },
+  "details": null,
+  "requestId": "req_po_001",
+  "timestamp": "2026-10-14T08:15:00.000Z"
+}
+```
+
+> 前端收到本响应后应展示 `conflict_items`（SKU 名称、仓库名、建议数量 `qty`、风险等级 `risk_level`、建议生成时间 `created_at`），
+> 由用户「取消」或「确认继续（将记录本次确认）」；确认后带 `conflict_acknowledged=true` + `acknowledged_item_ids` 重发。
+> 若重发仍返回 `RPL-8012`（冲突集已变化）→ 关闭弹窗、刷新建议列表并提示「冲突项已变化，请重新确认」。
 
 **请求 B · 确认采购单（DRAFT→PENDING）**
 
