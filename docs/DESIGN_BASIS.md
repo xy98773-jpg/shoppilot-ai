@@ -447,6 +447,14 @@ identity ← catalog ← {inventory, sales} ← analysis ← replenishment ← p
 >    均为"已产生业务后果"的状态，新一轮分析不得改动它们（这是"不得覆盖已审批/已执行的采购业务"的落地方式）。
 > 3. **`APPROVED → SUPERSEDED` 是非法转换**；`APPROVED` 只能走向 `CONVERTED`（被采购引用）或 `CANCELLED`。
 > 4. **`CONVERTED` 是终态**，且只有 `purchasing` 模块创建采购明细时可以触发该转换。
+> 5. **转采购前必须做同口径冲突检测**（`F-03`）：`purchasing` 创建采购明细前，必须检测同
+>    `team_id` × `warehouse_id` × `sku_id` 下是否存在**其它** `APPROVED` 且尚未生成采购明细的建议。
+>    命中且请求未携带正确的确认集 → **拒绝**，返回 `RPL-8012`（`§12.3`；逐码定义见 `ERROR_CODES.md §2.9`）；
+>    命中且已显式确认 → 放行，并在事务成功（采购明细写入 + 本条建议置 `CONVERTED`）后写审计
+>    `PURCHASE_ORDER_CONFLICT_ACK`（`§9.17`）。锁与步骤序见 `DATABASE_DESIGN.md §7.2 #8`
+>    与 `DATABASE_CONSTRAINTS.md §7.1 P-33`。
+>    **本条只防"静默重复采购"**：它不阻止合法的分批下单，也不保证同口径最终只有一张采购单（残余竞态见
+>    `DATABASE_CONSTRAINTS.md §7.1 P-33` 的说明）。
 
 ### 9.12 `ReviewAction`（`replenishment_reviews.action`）
 
@@ -705,6 +713,7 @@ effective_in_transit_qty = Σ(poi.ordered_qty − poi.received_qty)
 | `ANL-7005` |
 | `RPL-8004` |
 | `PO-9004` |
+| `RPL-8012` |
 
 > **AI 服务内部错误域**：Python 内部接口使用**独立前缀** `AI-xxxx`，仅用于 Java ↔ Python 内部通信，与 `§12.2` 的对外业务域不重叠。号码段划分：
 >
