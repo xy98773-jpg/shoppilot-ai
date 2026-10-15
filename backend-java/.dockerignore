@@ -1,0 +1,9 @@
+# M1-T09：构建上下文瘦身（target 由容器内 Maven 重新产出）
+target/
+**/target/
+.git/
+.gitignore
+.gitattributes
+.idea/
+*.iml
+*.md

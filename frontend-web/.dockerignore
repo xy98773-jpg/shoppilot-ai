@@ -1,0 +1,6 @@
+# M1-T09：构建上下文瘦身（node_modules / dist 由容器内重新产出）
+node_modules/
+dist/
+.git/
+.gitignore
+.vite/
