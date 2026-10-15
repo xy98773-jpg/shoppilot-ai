@@ -13,7 +13,7 @@
 
 | 本文件负责 | 本文件不负责 |
 | --- | --- |
-| 22 张表的字段、类型、可空性、默认值、更新规则 | 面向使用者的字段中文名速查（见 `DATA_DICTIONARY.md`） |
+| 23 张表的字段、类型、可空性、默认值、更新规则 | 面向使用者的字段中文名速查（见 `DATA_DICTIONARY.md`） |
 | 唯一约束、索引、团队隔离规则 | 约束的完整清单与幂等矩阵（见 `DATABASE_CONSTRAINTS.md`） |
 | 关系与基数（概要） | 关系图（见 `ER_DIAGRAM.md`） |
 | 事务边界、隔离级别、锁策略 | API 请求/响应结构（见 `API_CONTRACT.md`） |
@@ -125,6 +125,16 @@
 2. **首期明确不做 ML 时间序列预测**（`§2.1` Out of Scope）。当未来引入多模型/多算法预测时，`D` 会升级为"每个 `algorithm_version` 一组预测值"，**那时**才需要 `forecast_results`（含 `algorithm_version`、`horizon_days`、`predicted_qty`）。当前用 `analysis_runs.algorithm_version` + `analysis_items.avg_daily_sales` 已能完整表达并支持未来扩展。
 3. **避免过度设计**（P8）：提前建表会带来"写不写、写什么值"的悬空问题，以及额外的清理与权限策略，收益为零。
 4. **触发条件已明确记录**：当出现"同一运行需要保存多个模型的多期预测"需求时新增该表——这是可判定的升级信号，无需现在预留。
+
+### 4.4 新增 `refresh_tokens`（Refresh Token 撤销表）
+
+**原清单中无此表**（登记为 `DESIGN_REVIEW.md` **R15**）。新增理由：
+
+1. **`D-01` 裁定要求 Refresh Token 存"MySQL 独立撤销表"，但该表从未被设计过。** `DESIGN_BASIS §15 D-01` 推荐"JWT 无状态 + Access 2h + Refresh 7d + **Refresh 存独立表**"；"撤销表"此前仅是 `ADR-001-07/12` 中的一句**缓解措辞**，在 `DESIGN_BASIS §8`、`DATABASE_DESIGN`、`DATA_DICTIONARY`、`DATABASE_CONSTRAINTS`、`ER_DIAGRAM` 中**均无对应设计**。
+2. **没有这张表，`F-AUTH-01` 无法实现。** `API_CONTRACT §5` 的 `POST /api/v1/auth/logout` 要求"**使 Refresh Token 失效**"。纯无状态令牌**物理上做不到登出失效**——不落库 = 无处记录"这个令牌已被登出"，登出将退化为"客户端删除本地 cookie"，服务端仍可被重放。
+3. **不能复用 `users` 或塞进会话表。** 令牌是**多条**（一次登录一行，允许并发多设备），与 `users` 一行一号的语义不同；若把令牌塞进 `users`，等于把凭据生命周期写进账号主数据，且无法表达"轮换链"。
+4. **不引入 Redis（技术栈红线）。** `TECH_STACK.md` 明确首期不引入 Redis；撤销状态必须落在**已有且已被备份/审计覆盖的 MySQL** 中，避免新增一个必须额外运维的有状态组件。
+5. **安全红线决定必须有此表**：只存 `token_hash`（SHA-256），使数据库/备份泄漏**无法直接冒用**令牌；同时 `revoked_at` + `replaced_by` 使"登出失效"与"轮换撤销"可审计、可追溯。
 
 ---
 
@@ -891,6 +901,42 @@
 
 ---
 
+### 5.23 `refresh_tokens`（Refresh Token 撤销表）
+
+> **新增说明（R15 闭环）**：本表为 `D-01` 认证裁定（`DESIGN_BASIS §15`）的**连带设计缺口**补齐——
+> `DESIGN_BASIS §8` 原清单、`DATABASE_DESIGN` / `DATA_DICTIONARY` / `DATABASE_CONSTRAINTS` / `ER_DIAGRAM`
+> 此前**均无此表**。新增理由见 §4.4。为**避免 §5.4 ~ §5.22 整体重编号**（会波及全库交叉引用），
+> 本表以**追加**方式置于 §5.23，而非插入到 §5.4。
+
+- **业务用途**：认证 Refresh Token 的**服务端撤销记录**（`DESIGN_BASIS §15 D-01`）。承载"**登出即使其失效**"与"**轮换撤销**"两项能力——纯无状态 Refresh Token **物理上无法实现登出失效**，而 `API_CONTRACT §5` 的 `POST /api/v1/auth/logout`（`F-AUTH-01`）明确要求刷新令牌失效。
+- **所属模块 / 写入方**：`identity`（`§7.1`）。端点由 **M2-T02（Auth）** 落地；本表由 **M2-T02-pre（R15 闭环）** 先行建表。
+- **是否含 `team_id`**：**否**——账号体系是**跨团队全局体系**，令牌按 `user_id` 组织，与 `users` 同级。这是 `§6 规则 1` 的**第三个显式例外**（前两个：`users`、`teams`）。
+- **公共审计字段**：集合 A（本表**可被 UPDATE**：登出写 `revoked_at`、轮换写 `revoked_at` + `replaced_by`），**无 `version`**（同 `sales_daily` 惯例）。
+
+| 字段名 | 类型 | 可空 | 默认值 | 含义 | 更新规则 |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `BIGINT UNSIGNED` | 否 | AUTO_INCREMENT | 主键 | 不可变 |
+| `user_id` | `BIGINT UNSIGNED` | 否 | — | 令牌所属用户 | 不可变 |
+| `token_hash` | `CHAR(64)` | 否 | — | Refresh Token 的 **SHA-256 摘要**（64 位小写十六进制） | 不可变；**禁止存明文** |
+| `expires_at` | `DATETIME(3)` | 否 | — | 过期时间（UTC），签发时 = 当时 + 7d | 不可变 |
+| `revoked_at` | `DATETIME(3)` | 是 | `NULL` | 撤销时间（UTC）；**非 `NULL` 即已撤销** | 登出 / 轮换时写入；写入后不可清空 |
+| `replaced_by` | `CHAR(64)` | 是 | `NULL` | 轮换链：指向**新**令牌的 `token_hash` | 轮换时写入；不可变更 |
+| `ip_addr` | `VARCHAR(45)` | 是 | `NULL` | 签发时客户端 IP（`45` = IPv6 兼容） | 不可变 |
+| `user_agent` | `VARCHAR(255)` | 是 | `NULL` | 签发时客户端 UA（截断至 255） | 不可变 |
+
+- **主键**：`id`。**外键**：`fk_rt_user (user_id) → users(id)`，`ON DELETE CASCADE` / `ON UPDATE RESTRICT`。
+- **唯一约束**：`uk_rt_token_hash (token_hash)`（`§8`）。**语义**：一个摘要对应一行，撤销/轮换按摘要精确定位；哈希天然有区分度，不需要 `team_id` 前缀。
+- **索引**：`idx_rt_user (user_id)`（"登出某用户全部会话"/按人撤销，高频）；`idx_rt_expires (expires_at)`（过期行清理任务的范围扫描）。**`team_id` 最左原则不适用**——本表无 `team_id`（`DATABASE_CONSTRAINTS.md §3.3` 例外说明）。
+- **团队隔离**：**本表无 `team_id`，租户线必须显式忽略**——须登记进 `TenantTables.WITHOUT_TEAM_ID`。**若漏登记**，撤销查询会被改写为 `WHERE token_hash = ? AND team_id = ?` 而**永远查不到行** → **登出静默失效**（不报错、只是不生效，属最坏的一类缺陷）。
+- **更新规则**：只做"INSERT"与"撤销/轮换时 UPDATE `revoked_at` / `replaced_by`"；**不做物理删除**（由 `fk_rt_user` 级联，或过期清理任务按 `idx_rt_expires` 批量删除）。
+- **设计要点**：
+  1. **只存哈希（安全红线）**：`token_hash = SHA-256(refresh_token)`，数据库内**任何位置不得出现明文令牌**，使库文件/备份泄漏无法直接冒用。
+  2. **全库唯一的 `ON DELETE CASCADE`（例外及其理由）**：本表承载的是**派生凭据数据**，不是业务事实。用户被物理删除（仅运维动作）后其令牌**必须立即失效**；若沿用 `RESTRICT`，将产生"令牌仍可刷新、而用户已不存在"的悬挂凭据。该唯一例外已在 `ER_DIAGRAM.md §7.1` 显式登记。
+  3. **与 Access Token 的分工**：Access Token（TTL 2h）**不落库**，仅按签名 + `users.status` / `team_members.status` 每次请求实时校验（即时失效兜底）；本表只服务于 Refresh Token（TTL 7d）的**登出与轮换撤销**。
+  4. **不做"令牌黑名单"式膨胀**：按 `token_hash` 唯一落行 + `expires_at` 清理，长期只保留未过期与需审计的近期行。
+
+---
+
 ## 6. 重点审查项（A ~ J）
 
 > 本节对应任务书 §5.3 的十项硬性要求。每项给出**设计 + 理由 + 落地位置**。
@@ -1242,7 +1288,7 @@ flowchart TD
 | `skus.spec_json` | **JSON** | J3：规格键值随品类变化（颜色/尺码/容量…），无固定列 |
 | `import_batches.field_mapping_json` / `parse_options_json` | **JSON** | J3：映射与解析选项是开放式配置 |
 | `import_row_errors.raw_data` | **JSON** | J3：原始行结构由用户文件决定，正是"结构不固定"的极端案例 |
-| `audit_logs.before_json` / `after_json` | **JSON** | J3：审计对象种类多（22 张表），字段集合不可预知 |
+| `audit_logs.before_json` / `after_json` | **JSON** | J3：审计对象种类多（23 张表），字段集合不可预知 |
 | `analysis_items.risk_level` | **关系型** `VARCHAR(16)` | J1+J2：必须按风险等级筛选、排序、`MAX` 合成（`§11.1`），且受 CHECK 枚举约束 |
 | `analysis_items.avg_daily_sales` / `qty_base` / `qty_suggest` / `inventory_position_qty` 等全部数量 | **关系型** `DECIMAL(18,3)` | J1+J4：需聚合、排序、精度保证（P2）；JSON 存数值会引入浮点/字符串歧义 |
 | `analysis_items.sku_id` / `warehouse_id` / `product_id` / `run_id` | **关系型** | J2：外键与唯一约束（`uk_ai_run_sku_wh`），且是 JOIN 主键 |
@@ -1734,7 +1780,7 @@ replenishment_items.status = 'APPROVED'
 | R6 | **`audit_logs.team_id = 0` 系统域哨兵**：登录等无团队上下文的操作无法归属团队 | 审计查询需特判 `team_id = 0`；且与 `§6` 规则 1 的"`team_id NOT NULL`"表述有张力 | ① 明确约定 `0` = 系统域并在文档/代码常量中固化；② 审计页面默认排除 `team_id = 0`，提供"系统事件"独立入口 | **是（`D-11`）** |
 | R7 | **`CHECK` 约束在 MySQL 8.0.16 以下被静默忽略**（`§4.1` 依赖 CHECK） | 版本不符时枚举/非负校验全部失效，且**无任何报错** | ① `TECH_STACK.md` 明确要求 8.0.16+；② CI 增加"数据库版本检查"步骤（`SELECT VERSION()` 断言）；③ 应用层枚举校验与参数校验**独立存在**（不依赖 CHECK） | 否（已缓解） |
 | R8 | **`JSON` 字段无法被 `CHECK` / 外键约束**（`risk_types` / `params_json` 等） | JSON 内部结构错误只能在应用层发现；一旦历史 JSON 结构升级，旧数据可能无法解析 | ① 每次写入前用 JSON Schema 校验（应用层）；② JSON 内**携带版本字段**（如 `{"v":1,...}`）；③ 禁止把"需要约束的关键字段"放进 JSON（见 §6-F 判定原则） | 否 |
-| R9 | **22 张表的 `team_id` 无外键**，理论上可出现"孤儿团队数据" | 极端情况下出现无归属团队的数据，数据治理困难 | ① 团队**永不物理删除**（软停用）；② 所有写入必须经 `TeamContext`，团队不存在时写入直接失败；③ 定期巡检脚本（`orphan check`）；④ 若未来引入归档/分库，`team_id` 索引已就绪 | 否 |
+| R9 | **23 张表的 `team_id` 无外键**，理论上可出现"孤儿团队数据" | 极端情况下出现无归属团队的数据，数据治理困难 | ① 团队**永不物理删除**（软停用）；② 所有写入必须经 `TeamContext`，团队不存在时写入直接失败；③ 定期巡检脚本（`orphan check`）；④ 若未来引入归档/分库，`team_id` 索引已就绪 | 否 |
 | R10 | **`inventory_transactions` 无分区/归档策略**：每团队每年可能产生数十万至百万条流水 | 单表膨胀 → 查询与对账变慢，备份时间增加 | ① 首期数据量可控（中小电商），**不做分区**（P8 不提前过度设计）；② 索引已按 `(team_id, ...)` 设计，单团队查询不受其他团队数据影响；③ M7 评估按 `occurred_at` 做**时间分区**或**归档到历史表** | **是（首期不做，登记评审项）** |
 | R11 | **`analysis_items` 无条件保留全部历史快照**：每团队每月多次运行 × 数千 SKU | 表快速膨胀（单次 2000 SKU × 每月 10 次 = 2 万行/月/团队） | ① 首期保留全部（追溯价值高于存储成本，P10 优先）；② 提供"运行数据保留期"配置（默认 365 天）在 M7 评估；③ 归档时必须**保留 `replenishment_items` 引用到的快照**（否则外键 `RESTRICT` 会阻止删除——这是外键的保护作用） | **是（保留期策略未定，登记评审项）** |
 | R12 | **采购单/到货单编号生成依赖应用层**（`po_no` / `receipt_no` / `batch_no` / `run_no`） | 多实例并发下编号可能重复 → 撞唯一约束 `uk_po_team_no` → 用户看到 500 错误 | ① 编号规则含 `team_id` + 日期 + 随机/序列后缀，冲突概率极低；② 唯一约束**兜底**，冲突时**捕获并重新生成**（重试 3 次）；③ 未来可引入"编号序列表"（**首期不做**，避免新表） | **是（编号生成策略待定，登记评审项）** |
@@ -1760,18 +1806,18 @@ replenishment_items.status = 'APPROVED'
 | --- | --- | --- | --- | --- | --- |
 | **`D-09`** | `import_batches` 文件级幂等的物理实现（`file_hash` 直列 vs 可空槽位列 `dedupe_hash`） | **可空槽位列 `dedupe_hash`**（约束名不变，支持 `DUPLICATE_REJECTED` 与 `FORCE_REIMPORT`） | ① 用 `attempt_no` 纳入唯一键；② 放弃 `DUPLICATE_REJECTED` 记录、只返回错误 | 影响导入幂等的物理约束与 `§8`/`§9.5` 的表述一致性 | `INC-1` |
 | **`D-10`** | `§6` 规则 2 是否对"经团队归属父表派生的业务键"豁免 `team_id` 前缀 | **豁免**并在 §6 明确写入豁免条款 | 强制所有唯一键都带 `team_id`（则 `uk_ai_run_sku_wh` 需改为 `(team_id, run_id, sku_id, warehouse_id)`，冗余但一致） | 影响多个唯一约束的定义与索引宽度 | `INC-2` |
-| **`D-11`** | 无团队上下文操作（登录/登出/全局定时任务）在 `audit_logs.team_id` 上的取值 | **`team_id = 0` 表示系统域**，并固化常量 | ① 允许 `team_id` 为 `NULL`（与 §6 规则 1 冲突）；② 单独建系统审计表（新增表，违反 22 张清单） | 影响审计查询口径与前端展示 | `INC-3` |
+| **`D-11`** | 无团队上下文操作（登录/登出/全局定时任务）在 `audit_logs.team_id` 上的取值 | **`team_id = 0` 表示系统域**，并固化常量 | ① 允许 `team_id` 为 `NULL`（与 §6 规则 1 冲突）；② 单独建系统审计表（新增表，违反 23 张清单） | 影响审计查询口径与前端展示 | `INC-3` |
 | **`D-12`** | 需要补充若干导入类错误码：覆盖告警（`IMP-4006`）、日期缺口告警（`IMP-4014`）等 | **在 `ERROR_CODES.md` 与 `DESIGN_BASIS §12.3` 补充** | 复用现有 `COM-0001`（则无法区分"格式错误"与"覆盖告警"） | 影响前端能否给出精确提示与用户决策 | §6-D / §6-E |
 | **`D-13`** | `inventory_transactions` 是否需要"一笔流水只能被冲销一次"的 DB 级唯一约束 `uk_invtxn_team_reversed (team_id, reversed_txn_id)` | **建议新增该唯一索引**（可空列上的唯一索引允许多行 `NULL`） | 仅在应用层校验（并发冲销可能双写） | 影响冲销的幂等强度；属 `§8` 之外的新增约束 | §7.2 #10 |
 | **`D-14`**（旧编号，已作废） | 以下枚举/常量在 `§9` 中**未定义**，但本设计为完整表达需要固化：`LeadTimeSource`、`InventoryBizType`、`sales_daily.source`、`purchase_orders.source`、审计 `action` 常量表 | ✅ **已裁定**：统一补入 `DESIGN_BASIS §9.17`（`LeadTimeSource` / `InventoryBizType` / `SalesSource` / `PurchaseOrderSource` / `AuditAction` 35 条 / `AuditResult`），裁定记录见 `§15.2` | ~~在各文档各写一份~~（**已否决**：违反 SSOT 原则，必然漂移） | 影响 `CHECK` 约束的可写性——**已消除** | §8 |
 | **`D-15`** | `analysis_items` / `inventory_transactions` 等只增表的**保留期与归档策略** | **首期全部保留**（追溯优先，P10）；M7 评估保留期与归档 | 首期即引入保留期（会破坏追溯链，且与 `replenishment_items` 的外键 `RESTRICT` 冲突） | 影响存储成本与查询性能 | R10 / R11 |
-| **`D-16`** | 业务编号（`po_no` / `receipt_no` / `batch_no` / `run_no`）的生成策略 | **应用层生成**（团队前缀 + 日期 + 序列/随机），唯一约束兜底 + 冲突重试 3 次 | ① 引入"编号序列表"（新增表，违反 22 张清单）；② 用 `AUTO_INCREMENT` 拼号（会暴露全局业务量） | 影响多实例并发下的可用性与编号可读性 | R12 |
+| **`D-16`** | 业务编号（`po_no` / `receipt_no` / `batch_no` / `run_no`）的生成策略 | **应用层生成**（团队前缀 + 日期 + 序列/随机），唯一约束兜底 + 冲突重试 3 次 | ① 引入"编号序列表"（新增表，违反 23 张清单）；② 用 `AUTO_INCREMENT` 拼号（会暴露全局业务量） | 影响多实例并发下的可用性与编号可读性 | R12 |
 
 ### 11.3 未发现不一致的项（供评审确认）
 
 | 项 | 结论 |
 | --- | --- |
-| 表数量与表名 | 与 `§8` 完全一致（22 张） |
+| 表数量与表名 | 与 `§8` 完全一致（23 张） |
 | 状态枚举取值与合法转换 | 与 `§9` 完全一致，**本设计未新增/修改任何 SSOT 已有的枚举取值** |
 | 错误码 | 只使用 `§12.3` 已列出的错误码；新所需错误码记为 `D-12` 而非自行定义 |
 | 补货公式与字段映射 | 与 `§10` 完全一致，`lead_time_source` 为表达 `§11.2` "标注 `DEFAULT`"所需（`D-14`） |
@@ -1785,5 +1831,6 @@ replenishment_items.status = 'APPROVED'
 | 日期 | 变更 | 依据 |
 | --- | --- | --- |
 | M0 | 初版创建（22 张表设计、A~J 审查项、事务与并发方案、Flyway 规范、风险清单） | `DESIGN_BASIS.md`、任务书 §5.2 |
+| M2 | 新增 §4.4 + §5.23 `refresh_tokens`（Refresh Token 撤销表），表清单 22 → **23 张**；§6 规则 1 例外表 2 → **3 张** | `DESIGN_BASIS.md §8 / §15 D-01`、`DESIGN_REVIEW.md` R15、`ADR-001-ARCHITECTURE.md` ADR-001-12 |
 
 > 本文件任何变更必须同步 `DATA_DICTIONARY.md`、`DATABASE_CONSTRAINTS.md`、`ER_DIAGRAM.md`（`DESIGN_BASIS §16`）。

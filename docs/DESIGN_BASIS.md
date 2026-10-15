@@ -212,7 +212,7 @@ com.shoppilot.<module>.{api, application, domain, infrastructure}
    `inventory_transactions`、`sales_daily`、`import_batches`、`import_row_errors`、`analysis_runs`、
    `analysis_items`、`replenishment_items`、`replenishment_reviews`、`purchase_orders`、
    `purchase_order_items`、`goods_receipts`、`goods_receipt_items`、`audit_logs`、`team_members`。
-   **例外**：`users`（跨团队全局）、`teams`（自身即团队）。
+   **例外（共 3 张）**：`users`（跨团队全局）、`teams`（自身即团队）、`refresh_tokens`（跨团队全局账号体系，按 `user_id` 组织，`§8` 第 23 张表）。
    **系统域哨兵**：极少数无团队上下文的记录（如登录失败审计）使用保留值 `team_id = 0` 表示"系统域"。`team_id = 0` **不是合法团队**，任何业务查询都必须排除它；团队 ID 自增序列从 1 开始。
 2. **所有业务表的唯一约束必须带 `team_id` 前缀**，例如 `uk_sku_team_code (team_id, sku_code)`。
    禁止在团队业务表上建立不含 `team_id` 的全局唯一约束（`id` 主键除外）。
@@ -287,7 +287,7 @@ identity ← catalog ← {inventory, sales} ← analysis ← replenishment ← p
 
 ---
 
-## 8. 数据表清单（权威，共 22 张）
+## 8. 数据表清单（权威，共 23 张）
 
 | # | 表名 | 中文 | 模块 | 含 `team_id` | 主键 | 关键唯一约束 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -313,12 +313,17 @@ identity ← catalog ← {inventory, sales} ← analysis ← replenishment ← p
 | 20 | `goods_receipts` | 到货单 | purchasing | ✅ | id | `uk_gr_team_no (team_id,receipt_no)`、`uk_gr_team_idem` |
 | 21 | `goods_receipt_items` | 到货明细 | purchasing | ✅ | id | `uk_gri_receipt_poi (goods_receipt_id,purchase_order_item_id)` |
 | 22 | `audit_logs` | 审计日志 | audit | ✅ | id | 无（普通索引，仅追加） |
+| 23 | `refresh_tokens` | Refresh Token 撤销表 | identity | ❌（按 `user_id` 组织） | id | `uk_rt_token_hash (token_hash)` |
 
-> **相对任务书清单的三处调整**（均在 `DATABASE_DESIGN.md §变更说明` 中给出理由）：
+> **相对任务书清单的四处调整**（均在 `DATABASE_DESIGN.md §变更说明` 中给出理由）：
 > 1. **新增 `replenishment_policies`**：`L`、`R`、`SS`、MOQ、`order_multiple` 等参数必须有稳定归属，
 >    否则只能散落在 SKU 字段里或被 LLM 编造。
 > 2. **新增 `analysis_items`**（任务书清单中没有）：把"计算事实快照（不可变）"与"业务建议（有状态）"分离。
 > 3. **不新增独立"销量预测结果表"**：预测结果即为 `analysis_items` 字段，避免一次数据两处存放。
+> 4. **新增 `refresh_tokens`**（`DATABASE_DESIGN.md §4.4`，登记 `DESIGN_REVIEW.md` R15）：`D-01` 裁定要求
+>    Refresh Token 存"MySQL 独立撤销表"，但该表此前从未被设计过。没有它，`F-AUTH-01`
+>    （`POST /api/v1/auth/logout` 使 Refresh Token 失效）**物理上无法实现**——纯无状态令牌无处记录"已登出"。
+>    本表**无 `team_id`**（跨团队全局账号体系），是 §6 规则 1 的**第三个显式例外**。
 
 > **导入幂等的物理实现（对 §9.5 与 `uk_imp_team_hash_biz` 的澄清）**：
 > 既要"同文件不重复入库"，又要"允许用户强制重导"，二者不能靠一个非空唯一列同时实现。约定如下：

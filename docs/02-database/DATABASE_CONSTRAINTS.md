@@ -39,7 +39,7 @@
 
 ## 2. 唯一约束与幂等键设计
 
-### 2.1 全部唯一约束清单（24 条）
+### 2.1 全部唯一约束清单（25 条）
 
 > 「PK 类型」：`自然唯一`（业务键本身唯一）/ `防重`（防止重复写入）/ `幂等`（吸收重复请求）/ `团队隔离`（带 `team_id` 前缀）。
 > 「冲突错误码」指**应用层捕获唯一键冲突后**返回的稳定错误码（`DESIGN_BASIS §12`）。
@@ -70,8 +70,9 @@
 | 22 | `uk_gr_team_no` | `goods_receipts` | `team_id`, `receipt_no` | 自然唯一 + 团队隔离 | 团队内到货单号唯一 | `COM-0002` | `D-16` |
 | 23 | `uk_gr_team_idem` | `goods_receipts` | `team_id`, `idempotency_key` | **幂等** + 团队隔离 | 同一团队同一幂等键只创建一张到货单 | `COM-0009` | **`NOT NULL`**（收货不可逆）；5 类幂等之五 |
 | 24 | `uk_gri_receipt_poi` | `goods_receipt_items` | `goods_receipt_id`, `purchase_order_item_id` | 防重 | 一张到货单内同一条采购明细只有一行 | `COM-0002` | 防止同单重复入库 |
+| 25 | `uk_rt_token_hash` | `refresh_tokens` | `token_hash` | 防重 | 一个令牌摘要对应一行（撤销/轮换按摘要精确定位） | `AUTH-1006` | **无 `team_id`**（`§6` 规则 1 第 3 张例外表，跨团队全局账号体系）；摘要已存在即视"该令牌已登记"，按刷新失败处理（防重放） |
 
-**团队隔离合规检查**：24 条中，含 `team_id` 前缀的 **19 条**；不含的 5 条为 `uk_users_username`、`uk_users_email`、`uk_teams_code`（`§6` 规则 1 显式例外表）与 `uk_ai_run_sku_wh`、`uk_repl_run_sku_wh`（由 `run_id` 派生团队维度，`INC-2`/`D-10`）。`uk_poi_po_lino` 与 `uk_gri_receipt_poi` 由**同团队的父表**派生团队维度（父表已带 `team_id` 唯一约束）。
+**团队隔离合规检查**：25 条中，含 `team_id` 前缀的 **19 条**；不含的 6 条为 `uk_users_username`、`uk_users_email`、`uk_teams_code`、`uk_rt_token_hash`（`§6` 规则 1 显式例外表）与 `uk_ai_run_sku_wh`、`uk_repl_run_sku_wh`（由 `run_id` 派生团队维度，`INC-2`/`D-10`）。`uk_poi_po_lino` 与 `uk_gri_receipt_poi` 由**同团队的父表**派生团队维度（父表已带 `team_id` 唯一约束）。
 
 ### 2.2 五类幂等设计（专章）
 
@@ -219,8 +220,10 @@
 | 56 | `idx_al_team_action_time` | `audit_logs` | `team_id`, `action`, `occurred_at` | 联合 | 按动作类型审计/统计 | 中 |
 | 57 | `idx_al_team_request` | `audit_logs` | `team_id`, `request_id` | 联合 | **一次请求的全部审计**（链路排查） | 高 |
 | 58 | `idx_al_team_result_time` | `audit_logs` | `team_id`, `result`, `occurred_at` | 联合 | 失败审计巡检 | 低 |
+| 59 | `idx_rt_user` | `refresh_tokens` | `user_id` | 普通 | **登出/撤销**：按用户批量失效其全部刷新令牌（`POST /api/v1/auth/logout`）；按人审计签发历史 | 高 |
+| 60 | `idx_rt_expires` | `refresh_tokens` | `expires_at` | 普通 | **过期清理任务**扫描（`WHERE expires_at < ?`），系统级、跨用户 | 中 |
 
-**索引总数**：**82 条** = 24 条唯一索引（§2.1） + **58 条普通/联合查询索引**（上表）。其中 `uk_*` 与 `idx_*` 不重复计数；上表只列出普通/联合查询索引。
+**索引总数**：**84 条** = 25 条唯一索引（§2.1） + **59 条普通/联合查询索引**（上表）。其中 `uk_*` 与 `idx_*` 不重复计数；上表只列出普通/联合查询索引。
 
 ### 3.3 `team_id` 最左原则的例外与说明
 
@@ -228,7 +231,7 @@
 | --- | --- | --- |
 | `idx_run_timeout (status, timeout_at)` | **系统级超时扫描任务**需要跨团队扫描"所有已超时但仍在 `RUNNING` 的运行"，若以 `team_id` 最左则无法高效全表扫描 | ① 该索引只被**单个后台任务**使用，且 `status IN ('PENDING','RUNNING')` 的选择性很高（运行中的任务极少），扫描行数极小；② 该索引**不返回业务数据**（只取 `id` / `team_id` / `timeout_at`），取出后按 `team_id` 逐条处理，不泄漏跨团队数据；③ 属 `§6` 规则 6 的**必要例外**，建议在 `§6` 补充"系统级调度查询可豁免" |
 
-> **其余 57 条索引全部以 `team_id` 为最左列**，符合 `DESIGN_BASIS §6` 规则 6。
+> **其余 59 条索引中**，**57 条**以 `team_id` 为最左列，符合 `DESIGN_BASIS §6` 规则 6；另 **2 条**（`idx_rt_user`、`idx_rt_expires`）属于**无 `team_id` 的表** `refresh_tokens`（`§6` 规则 1 第 3 张例外表），**不适用**该原则（同 `users` / `teams` 的索引）。
 
 ### 3.4 典型查询与索引匹配对照表（22 条）
 
@@ -418,7 +421,8 @@ ALTER TABLE purchase_order_items
 
 ### 5.2 外键清单（全部真外键）
 
-> 全部 `ON DELETE RESTRICT` / `ON UPDATE RESTRICT`。外键字段上必须有索引（本设计的复合索引已满足或以父表主键索引校验）。
+> **删除 / 更新行为**：除第 **33** 条外，**全部 `ON DELETE RESTRICT` / `ON UPDATE RESTRICT`**。
+> 外键字段上必须有索引（本设计的复合索引已满足或以父表主键索引校验）。
 
 | # | 外键名 | 从表.字段 | 到表.字段 | 团队维度说明 |
 | --- | --- | --- | --- | --- |
@@ -454,8 +458,15 @@ ALTER TABLE purchase_order_items
 | 30 | `fk_gri_receipt` | `goods_receipt_items.goods_receipt_id` | `goods_receipts.id` | 同模块 |
 | 31 | `fk_gri_poi` | `goods_receipt_items.purchase_order_item_id` | `purchase_order_items.id` | 服务层校验 |
 | 32 | `fk_gri_sku` | `goods_receipt_items.sku_id` | `skus.id` | 服务层校验 |
+| 33 | `fk_rt_user` | `refresh_tokens.user_id` | `users.id` | 用户全局账号体系，无团队维度；**`ON DELETE CASCADE`（全库唯一例外）** |
 
-**外键总数：32 条**（另有 0 条指向 `teams`、0 条自关联外键、0 条多态外键）。
+**外键总数：33 条**（另有 0 条指向 `teams`、0 条自关联外键、0 条多态外键）。
+
+> **全库唯一的 `ON DELETE CASCADE` 及其理由**（`fk_rt_user`，登记于 `ER_DIAGRAM.md §7.1`）：
+> 本项目**原则上禁止 `CASCADE`**（业务数据一律软停用，物理删除仅运维在 DB 层执行）。`refresh_tokens` 是
+> **唯一例外**，因为它承载的是**派生凭据数据**而非业务事实：用户被物理删除后，其 Refresh Token
+> **必须立即失效**；若沿用 `RESTRICT`，将留下"令牌仍可刷新、用户已不存在"的**悬挂凭据**（安全缺陷）。
+> 这也使"删除用户"成为一次性原子收口动作，无需应用层额外清理。
 
 ### 5.3 为什么 `team_id` 不建外键（在 `DATABASE_DESIGN.md §6-A` 之外补充"代价层面"的理由）
 
@@ -476,12 +487,12 @@ ALTER TABLE purchase_order_items
 
 | # | `§6` 规则原文要点 | 数据库层落地 | 应用层落地 | 测试 |
 | --- | --- | --- | --- | --- |
-| **1** | 团队业务表必须含 `team_id BIGINT UNSIGNED NOT NULL`；例外 `users`、`teams` | 20 张表均为 `NOT NULL`（无默认值，强制写入时必须提供） | `TeamContext` 从 JWT claim 解析，**绝不接受客户端传入** | T-1.1 ~ T-1.3 |
-| **2** | 唯一约束必须带 `team_id` 前缀 | 24 条唯一约束中 19 条带前缀；5 条例外（`users`/`teams` 3 条 + 派生键 2 条）在 `§2.1` 显式声明 | 冲突翻译为 `CAT-3002` 等业务错误码 | T-2.1 ~ T-2.3 |
+| **1** | 团队业务表必须含 `team_id BIGINT UNSIGNED NOT NULL`；例外 `users`、`teams`、`refresh_tokens` | 20 张表均为 `NOT NULL`（无默认值，强制写入时必须提供）；`refresh_tokens` 属例外（无 `team_id`） | `TeamContext` 从 JWT claim 解析，**绝不接受客户端传入** | T-1.1 ~ T-1.3 |
+| **2** | 唯一约束必须带 `team_id` 前缀 | 25 条唯一约束中 19 条带前缀；6 条例外（`users`/`teams`/`refresh_tokens` 4 条 + 派生键 2 条）在 `§2.1` 显式声明 | 冲突翻译为 `CAT-3002` 等业务错误码 | T-2.1 ~ T-2.3 |
 | **3** | `team_id` 绝不接受客户端传入 | **无默认值**：若应用层忘记注入，INSERT 直接失败（`NOT NULL` 无默认值） | `TeamContext`（ThreadLocal / RequestScope）统一提供 | T-3.1 ~ T-3.2 |
 | **4** | 跨表关联写入必须做同团队校验 | 真外键保证"父子都存在"，但**不保证同团队**（这是 DB 无法表达的部分） | `TeamScopeValidator.assertSameTeam(...)`；`§6` 规则 4 的示例（`sku.team_id == po.team_id`） | T-4.1 ~ T-4.4 |
 | **5** | 关联查询必须携带 `team_id`，不得通过"外键成立"推断隔离成立 | 无 | 所有查询方法强制 `team_id` 参数；租户插件追加 `team_id = ?` | T-5.1 ~ T-5.2 |
-| **6** | 主查询路径索引必须以 `team_id` 为最左列 | 57/58 条索引以 `team_id` 最左；1 条例外（`idx_run_timeout`，系统级调度）在 `§3.3` 声明 | 代码评审检查新索引 | T-6.1 |
+| **6** | 主查询路径索引必须以 `team_id` 为最左列 | 57/60 条索引以 `team_id` 最左；3 条例外（`idx_run_timeout` 系统级调度，见 `§3.3`；`idx_rt_user`/`idx_rt_expires` 属无 `team_id` 的表） | 代码评审检查新索引 | T-6.1 |
 
 ### 6.2 纵深防御的五层
 
@@ -610,7 +621,7 @@ L5 租户插件   TenantLineInnerInterceptor 自动追加 ← 兜底（防手写
 
 > 对应 `docs/06-development/TEST_STRATEGY.md` 的**约束测试**部分。全部为**集成测试**（`@SpringBootTest` + 真实 MySQL 容器），因为约束语义必须由真实数据库验证。
 
-### 8.1 唯一约束测试（24 条）
+### 8.1 唯一约束测试（25 条）
 
 | # | 用例 | 期望 |
 | --- | --- | --- |
@@ -629,6 +640,7 @@ L5 租户插件   TenantLineInnerInterceptor 自动追加 ← 兜底（防手写
 | U-13 | 同一到货单两条同 `purchase_order_item_id` 明细 | 第二条冲突 |
 | U-14 | 已知被冲销的流水再次冲销 | 冲突 → `INV-5009`（`D-13` 生效后） |
 | U-15 | `idempotency_key = NULL` 的 `purchase_orders` 多行插入 | 都成功（可空唯一索引允许多 `NULL`） |
+| U-16 | 同一 `token_hash` 插入两条 `refresh_tokens` | 第二条冲突 → 按"该令牌已登记"处理，返回 `AUTH-1006`（防止令牌重放） |
 
 ### 8.2 `CHECK` 约束测试
 
@@ -655,6 +667,7 @@ L5 租户插件   TenantLineInnerInterceptor 自动追加 ← 兜底（防手写
 | F-3 | 尝试 `DELETE FROM inventory_transactions`（应用层） | **无对应方法**（编译期即阻止）；原生 SQL 直接 DELETE 在集成测试中不覆盖（属运维纪律） |
 | F-4 | 停用 `skus`（`INACTIVE`）后查询历史 `sales_daily` | **成功返回**（历史数据必须可查，`§9.4`） |
 | F-5 | 停用 `skus` 后新建分析任务 | 该 SKU **不进入**分析范围 |
+| F-6 | **物理删除**某 `users` 行（其名下有 `refresh_tokens`） | 令牌行**随 `ON DELETE CASCADE` 一并消失**（全库唯一级联；防"可刷新但用户已不存在"的悬挂凭据） |
 
 ### 8.4 团队隔离测试
 
@@ -705,7 +718,7 @@ L5 租户插件   TenantLineInnerInterceptor 自动追加 ← 兜底（防手写
 | 唯一约束 | 与 `DESIGN_BASIS §8` 一致；`uk_invtxn_team_reversed` **已裁定并入 `§8`**（裁定见 `§15.2`，旧编号 `D-13` 作废） |
 | 状态枚举取值 | `CHECK` 取值与 `§9` **逐字符一致**；`LeadTimeSource` / `InventoryBizType` / `SalesSource` / `PurchaseOrderSource` / `AuditAction` 等已由 `§9.17` 统一定义（旧编号 `D-14` 作废） |
 | 错误码 | 只使用 `ERROR_CODES.md §2` 已定义的错误码（固化成员以 `§12.3` 为准，`§12.3` 为成员资格权威）；4 条唯一键冲突码（`AUTH-1007`/`AUTH-1008`/`TEAM-2008`/`TEAM-2005`）已按 §4.1 对齐其触发条件所指的约束 |
-| 团队隔离 | 6 条硬规则逐条落地（§6.1）；2 处必要例外（`idx_run_timeout`、5 条无 `team_id` 前缀的唯一键）已显式声明 |
+| 团队隔离 | 6 条硬规则逐条落地（§6.1）；3 处必要例外（`idx_run_timeout`、**6 条**无 `team_id` 前缀的唯一键、**全库唯一 `ON DELETE CASCADE`**）已显式声明 |
 | 金额/数量/时间精度 | 与 `§14` 一致 |
 | 不一致与待决策 | 见 `DATABASE_DESIGN.md §11`（`INC-1`~`INC-3`、`D-09`~`D-16`） |
 
@@ -714,3 +727,4 @@ L5 租户插件   TenantLineInnerInterceptor 自动追加 ← 兜底（防手写
 | 日期 | 变更 | 依据 |
 | --- | --- | --- |
 | M0 | 初版创建（24 条唯一约束 + 5 类幂等 + 58 条索引 + 24 条典型查询 + CHECK 清单 + 32 条外键 + 5 层隔离与 5 个越权场景 + 并发对照表 + 测试清单） | `DESIGN_BASIS.md`、`DATABASE_DESIGN.md`、任务书 §5.4 |
+| M2 | 新增 `refresh_tokens`：唯一约束 24 → **25 条**、索引 82 → **84 条**、外键 32 → **33 条**（`fk_rt_user` 为**全库唯一 `ON DELETE CASCADE`**）；`§6` 规则 1 例外表 2 → **3 张** | `DESIGN_BASIS.md §8 / §15 D-01`、`DESIGN_REVIEW.md` R15、`DATABASE_DESIGN.md §4.4 / §5.23` |

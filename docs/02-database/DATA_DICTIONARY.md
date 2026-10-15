@@ -3,7 +3,7 @@
 > **文档编号**：`docs/02-database/DATA_DICTIONARY.md`
 > **文档地位**：数据模型的**字段级速查表**，与 `DATABASE_DESIGN.md` **逐字段严格一致**。
 > 两者冲突时以 `DATABASE_DESIGN.md` 为准（它是数据模型权威定义，`DESIGN_BASIS §1.1` P2）。
-> **表清单来源**：`DESIGN_BASIS §8`（22 张，权威）。枚举取值来源：`DESIGN_BASIS §9`。
+> **表清单来源**：`DESIGN_BASIS §8`（23 张，权威）。枚举取值来源：`DESIGN_BASIS §9`。
 > **阶段**：M0 设计阶段，仅设计文档，不产出 SQL。
 > 列含义：`字段名 | 中文名 | 类型 | 可空 | 默认值 | 键/约束 | 说明`
 
@@ -133,7 +133,7 @@
 
 ---
 
-## 5. 逐表字段字典（22 张）
+## 5. 逐表字段字典（23 张）
 
 ---
 
@@ -788,6 +788,34 @@
 
 ---
 
+### 5.23 `refresh_tokens`（Refresh Token 撤销表）
+
+> **新增表（R15 闭环）**：`D-01` 认证裁定要求 Refresh Token 存"MySQL 独立撤销表"；无此表则
+> `F-AUTH-01`（`POST /api/v1/auth/logout` 使 Refresh Token 失效）**无法实现**。见 `DATABASE_DESIGN.md §4.4 / §5.23`。
+> **本表无 `team_id`**（跨团队全局账号体系，按 `user_id` 组织），是 `DESIGN_BASIS §6` 规则 1 的**第 3 张例外表**。
+
+| 字段名 | 中文名 | 类型 | 可空 | 默认值 | 键/约束 | 说明 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `id` | 主键 | `BIGINT UNSIGNED` | 否 | `AUTO_INCREMENT` | `PK` | 不可变 |
+| `user_id` | 所属用户 | `BIGINT UNSIGNED` | 否 | — | `FK:fk_rt_user` → `users(id)` `ON DELETE CASCADE`、`IDX:idx_rt_user` | **不可变**；跨团队全局，**无 `team_id`** |
+| `token_hash` | 令牌摘要 | `CHAR(64)` | 否 | — | `UK:uk_rt_token_hash` | **SHA-256 摘要**（64 位小写十六进制）；**禁止存明文**（安全红线） |
+| `expires_at` | 过期时间 | `DATETIME(3)` | 否 | — | `IDX:idx_rt_expires` | UTC；签发时 = 当时 + 7d |
+| `revoked_at` | 撤销时间 | `DATETIME(3)` | 是 | `NULL` | — | UTC；**非 `NULL` 即已撤销**；登出/轮换时写入，写入后不可清空 |
+| `replaced_by` | 轮换后继摘要 | `CHAR(64)` | 是 | `NULL` | — | 轮换链：指向**新**令牌的 `token_hash` |
+| `ip_addr` | 签发时 IP | `VARCHAR(45)` | 是 | `NULL` | — | `45` = IPv6 兼容 |
+| `user_agent` | 签发时 UA | `VARCHAR(255)` | 是 | `NULL` | — | 截断至 255 |
+| `created_at` | 创建时间 | `DATETIME(3)` | 否 | `CURRENT_TIMESTAMP(3)` | — | 集合 A |
+| `updated_at` | 更新时间 | `DATETIME(3)` | 否 | `CURRENT_TIMESTAMP(3)` `ON UPDATE CURRENT_TIMESTAMP(3)` | — | 集合 A（登出/轮换会 UPDATE 本行） |
+| `created_by` | 创建人 | `BIGINT UNSIGNED` | 是 | `NULL` | 逻辑关联 `users.id` | 集合 A；通常等于 `user_id` |
+| `updated_by` | 更新人 | `BIGINT UNSIGNED` | 是 | `NULL` | 逻辑关联 `users.id` | 集合 A |
+
+**索引**：`uk_rt_token_hash (token_hash)`、`idx_rt_user (user_id)`、`idx_rt_expires (expires_at)`。
+**无 `version`**：状态翻转（未撤销 → 已撤销）单向一次，`uk_rt_token_hash` 已保证写入幂等（同 `sales_daily` 惯例）。
+**`team_id` 最左原则的例外**：本表**无 `team_id`**，属 `DATABASE_CONSTRAINTS.md §3.3` 声明的例外（同 `users` / `teams`）。
+**唯一例外 `ON DELETE CASCADE`**：全库仅本表允许级联（`ER_DIAGRAM.md §7.1`）——令牌是**派生凭据数据**，用户物理删除后必须立即失效，否则产生"可刷新但无用户"的悬挂凭据。
+
+---
+
 ## 6. 枚举字段取值速查（引用 `DESIGN_BASIS §9`，不重新定义）
 
 | # | 枚举名 | 取值列表 | 引用位置 | 出现字段 |
@@ -844,11 +872,12 @@
 | 20 | `goods_receipts` | 17 | A（4） | 是 | 22 |
 | 21 | `goods_receipt_items` | 10 | B（2） | 否 | 12 |
 | 22 | `audit_logs` | 20 | B（2） | 否 | 22 |
-| | **合计** | **341** | A×16 表 / B×6 表 | **12 张** | **429** |
+| 23 | `refresh_tokens` | 8 | A（4） | 否 | 12 |
+| | **合计** | **349** | A×17 表 / B×6 表 | **12 张** | **441** |
 
-> 「业务字段数」含 `id` 主键，不含公共审计字段（按集合 A/B 单列）。合计口径：`341 + 16×4 + 6×2 + 12（version）= 429`。
+> 「业务字段数」含 `id` 主键，不含公共审计字段（按集合 A/B 单列）。合计口径：`349 + 17×4 + 6×2 + 12（version）= 441`。
 
-> **完整性声明**：本表覆盖 `DESIGN_BASIS §8` 全部 **22 张表**与全部字段，无省略。任何字段变更必须同步 `DATABASE_DESIGN.md` 与 `DATABASE_CONSTRAINTS.md`（`§16`）。
+> **完整性声明**：本表覆盖 `DESIGN_BASIS §8` 全部 **23 张表**与全部字段，无省略。任何字段变更必须同步 `DATABASE_DESIGN.md` 与 `DATABASE_CONSTRAINTS.md`（`§16`）。
 
 ---
 
@@ -857,3 +886,4 @@
 | 日期 | 变更 | 依据 |
 | --- | --- | --- |
 | M0 | 初版创建（22 张表全字段字典、命名与类型规范、审计字段约定、枚举速查） | `DESIGN_BASIS.md §4.1 / §8 / §9 / §14`、`DATABASE_DESIGN.md` |
+| M2 | 新增 §5.23 `refresh_tokens` 字段字典；表数 22 → **23 张**；§7 合计 429 → **441** 字段 | `DESIGN_BASIS.md §8 / §15 D-01`、`DESIGN_REVIEW.md` R15、`DATABASE_DESIGN.md §4.4 / §5.23` |

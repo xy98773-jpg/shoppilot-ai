@@ -76,7 +76,7 @@
 
 **硬规则**：
 
-1. **`DELETE` 一律软删**。本项目 22 张表中，主数据（`warehouses`/`suppliers`/`products`/`skus`）用 `MasterDataStatus.INACTIVE` 表达停用；建议/采购单据不使用 `DELETE`（走状态流转 `CANCELLED`）。物理删除仅由运维在数据库层执行，**不提供 API**。
+1. **`DELETE` 一律软删**。本项目 23 张表中，主数据（`warehouses`/`suppliers`/`products`/`skus`）用 `MasterDataStatus.INACTIVE` 表达停用；建议/采购单据不使用 `DELETE`（走状态流转 `CANCELLED`）。物理删除仅由运维在数据库层执行，**不提供 API**。
 2. **`GET` 绝不产生副作用**（不写库、不写审计、不触发分析）。
 3. **`PUT` 与 `PATCH` 不得混用**表达同一更新意图。
 
