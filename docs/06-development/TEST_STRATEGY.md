@@ -347,6 +347,25 @@ HAVING b.on_hand_qty <> COALESCE(SUM(t.qty_delta), 0);
 - 采购单 `status` 必须能**由明细到货情况正确推导**：全部明细 `received_qty == ordered_qty` → `RECEIVED`；存在 `received_qty > 0` 且未全部收齐 → `PARTIALLY_RECEIVED`。
 - 测试对每种明细组合断言单头状态与派生结果一致（表驱动）。
 
+### 8.4 转采购的同口径冲突检测与显式确认（`F-03`）
+
+> 依据 `DESIGN_BASIS §9.11` 补充规则 5、`DATABASE_DESIGN.md §7.2 #8`、`DATABASE_CONSTRAINTS.md §7.1 P-33`。
+> 冲突口径 = 同 `team_id` × `warehouse_id` × `sku_id` 下的**其它** `APPROVED` 且未生成采购明细的建议。
+
+| # | 场景 | 期望 |
+| --- | --- | --- |
+| C-1 | 同口径存在其它 `APPROVED` 未转建议，请求**未带** `conflict_acknowledged` | 拒绝，返回 `RPL-8012`（409）；响应 `data.conflict_items` 含该冲突项；**无任何** PO / POI 写入，建议状态不变 |
+| C-2 | 承 C-1，带 `conflict_acknowledged=true` 且 `acknowledged_item_ids` **等于**当前冲突集重发 | 放行并建单成功；`audit_logs` 中存在 `action=PURCHASE_ORDER_CONFLICT_ACK`、`result=SUCCESS` 的记录 |
+| C-3 | 冲突集在两次请求之间发生变化（确认集已过期） | 再次返回 `RPL-8012`（集合已变化）；**不写** `PURCHASE_ORDER_CONFLICT_ACK` |
+| C-4 | 两个请求**并发**转同口径的两条不同建议 | 串行执行（锚点行锁），第二个事务等待至第一个提交；**不产生数据不一致**（无重复流水、无库存错账）；同口径两张非终态 PO 属**业务级允许**结果，由巡检项覆盖（非测试断言） |
+
+补充断言（建议随 C-2 一起做，成本极低）：
+
+- **回滚即撤销**：C-2 若在 ⑦⑧ 之后、提交之前人为抛异常 → 断言 `PURCHASE_ORDER_CONFLICT_ACK` 审计**不存在**
+  （该审计与业务同事务，不得留下「已确认但未转单」的孤儿记录）。
+- **锁序**：断言 `lockApprovedAnchors` 的实际加锁序为 `sku_id` 升序（可用 `EXPLAIN` 验证走 `idx_repl_team_sku_time`，
+  且**不出现** filesort）。
+
 ---
 
 ## 9. Python 单元测试

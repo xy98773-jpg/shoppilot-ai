@@ -155,6 +155,9 @@
 
 - [ ] **生成采购单**：由 `APPROVED` 建议 `POST /purchase-orders` → `DRAFT`；建议 → `CONVERTED`
 - [ ] **重复转换被拒**：同一建议再次转采购 → `PO-9001`
+- [ ] **同口径冲突未确认被拒**（`F-03`）：同 `team_id`×`warehouse_id`×`sku_id` 存在其它 `APPROVED` 未转建议 → `RPL-8012`，且不产生任何采购单
+- [ ] **显式确认后放行并留痕**：带正确 `conflict_acknowledged` + `acknowledged_item_ids` 重发 → 建单成功，且 `PURCHASE_ORDER_CONFLICT_ACK` 审计存在
+- [ ] **确认集过期**：冲突集变化后重发 → 再次 `RPL-8012`，且**不写**确认审计
 - [ ] **确认下单**：`:confirm` → `PENDING`；`:order` → `ORDERED`
 - [ ] **采购单创建不改库存**：创建/确认/下单前后，余额与流水**不变**
 - [ ] **到货登记**：`POST /goods-receipts` → `DRAFT`（不产生流水）
