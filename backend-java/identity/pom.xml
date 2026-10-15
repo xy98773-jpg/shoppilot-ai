@@ -20,5 +20,26 @@
             <groupId>com.shoppilot</groupId>
             <artifactId>shoppilot-common</artifactId>
         </dependency>
+
+        <!-- M1-T04：JWT 编解码库（TECH_STACK.md §1.2 指定 jjwt 0.12.x）。
+             api 编译期可见；impl / jackson 仅运行期需要，按官方推荐声明 runtime。
+             本期仅引入依赖与骨架，不实现签发/校验逻辑（M2-T02）。 -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>${jjwt.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
     </dependencies>
 </project>
