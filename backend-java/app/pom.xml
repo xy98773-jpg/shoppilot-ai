@@ -68,6 +68,34 @@
             <artifactId>archunit-junit5</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- M1-T11：版本守卫负向集成测试（Testcontainers 拉 mysql:8.0.12 断言启动被阻断）。
+             把 M1-T05 那次手工 3308 取证固化为可重复 CI（DEVELOPMENT_PLAN:205）。
+             版本显式锁定：Spring Boot BOM 不管理 Testcontainers。 -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <version>1.20.4</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>1.20.4</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>mysql</artifactId>
+            <version>1.20.4</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- 测试内手动构造 DataSource 驱动守卫（mysql-connector-j 已 runtime 范围，测试期可用） -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-jdbc</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
