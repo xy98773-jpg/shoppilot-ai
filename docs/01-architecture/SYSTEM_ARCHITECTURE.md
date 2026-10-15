@@ -34,7 +34,7 @@
 ShopPilot AI 首期采用 **前后端分离 + 模块化单体（Java）+ 独立 AI 服务（Python）** 的三段式架构：
 
 - **`frontend-web`（Vue 3）**：纯前端 SPA，只与 Java 通信。
-- **`backend-java`（Spring Boot 模块化单体，10 个模块）**：业务的**唯一权威**，负责身份、权限、业务规则、状态机、事务与落库。
+- **`backend-java`（Spring Boot 模块化单体，11 个模块，含 app 组合根）**：业务的**唯一权威**，负责身份、权限、业务规则、状态机、事务与落库。
 - **`service-ai`（FastAPI，8 个内部模块）**：只做**计算与解释**，不碰业务库，不感知权限。
 - **MySQL 8.0**：唯一业务持久化存储，由 Java 独占写入。
 

@@ -235,7 +235,7 @@ com.shoppilot.<module>.{api, application, domain, infrastructure}
 
 ## 7. 模块清单
 
-### 7.1 Java 后端模块（模块化单体，10 个）
+### 7.1 Java 后端模块（模块化单体，11 个）
 
 | 模块 | 中文 | 拥有表 | 允许依赖 |
 | --- | --- | --- | --- |
@@ -249,10 +249,12 @@ com.shoppilot.<module>.{api, application, domain, infrastructure}
 | `purchasing` | 采购与到货 | `purchase_orders`、`purchase_order_items`、`goods_receipts`、`goods_receipt_items` | `replenishment`、`inventory`、`catalog`、`common` |
 | `audit` | 审计 | `audit_logs` | `common`（**被所有模块调用，但自身不依赖任何业务模块**） |
 | `common` | 基础设施 | 无业务表 | **只能依赖框架，禁止依赖任何业务模块** |
+| `app` | 启动/组合根（非业务） | 无 | 依赖全部 10 个业务模块 + `common`；自身不被任何业务模块依赖（依赖 DAG 顶点）。**仅含 `@SpringBootApplication` 启动类 + 配置装配，禁止放业务类** |
 
 **依赖方向（强制，`purchasing → replenishment → analysis → {inventory, sales} → catalog → identity`）**：
 
 ```
+app（组合根：依赖全部 10 业务模块 + common，自身不被依赖）
 audit  ←（所有模块可调用）
 common ←（所有模块可依赖，common 自身不依赖任何业务模块）
 identity ← catalog ← {inventory, sales} ← analysis ← replenishment ← purchasing

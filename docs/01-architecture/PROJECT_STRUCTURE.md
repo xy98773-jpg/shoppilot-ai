@@ -76,7 +76,7 @@ ShopPilot-AI/
 │       ├── TEST_STRATEGY.md
 │       └── DESIGN_REVIEW.md
 │
-├── backend-java/                      # Spring Boot 模块化单体（10 模块）
+├── backend-java/                      # Spring Boot 模块化单体（11 模块）
 │   ├── pom.xml                        # 父 POM（聚合 + dependencyManagement）
 │   ├── mvnw  /  mvnw.cmd
 │   ├── .mvn/wrapper/
@@ -147,7 +147,11 @@ ShopPilot-AI/
 │   │       ├── domain/                # PurchaseOrder、PurchaseOrderItem、GoodsReceipt、
 │   │       │                          # GoodsReceiptItem、PurchaseOrderStatus、GoodsReceiptStatus
 │   │       └── infrastructure/        # *Mapper
-│   └── audit/
+│   ├── audit/
+│   └── app/
+│   │   └── src/main/java/com/shoppilot/app/
+│   │       ├── ShopPilotApplication.java   # @SpringBootApplication 启动类（唯一）
+│   │       └── config/                      # 配置装配（仅技术能力，无业务规则）
 │       └── src/main/java/com/shoppilot/audit/
 │           ├── api/                   # AuditLogController
 │           ├── application/           # AuditWriteService、AuditQueryService
@@ -290,7 +294,7 @@ com.shoppilot.inventory
 
 ```
 backend-java/
-├── pom.xml                 # 父 POM：packaging=pom，<modules> 聚合 10 个模块
+├── pom.xml                 # 父 POM：packaging=pom，<modules> 聚合 11 个模块
 ├── common/pom.xml
 ├── identity/pom.xml
 ├── catalog/pom.xml
@@ -300,11 +304,12 @@ backend-java/
 ├── analysis/pom.xml
 ├── replenishment/pom.xml
 ├── purchasing/pom.xml
-└── audit/pom.xml
+├── audit/pom.xml
+└── app/pom.xml
 ```
 
 - **依赖方向必须在各模块 `pom.xml` 中体现**：例如 `purchasing/pom.xml` 依赖 `replenishment`、`inventory`、`catalog`、`common`；**禁止**出现 `catalog/pom.xml` 依赖 `inventory`。
-- 每个模块 `packaging=jar`（首期不拆可执行 jar，由启动模块统一打包；启动模块建议为 `backend-java/app` 或复用其中一个模块。若新增启动模块，需同步更新 `MODULE_BOUNDARIES.md`）。
+- 每个模块 `packaging=jar`（首期不拆可执行 jar，由启动模块统一打包；启动模块已裁定为新增 `backend-java/app`（第 11 模块，组合根，非业务）：M1-T02 落骨架，仅含 `@SpringBootApplication` 启动类 + 配置装配，依赖全部业务模块 + common，自身不被依赖。模块清单见 `DESIGN_BASIS §7.1`，依赖边界见 `MODULE_BOUNDARIES §1.1/§1.2`。
 
 ---
 
@@ -541,7 +546,7 @@ schemas ← 全部模块（纯数据结构，被依赖）
 | # | 位置 | 现象 | 建议 |
 | --- | --- | --- | --- |
 | 1 | `DESIGN_BASIS.md §7.2` | 规定 Python 模块路径为 `app/api/`、`app/schemas/` 等（即 `app` 为包根内部目录），而 `§2` 规定"Python 包根 `shoppilot_ai`"。两者未说明 `app` 与 `shoppilot_ai` 的关系（`app` 是否为 `shoppilot_ai` 的别名/子包）。 | **与 DESIGN_BASIS 表述未明确**，建议在 `§2` 或 `§7.2` 补一句约定（如"`shoppilot_ai` 为可分发包名，服务容器内以 `app/` 作为包根"，或统一为 `shoppilot_ai/`）。本文件 §5 已按 `§7.2` 的 `app/` 布局书写，并注明包根为 `shoppilot_ai`。 |
-| 2 | `DESIGN_BASIS.md §7.1` | 10 个模块均为业务模块，**未定义 Spring Boot 启动模块**（`@SpringBootApplication` 所在模块）。 | **未明确**，建议约定一个启动模块（本文件 §4.3 提示："启动模块建议为 `backend-java/app` 或复用其中一个模块"）。若新增启动模块，需同步 `MODULE_BOUNDARIES.md`。 |
+| 2 | `DESIGN_BASIS.md §7.1` | 原"10 个模块均为业务模块，未定义 Spring Boot 启动模块" | ✅ **已裁定**：新增 `backend-java/app` 为第 11 模块（组合根，非业务），承载 `@SpringBootApplication`，依赖全部业务模块 + `common`，自身不被依赖（M1-T02 落骨架） |
 
 ---
 

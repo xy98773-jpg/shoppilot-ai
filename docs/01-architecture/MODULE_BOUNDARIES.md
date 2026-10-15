@@ -100,12 +100,16 @@ graph TD
 | `purchasing` | `replenishment`、`inventory`、`catalog`、`common` |
 | `audit` | `common`（自身不依赖业务模块） |
 | `common` | 仅框架 |
+| `app` | 全部 10 个业务模块 + `common`（组合根，自身不被任何业务模块依赖） |
+
+> **通用可依赖叶子模块（F-40 裁定）**：`common` 与 `audit` 为基础设施/横切叶子模块，**任何业务模块均可依赖，无需在上方逐行列出**。`audit` 被所有业务模块调用（见 §2.10、§8.1），`common` 被所有模块依赖；二者均不依赖任何业务模块，故不破坏依赖方向 DAG。ArchUnit 模块依赖断言据此豁免对 `common`/`audit` 的逐模块白名单检查。
 
 ### 1.2 强制依赖方向链
 
 ```
 purchasing → replenishment → analysis → {inventory, sales} → catalog → identity → common
 importdata → {catalog, inventory, sales} → catalog → identity → common
+app → 全部业务模块 → common（组合根，依赖所有业务模块 + common，自身不被依赖）
 ```
 
 ### 1.3 禁止的反向依赖（代码审查必查）
