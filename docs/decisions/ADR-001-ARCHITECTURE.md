@@ -9,7 +9,7 @@
 | 文档优先级 | P1（见 `DESIGN_BASIS.md §1.1`，仅次于 SSOT） |
 | 所属阶段 | M0 设计阶段 |
 | 版本 | v1.0（M0 定稿） |
-| 状态 | **Proposed**（其中 `ADR-001-12` 标注为"推荐但待确认"，关联待决策 `D-01`） |
+| 状态 | **Proposed**（其中 `ADR-001-12` 已于 2026-10-15 M2 启动前由架构裁定 `D-01`，转为 `Accepted`；其余子决策仍为 Proposed） |
 | 上游权威来源 | `docs/DESIGN_BASIS.md`（SSOT，P0） |
 | 主要读者 | 架构评审、开发、DevOps、验收方 |
 
@@ -632,7 +632,7 @@ ShopPilot AI 是一款面向小型电商团队的库存决策与采购协同平�
 
 ## ADR-001-12：认证方案选择无状态 JWT
 
-**状态**：Proposed（**推荐但待确认**，关联待决策 `DESIGN_BASIS §15 D-01`）
+**状态**：**Accepted**（2026-10-15，M2 启动前由项目负责人裁定 `D-01`：确认无状态 JWT；Refresh Token 存储位置裁定为 **MySQL 独立撤销表**，不引入 Redis）
 
 ### 背景
 
@@ -642,16 +642,28 @@ ShopPilot AI 是一款面向小型电商团队的库存决策与采购协同平�
 
 | 方案 | 说明 |
 | --- | --- |
-| **A. 无状态 JWT**（推荐） | Access 2h + Refresh 7d；Refresh 存独立表（M2 决定存储位置） |
+| **A. 无状态 JWT**（✅ 已采纳） | Access 2h + Refresh 7d；Refresh 存 **MySQL 独立撤销表**（`D-01` 裁定，不引入 Redis） |
 | **B. 服务端 Session（Redis）** | 引入 Redis 存 Session |
 | **C. 服务端 Session（JDBC Session）** | Session 存数据库表 |
 | **D. OAuth2/OIDC（第三方 IdP）** | 接入外部身份提供方 |
 
 ### 推荐方案
 
-**方案 A（推荐但待确认）**：无状态 JWT，Access Token 有效期 **2h**，Refresh Token **7d**。Refresh Token 的存储位置在 **M2 决定**（对应 `D-01` 表述）。
+**方案 A（已采纳）**：无状态 JWT，Access Token 有效期 **2h**，Refresh Token **7d**，Refresh Token 存 **MySQL 独立撤销表**。
 
-> **必须标注**：本决策为 `DESIGN_BASIS.md §15 D-01` 的**推荐方案**，但 **`D-01` 尚未最终确认**。若 `D-01` 最终选择 Session，则本子决策状态转为 `Superseded`，并同步修订 `ADR-001-07`（Redis 决策）。
+**`D-01` 裁定记录（2026-10-15，M2 启动前）** —— 对应 `DEVELOPMENT_PLAN §4.7 风险 1`「M2-T01 前完成 `D-01` 存储位置决策并登记 ADR」：
+
+| 项 | 裁定 | 依据 |
+| --- | --- | --- |
+| 认证形态 | **无状态 JWT**；服务端不存 Session，不引入 Redis | `DESIGN_BASIS §15 D-01`、`ADR-001-07` |
+| Access Token | TTL **2h**；客户端以 `Authorization: Bearer` 携带 | SSOT `D-01` 原值，本次不变更 |
+| Refresh Token | TTL **7d**；存储位置裁定为 **MySQL 独立撤销表**（与 `users` 无关的独立表） | SSOT `D-01` 推荐；`ADR-001-07` 不引入 Redis，故落 MySQL |
+| 是否引入 Redis | **否**。撤销表在 MySQL，仅在刷新/登出时访问，频次低 | `ADR-001-07`、`D-07` |
+| 登出与撤销 | 登出使 Refresh Token 失效（撤销表）；支持轮换撤销 | `API_CONTRACT §5` `POST /api/v1/auth/logout`（F-AUTH-01）要求"使 Refresh Token 失效" |
+| 即时失效兜底 | 每次请求校验 `users.status` / `team_members.status`，禁用/移出即 `AUTH-1003` / `TEAM-2003` | `API_CONTRACT §3.7:319` |
+| 传输方式 | Refresh 下发 `Set-Cookie`（httpOnly + Secure）并在响应体回显（兼容非浏览器客户端） | M2-T02 实现约定 |
+
+> **为何不采"完全无服务端状态"的变体**：`POST /api/v1/auth/logout`（F-AUTH-01）契约要求"使 Refresh Token 失效"。若 Refresh 纯无状态、服务端无任何记录，则登出无法真正失效——该变体与契约冲突，故**不采纳**。Redis 仍不引入，`ADR-001-07` 不变。
 
 ### 推荐理由
 
@@ -666,7 +678,7 @@ ShopPilot AI 是一款面向小型电商团队的库存决策与采购协同平�
 
 | 代价/风险 | 说明 | 缓解 |
 | --- | --- | --- |
-| **登出即时失效能力弱** | JWT 一旦签发，在有效期内难以即时撤销 | 短 Access TTL（2h）+ Refresh 撤销表；高风险操作可校验用户/团队状态 |
+| **登出即时失效能力弱** | JWT 一旦签发，在有效期内难以即时撤销 | 短 Access TTL（2h）+ **Refresh 撤销表（MySQL 独立表，`D-01` 裁定）** + 每次请求校验用户/成员状态（双重兜底） |
 | 令牌泄露风险 | Token 被盗用则在有效期内可用 | HTTPS、短 TTL、Refresh 轮换、绑定用户状态校验 |
 | 状态变更（禁用用户）延迟 | 禁用后旧 Token 仍可能在 TTL 内存活 | 每次请求校验 `UserStatus` 与 `TeamStatus`（返回 `AUTH-1003` / `TEAM-2002`） |
 | 密钥管理 | `JWT_SECRET` 泄露影响全局 | 密钥存环境变量、不入库不入仓；定期轮换 |
@@ -863,7 +875,7 @@ Python 侧需要完成后处理编排。可选"显式线性 Workflow"或"Agent�
 | ADR-001-09 | 如何保证库存、采购与到货的一致性 | Proposed | §3.1、§6、§14 | **`D-08`** ✅ 已裁定（不允许负库存） |
 | ADR-001-10 | 持久层选择 MyBatis-Plus 而非 JPA | Proposed | §4.1、§6 第 4 条 | — |
 | ADR-001-11 | 状态字段用可读字符串枚举而非 TINYINT | Proposed | §4.1、§9 | — |
-| ADR-001-12 | 认证方案选择无状态 JWT（推荐但待确认） | Proposed（待确认） | §5.1、§15 | **`D-01`** |
+| ADR-001-12 | 认证方案选择无状态 JWT | **Accepted**（`D-01` 已裁定 2026-10-15） | §5.1、§15 | **`D-01`** ✅ 已裁定（JWT + Refresh 存 MySQL 独立撤销表，不引入 Redis） |
 | ADR-001-13 | 数量与金额用 DECIMAL/Decimal 并约定 JSON 传输格式 | Proposed | §14.2 | — |
 | ADR-001-14 | `analysis_items` 与 `replenishment_items` 分离 | Proposed | §3.1 第 1 条、§8 | — |
 | ADR-001-15 | Python 侧为线性 Workflow 而非 Agent 自主循环 | Proposed | §2.1、§11、§7.2 | — |
@@ -889,7 +901,7 @@ Python 侧需要完成后处理编排。可选"显式线性 Workflow"或"Agent�
 | ADR-001-09 一致性保障 | ① 需分库分表/跨库写入；② 出现跨服务事务；③ 引入 MQ 采用最终一致 + 补偿；④ 单库写入成为瓶颈且无法通过索引/批处理解决 |
 | ADR-001-10 MyBatis-Plus | ① 出现极复杂对象图持久化需求；② MyBatis-Plus 与 Spring Boot starter 长期不兼容；③ 团队转向 JPA；④ 需跨数据库方言 |
 | ADR-001-11 字符串枚举 | ① 海量状态行使存储/索引成为可测量瓶颈；② 需多语言状态标签（可用展示层解决）；③ 迁移到不支持 `CHECK` 的引擎；④ 状态数量膨胀需字典表治理 |
-| ADR-001-12 无状态 JWT | ① `D-01` 最终选 Session（则被取代）；② 出现强合规要求（即时全局登出/会话审计/SSO）；③ 需接入第三方身份源；④ Token 撤销成为高频需求；⑤ 多设备登录管理需求上升 |
+| ADR-001-12 无状态 JWT | ① ~~`D-01` 最终选 Session~~（`D-01` 已于 2026-10-15 裁定为 JWT，该待定项已关闭；未来若改选 Session 需新 ADR 取代）；② 出现强合规要求（即时全局登出/会话审计/SSO）；③ 需接入第三方身份源；④ Token 撤销成为高频需求，撤销表成为写瓶颈；⑤ 多设备登录管理需求上升 |
 | ADR-001-13 DECIMAL/Decimal | ① 出现更高精度需求；② 出现跨币种/汇率需求；③ JSON 数值传输在性能/兼容性上成为问题；④ 引入需浮点友好的新计算库 |
 | ADR-001-14 快照与建议分离 | ① 快照数据量需归档（不等于合并表）；② 双表 JOIN 成为瓶颈；③ 出现"快照可被修正"的合规需求；④ 分析结果模型结构性变化 |
 | ADR-001-15 线性 Workflow | ① 需 LLM 自主规划步骤；② 需工具调用且保证可测试/可审计；③ 出现多步骤条件分支；④ 行业实践成熟到可测试、可解释地支持 Agent 循环 |
@@ -920,3 +932,4 @@ Python 侧需要完成后处理编排。可选"显式线性 Workflow"或"Agent�
 | --- | --- | --- | --- |
 | v1.0 | 2026-10-14 | M0 初稿：ADR 说明（编号/状态机/范围）、15 个架构决策（各含背景/可选方案/推荐方案/理由/代价/重评触发）、ADR 索引表、重新评估清单、一致性声明 | 架构 |
 | v1.1 | 2026-10-15 | M1-T01：模块清单 10→11，新增 app 组合根模块（承载 @SpringBootApplication，依赖全部业务模块 + common，自身不被依赖）；F-40 裁定 common/audit 为通用可依赖叶子模块 | 架构 |
+| v1.2 | 2026-10-15 | M2 启动前：**`D-01` 裁定并登记**——认证确认采用无状态 JWT；Refresh Token 存储位置裁定为 **MySQL 独立撤销表**（不引入 Redis）。`ADR-001-12` 状态 Proposed→**Accepted**；同步 `DESIGN_BASIS §15 D-01` 标注 ✅ 已裁定；`DESIGN_REVIEW.md` 登记 R14。明确不采"完全无服务端状态"变体（与登出失效契约冲突） | 架构（项目负责人裁定） |

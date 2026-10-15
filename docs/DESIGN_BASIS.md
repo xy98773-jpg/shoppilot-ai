@@ -814,7 +814,7 @@ effective_in_transit_qty = Σ(poi.ordered_qty − poi.received_qty)
 
 | 编号 | 问题 | 推荐方案 | 可选方案 | 影响 |
 | --- | --- | --- | --- | --- |
-| `D-01` | 认证方案选 JWT 还是 Session | **JWT（无状态）**，Access Token 2h + Refresh Token 7d，Refresh Token 存 `users` 无关的独立表（M2 决定存储位置） | 服务端 Session（需引入 Redis 或 JDBC Session） | 影响是否引入 Redis、影响登出即时失效能力 |
+| **`D-01`** ✅ | 认证方案选 JWT 还是 Session | **JWT（无状态）**，Access Token 2h + Refresh Token 7d，Refresh Token 存 `users` 无关的独立表（~~M2 决定存储位置~~ → **2026-10-15 已裁定：MySQL 独立撤销表，不引入 Redis；见 `ADR-001-12`**） | 服务端 Session（需引入 Redis 或 JDBC Session） | 影响是否引入 Redis、影响登出即时失效能力 |
 | `D-02` | 是否首期支持多仓库（同团队多仓） | **数据模型支持，UI 只暴露默认仓** | 首期完整多仓 UI | 影响库存页面复杂度与 `warehouse_id` 必填策略 |
 | `D-03` | 日均销量是否需要趋势/季节修正 | **首期不做**，用 `avg-ma-3sigma-v1` | 加线性趋势回归 | 影响补货准确性，但会显著增加可解释性与测试成本 |
 | `D-04` | 安全库存公式 | **简化 `SS = D × ceil(L × 0.5)`** | 标准式 `Z × σ × √L`（需服务水平参数） | 影响补货量的严谨性与参数复杂度 |
