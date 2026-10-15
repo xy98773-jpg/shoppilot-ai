@@ -75,6 +75,16 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>3.13.0</version>
+                    <configuration>
+                        <!-- ★ M2-T02 修复：Spring Framework 6.1+ 解析 @PathVariable / @RequestParam /
+                             @RequestParam 绑定与构造器参数名时【不再】依赖 debug 信息，而是要求
+                             编译器写入 MethodParameters 属性（-parameters）。本项目使用自定义父 pom
+                             （未继承 spring-boot-starter-parent，后者默认开启该标志），故必须显式开启；
+                             否则运行期抛 IllegalArgumentException:
+                             "Name for argument of type [...] not specified ... Ensure that the
+                             compiler uses the '-parameters' flag."（表现为 500 + COM-0002）。 -->
+                        <parameters>true</parameters>
+                    </configuration>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
