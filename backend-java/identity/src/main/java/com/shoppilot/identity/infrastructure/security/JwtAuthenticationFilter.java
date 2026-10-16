@@ -1,9 +1,12 @@
 package com.shoppilot.identity.infrastructure.security;
 
 import com.shoppilot.identity.domain.model.MemberStatus;
+import com.shoppilot.identity.domain.model.TeamStatus;
 import com.shoppilot.identity.domain.model.UserStatus;
+import com.shoppilot.identity.infrastructure.persistence.entity.TeamEntity;
 import com.shoppilot.identity.infrastructure.persistence.entity.TeamMemberEntity;
 import com.shoppilot.identity.infrastructure.persistence.entity.UserEntity;
+import com.shoppilot.identity.infrastructure.persistence.mapper.TeamMapper;
 import com.shoppilot.identity.infrastructure.persistence.mapper.TeamMemberMapper;
 import com.shoppilot.identity.infrastructure.persistence.mapper.UserMapper;
 import com.shoppilot.common.context.TeamContext;
@@ -37,6 +40,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
  *   <li><b>第 2 步 用户状态</b>：<b>实时</b>查 {@code users.status}，非 {@code ACTIVE} → 403 {@code AUTH-1003}。
  *       这就是「禁用用户后，其旧 Access Token 下一个请求即被拒」的实现——
  *       不依赖吊销 Access Token，也无需 jti 黑名单（{@code API_CONTRACT §5.5} 第 3 条）。</li>
+ *   <li><b>第 5 步 团队状态</b>（M2-T13.5 新增）：<b>实时</b>查 {@code teams.status}，非 {@code ACTIVE}
+ *       → 403 {@code TEAM-2002}。这是<b>会话级前置</b>，执行于 {@code @RequireRole} 切面（角色判定，第 7 步）
+ *       与资源级团队归属判定（第 4 步）之前——故「自身团队停用」对任何角色、任何业务端点
+ *       （含 catalog 全部端点）一律 {@code TEAM-2002}（修复 R20 / R21，裁定依据见 {@code DESIGN_REVIEW.md} R22）。
+ *       {@code teams} 属 {@code TenantTables.WITHOUT_TEAM_ID} 例外表，{@code selectById} 不受租户线影响。</li>
  *   <li><b>第 3 步 团队解析</b>：{@code team_id} <b>只</b>取自 JWT claim，绝不接受客户端传入。</li>
  *   <li><b>第 6 步 成员状态</b>：<b>实时</b>查 {@code team_members.status}，非 {@code ACTIVE} → 403 {@code TEAM-2003}。</li>
  * </ol>
@@ -65,15 +73,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider jwtTokenProvider;
     private final UserMapper userMapper;
+    private final TeamMapper teamMapper;
     private final TeamMemberMapper teamMemberMapper;
     private final SecurityErrorWriter errorWriter;
 
     public JwtAuthenticationFilter(JwtTokenProvider jwtTokenProvider,
                                    UserMapper userMapper,
+                                   TeamMapper teamMapper,
                                    TeamMemberMapper teamMemberMapper,
                                    SecurityErrorWriter errorWriter) {
         this.jwtTokenProvider = jwtTokenProvider;
         this.userMapper = userMapper;
+        this.teamMapper = teamMapper;
         this.teamMemberMapper = teamMemberMapper;
         this.errorWriter = errorWriter;
     }
@@ -140,6 +151,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 log.warn("用户已被禁用，拒绝请求 userId={}", userId);
                 errorWriter.write(response, HttpStatus.FORBIDDEN.value(),
                         ErrorCodes.AUTH_1003, "账号已被禁用，请联系管理员");
+                return;
+            }
+
+            // ---- 第 5 步：团队状态（实时，会话级前置）----
+            // teams 属 TenantTables.WITHOUT_TEAM_ID 例外表，teamMapper.selectById 不受租户线影响。
+            TeamEntity team = teamMapper.selectById(teamId);
+            if (team == null || !TeamStatus.ACTIVE.name().equals(team.getStatus())) {
+                log.warn("团队已停用，拒绝请求 userId={} teamId={}", userId, teamId);
+                errorWriter.write(response, HttpStatus.FORBIDDEN.value(),
+                        ErrorCodes.TEAM_2002, "您所属的团队已停用，请联系管理员");
                 return;
             }
 

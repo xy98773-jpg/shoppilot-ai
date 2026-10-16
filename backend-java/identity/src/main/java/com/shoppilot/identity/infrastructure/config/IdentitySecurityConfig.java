@@ -1,6 +1,7 @@
 package com.shoppilot.identity.infrastructure.config;
 
 import com.shoppilot.common.security.SecurityFilterContributor;
+import com.shoppilot.identity.infrastructure.persistence.mapper.TeamMapper;
 import com.shoppilot.identity.infrastructure.persistence.mapper.TeamMemberMapper;
 import com.shoppilot.identity.infrastructure.persistence.mapper.UserMapper;
 import com.shoppilot.identity.infrastructure.security.JwtAuthenticationFilter;
@@ -35,10 +36,11 @@ public class IdentitySecurityConfig {
     public SecurityFilterContributor jwtAuthenticationFilterContributor(
             JwtTokenProvider jwtTokenProvider,
             UserMapper userMapper,
+            TeamMapper teamMapper,
             TeamMemberMapper teamMemberMapper,
             SecurityErrorWriter securityErrorWriter) {
         JwtAuthenticationFilter filter = new JwtAuthenticationFilter(
-                jwtTokenProvider, userMapper, teamMemberMapper, securityErrorWriter);
+                jwtTokenProvider, userMapper, teamMapper, teamMemberMapper, securityErrorWriter);
         return () -> filter;
     }
 }
