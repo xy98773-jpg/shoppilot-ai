@@ -521,7 +521,7 @@
 
 - **主键**：`id`。**外键**：无（自关联为逻辑关联）。
 - **唯一约束**：`uk_imp_team_hash_biz (team_id, dedupe_hash, biz_type)`。
-  > ⚠️ **与 `DESIGN_BASIS §8` 不一致，建议修订**：§8 将唯一约束写作 `uk_imp_team_hash_biz (team_id, file_hash, biz_type)`，但 §9.5 同时要求存在 `DUPLICATE_REJECTED` 批次记录，并要求支持 `FORCE_REIMPORT` 生成新批次。若唯一键直接建在 `file_hash` 上，则：① **重复上传时无法插入** `DUPLICATE_REJECTED` 记录；② **强制重导时新批次必然违反唯一键**（旧批次是终态 `COMPLETED`，不可改状态）。因此把物理列改为**可空槽位列 `dedupe_hash`**（占用/释放规则见 §6-E），**约束名与业务语义不变**。建议修订 §8 为 `uk_imp_team_hash_biz (team_id,dedupe_hash,biz_type)`，并在 §9.5 补充"槽位占用/释放"规则。已登记为待决策 **`D-09`**（§11）。
+  > ⚠️ **`DESIGN_BASIS.md §8` 表行字面与本设计不一致（§8 补充说明已澄清，见 `DESIGN_REVIEW.md` R31）**：§8 表行将唯一约束写作 `uk_imp_team_hash_biz (team_id, file_hash, biz_type)`，但 §9.5 同时要求存在 `DUPLICATE_REJECTED` 批次记录，并要求支持 `FORCE_REIMPORT` 生成新批次。若唯一键直接建在 `file_hash` 上，则：① **重复上传时无法插入** `DUPLICATE_REJECTED` 记录；② **强制重导时新批次必然违反唯一键**（旧批次是终态 `COMPLETED`，不可改状态）。因此把物理列改为**可空槽位列 `dedupe_hash`**（占用/释放规则见 §6-E），**约束名与业务语义不变**。建议修订 §8 为 `uk_imp_team_hash_biz (team_id,dedupe_hash,biz_type)`，并在 §9.5 补充"槽位占用/释放"规则。**已裁定**（`DESIGN_BASIS.md §15.1`，落实位置＝§8 补充说明 + `§9.5`）：引入可空列 `dedupe_hash` + 唯一键允许 NULL 共存，`FORCE_REIMPORT` 明确为**动作**而非状态。旧编号 **`D-09`** 已作废（`DESIGN_BASIS.md §15.2` 规则 2，另见 `DESIGN_REVIEW.md` R30）。
 - **索引**：`idx_imp_team_status_time (team_id, status, created_at)`（批次列表页按状态筛选 + 倒序）；`idx_imp_team_biz_time (team_id, biz_type, created_at)`（按业务类型查历史）；`idx_imp_team_file_hash (team_id, file_hash)`（**非唯一**：按原始哈希回溯全部尝试；唯一键已保证槽位唯一，此索引用于历史查询）。
 - **团队隔离**：`team_id` 最左；文件哈希的幂等判定**只在团队内**（不同团队上传同一文件互不影响）。
 - **更新规则**：状态按 `§9.5` 单向流转，终态不可变；`file_hash` / `biz_type` / `batch_no` / `file_name` 不可变；不物理删除（取消 → `CANCELLED`）。
@@ -1798,9 +1798,11 @@ replenishment_items.status = 'APPROVED'
 | **INC-2** | `DESIGN_BASIS §6` 规则 2 vs `§8` | §6 规则 2 要求"所有团队业务表的唯一约束必须带 `team_id` 前缀"，但 §8 中 `uk_ai_run_sku_wh (run_id,sku_id,warehouse_id)` 与 `uk_repl_run_sku_wh (run_id,sku_id,warehouse_id)` **未带 `team_id`** | 按 §8 执行（**§8 是具体清单，优先于 §6 的概括规则**），团队维度由 `analysis_runs.team_id` + `idx_ai_team_run` 保证 | ⚠️ **与 `DESIGN_BASIS §6` 规则 2 字面不一致，建议在 §6 增加豁免条款**："经团队归属父表派生的业务键（如 `run_id`、`purchase_order_id`）可豁免 `team_id` 前缀"。详见 `D-10` |
 | **INC-3** | `DESIGN_BASIS §6` 规则 1 的例外清单 | §6 规则 1 的例外只列了 `users` 与 `teams`，但未说明"**无团队上下文的操作**（登录/登出/全局任务）在含 `team_id NOT NULL` 的表（如 `audit_logs`）中如何取值" | 约定 `team_id = 0` 表示**系统域**（哨兵值），并在 `audit_logs.team_id` 上不加外键 | ⚠️ **`DESIGN_BASIS §6` 未覆盖该边界，建议在 §6 补充"系统域哨兵 `team_id = 0`"的说明**。详见 `D-11` |
 
-### 11.2 新增待决策事项（延续 `DESIGN_BASIS §15` 的编号）
+### 11.2 旧编号待决策事项（**编号已作废，保留仅为追溯**）
 
-> `DESIGN_BASIS §15` 已使用 `D-01`~`D-08`。以下为本设计新发现的待决策项，沿用 `D-xx` 编号。
+> ⚠️ **本表编号为已作废的旧编号**（`DESIGN_BASIS.md §15.2` 规则 2：其他文档中出现的 `D-09` 及之后的编号**一律作废**，不得再作为待决策依据使用）。
+> 本表原前提「`DESIGN_BASIS §15` 已使用 `D-01`~`D-08`」**已过时** —— §15 权威编号现用至 `D-25`，故本表 `D-09`~`D-16` 与权威编号**含义不同**（一号两义，见 `DESIGN_REVIEW.md` R18 / R30）。
+> 表中事项多已在 M0 审查中裁定关闭（`DESIGN_BASIS.md §15.1`）；**解读口径以 `DESIGN_REVIEW.md §3.3` 编号迁移表为准**，权威待决策清单见 `DESIGN_BASIS.md §15`。
 
 | 编号 | 问题 | 推荐方案 | 可选方案 | 影响 | 关联 |
 | --- | --- | --- | --- | --- | --- |
