@@ -44,7 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * M2-T11 审计写入通道 —— 端到端集成测试（真实 MySQL + 真实 Spring 上下文 + 真实 HTTP）。
  *
- * <p><b>真栈</b>：MySQL 8.0.36（Testcontainers）+ 真实 Flyway 迁移链（V1.0.0 → V1.0.4）
+ * <p><b>真栈</b>：MySQL 8.0.36（Testcontainers）+ 真实 Flyway 迁移链（V1.0.0 → V1.0.5）
  * + 真实登录/JWT/租户线 + {@code @Audited} 切面 + {@code AuditWriteService}（REQUIRES_NEW）。
  *
  * <p>覆盖任务书 §6 硬门槛：迁移全链、5 索引 team_id 最左、CHECK、零外键/零唯一、
@@ -119,16 +119,17 @@ class AuditChannelIntegrationTest {
     }
 
     // =====================================================================
-    // §6-1 Flyway 全链：V1.0.0 → V1.0.4 共 5 行 success
+    // §6-1 Flyway 全链：V1.0.0 → V1.0.5 共 6 行 success
     // =====================================================================
 
     @Test
-    @DisplayName("§6-1 Flyway 全链：V1.0.0→V1.0.4 共 5 行、全部 success=1")
+    @DisplayName("§6-1 Flyway 全链：V1.0.0→V1.0.5 共 6 行、全部 success=1")
     void flywayChainAppliedThroughV104() {
         List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT version, success FROM flyway_schema_history ORDER BY installed_rank");
-        assertEquals(5, rows.size(), "迁移链应为 5 条（baseline/identity/refresh_tokens/catalog/audit）");
-        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4"),
+        assertEquals(6, rows.size(),
+                "迁移链应为 6 条（baseline/identity/refresh_tokens/catalog/audit/importdata）");
+        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5"),
                 rows.stream().map(r -> String.valueOf(r.get("version"))).toList());
         for (Map<String, Object> row : rows) {
             Object success = row.get("success");
