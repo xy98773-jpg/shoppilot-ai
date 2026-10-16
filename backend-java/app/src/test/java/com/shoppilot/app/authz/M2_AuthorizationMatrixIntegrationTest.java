@@ -239,8 +239,8 @@ class M2_AuthorizationMatrixIntegrationTest {
      * 而 OWNER 在角色判定上本就「通过」，<b>无法区分两种实现顺序</b>。只有把非管理角色
      * （OPERATOR/APPROVER/VIEWER）纳入，顺序才被真正约束住。
      *
-     * <p>★ 受 {@code @RequireRole} 保护的端点上是另一回事（实测非管理角色会先撞角色判定）。
-     * 该差异已作为缺口 R21 登记，见下方 {@link #disabledTeamWithNonManagerRoleHitsRoleCheckFirst()}。
+     * <p>★ 受 {@code @RequireRole} 保护的端点上同样成立（M2-T13.5 修复 R21 后）：团队状态判定
+     * 已在认证过滤链统一执行、先于角色切面。见下方 {@link #disabledTeamDeniedBeforeRoleCheck()}。
      */
     @ParameterizedTest(name = "[{index}] 团队停用 × {0} × 读团队详情 → TEAM-2002")
     @EnumSource(value = Role.class)
@@ -264,49 +264,91 @@ class M2_AuthorizationMatrixIntegrationTest {
     }
 
     /**
-     * ★ <b>缺口记录（R21）</b>——不是期望，而是<b>当前行为的快照</b>。
+     * R21 修复证据（M2-T13.5）：团队状态判定（第 5 步）已在认证过滤链统一执行，
+     * 先于 {@code @RequireRole} 切面（角色判定，第 7 步）。因此团队停用后，<b>无论</b>何种角色
+     * 访问任何业务端点（含受 {@code @RequireRole} 保护的 {@code GET /teams/{id}/members}）
+     * 都先得 {@code TEAM-2002}，而非 {@code TEAM-2003}。
      *
-     * <p>{@code USER_ROLES §4.1} 固定顺序为「团队归属(TEAM-2001) → <b>团队状态(TEAM-2002)</b> →
-     * 角色授权(TEAM-2003)」。但 {@code @RequireRole} 是 Controller 层切面
-     * （{@code RequireRoleAspect}），团队状态判定却在业务服务层
-     * （{@code TeamScopeValidator.assertTeamActive}）—— 于是对<b>非管理角色</b>，
-     * 角色判定先执行、抛出 {@code TEAM-2003}，服务层根本轮不到。
-     *
-     * <p>实测（Testcontainers 真栈）：{@code GET /teams/{id}/members}（带
-     * {@code @RequireRole({"OWNER","ADMIN"})}）在团队停用后，
-     * OWNER/ADMIN → {@code TEAM-2002}（正确），
-     * <b>OPERATOR/APPROVER/VIEWER → {@code TEAM-2003}</b>（与 §4.1 顺序不符）。
-     *
-     * <p>本用例固化现状以便回归与追踪；<b>R21 落实后应把断言改为 {@code TEAM-2002}</b>。
-     * 权威顺序的落实方式（切面内补团队状态、或把该步上移到过滤器之后统一执行）
-     * 属生产代码改动，按 M2-T13 §5 红线<b>本批不做</b>，留项目负责人裁定。
+     * <p>5 个角色全跑：OWNER/ADMIN 作为对照组（本就穿过角色判定）；OPERATOR/APPROVER/VIEWER
+     * 作为修复前会先撞 {@code TEAM-2003} 的角色——修复后一律 {@code TEAM-2002}。
      */
     @Test
-    @DisplayName("★ 缺口记录 R21：团队停用 × 非管理角色访问 @RequireRole 端点 → 实测 TEAM-2003（应改为 TEAM-2002）")
-    void disabledTeamWithNonManagerRoleHitsRoleCheckFirst() throws Exception {
-        for (String role : List.of("OPERATOR", "APPROVER", "VIEWER")) {
-            String token = tokenOf(role);
+    @DisplayName("§1-A R21 修复：团队停用 × 任意角色访问 @RequireRole 端点 → 统一 TEAM-2002（先于角色判定）")
+    void disabledTeamDeniedBeforeRoleCheck() throws Exception {
+        for (Role role : Role.values()) {
+            String token = tokenOf(role.name());
             jdbc.update("UPDATE teams SET status = 'DISABLED' WHERE id = ?", TEAM_ID);
             try {
                 String actual = codeOf(get("/api/v1/teams/" + TEAM_ID + "/members", token));
-                assertEquals(TEAM_2003, actual,
-                        role + " 在当前实现下会先撞角色判定（R21 缺口的现状快照）；实测=" + actual);
+                assertEquals(TEAM_2002, actual,
+                        role + " 团队停用后应得 TEAM-2002（团队状态先于角色判定）；实测=" + actual);
             } finally {
                 jdbc.update("UPDATE teams SET status = 'ACTIVE' WHERE id = ?", TEAM_ID);
             }
+        }
+    }
+
+    /**
+     * R20 修复证据（M2-T13.5）：团队停用后，catalog 全部四类主数据端点必须统一返回 403 TEAM-2002。
+     *
+     * <p><b>修复方式</b>：把「团队状态」上移到认证过滤链（第 5 步），<b>不</b>在 catalog 各服务方法散落补校验
+     * （那正是 R20 的成因——散落必漏，catalog 曾整域缺失）。故本用例断言<b>所有</b> catalog 端点
+     * （含 {@code GET} 列表/详情、{@code POST}、{@code PATCH}、{@code DELETE}、{@code PATCH /status}）
+     * 在团队停用后一律 {@code TEAM-2002}，且无需任何 catalog 代码改动即自动获得。
+     *
+     * <p>对照组：团队恢复 {@code ACTIVE} 后，同一批请求恢复 2xx——
+     * 证明失败的唯一原因是「团队停用」，而非数据/权限等其它因素。
+     */
+    @Test
+    @DisplayName("§1-A R20 修复：团队停用后 catalog 四表全端点 → 403 TEAM-2002；恢复 ACTIVE 后 → 2xx")
+    void catalogDeniedWhenTeamDisabled() throws Exception {
+        String token = tokenOf("OWNER"); // 即便 OWNER（修复前可写 catalog）也须被 TEAM-2002 拦
+
+        // ---- 阶段一：团队 ACTIVE 时，为 team 7 建种子资源并验证 2xx ----
+        long whId = createResource("/api/v1/warehouses", "{\"code\":\"WH-SEED\",\"name\":\"种子仓库\"}", token);
+        long supId = createResource("/api/v1/suppliers", "{\"code\":\"SUP-SEED\",\"name\":\"种子供应商\"}", token);
+        long prdId = createResource("/api/v1/products", "{\"product_code\":\"PRD-SEED\",\"name\":\"种子商品\"}", token);
+        long skuId = createResource("/api/v1/skus",
+                "{\"product_id\":" + prdId + ",\"sku_code\":\"SKU-SEED\",\"name\":\"种子SKU\"}", token);
+        assert2xx(get("/api/v1/warehouses", token));
+
+        // ---- 阶段二：停用团队，四类主数据全端点应为 TEAM-2002 ----
+        jdbc.update("UPDATE teams SET status = 'DISABLED' WHERE id = ?", TEAM_ID);
+        try {
+            // warehouses：列表 / 详情 / 新建 / 改名 / 停用(DELETE 软删) / 启用(PATCH status)
+            assertTeam2002(get("/api/v1/warehouses", token));
+            assertTeam2002(get("/api/v1/warehouses/" + whId, token));
+            assertTeam2002(post("/api/v1/warehouses", "{\"code\":\"WH-X\",\"name\":\"x\"}", token));
+            assertTeam2002(patch("/api/v1/warehouses/" + whId, "{\"name\":\"x\"}", token));
+            assertTeam2002(delete("/api/v1/warehouses/" + whId, token));
+            assertTeam2002(patch("/api/v1/warehouses/" + whId + "/status", "{\"status\":\"ACTIVE\"}", token));
+            // suppliers：无 PATCH status
+            assertTeam2002(get("/api/v1/suppliers", token));
+            assertTeam2002(get("/api/v1/suppliers/" + supId, token));
+            assertTeam2002(post("/api/v1/suppliers", "{\"code\":\"SP-X\",\"name\":\"x\"}", token));
+            assertTeam2002(patch("/api/v1/suppliers/" + supId, "{\"name\":\"x\"}", token));
+            assertTeam2002(delete("/api/v1/suppliers/" + supId, token));
+            // products：无 PATCH status
+            assertTeam2002(get("/api/v1/products", token));
+            assertTeam2002(get("/api/v1/products/" + prdId, token));
+            assertTeam2002(post("/api/v1/products", "{\"product_code\":\"PRD-X\",\"name\":\"x\"}", token));
+            assertTeam2002(patch("/api/v1/products/" + prdId, "{\"name\":\"x\"}", token));
+            assertTeam2002(delete("/api/v1/products/" + prdId, token));
+            // skus：含 PATCH status
+            assertTeam2002(get("/api/v1/skus", token));
+            assertTeam2002(get("/api/v1/skus/" + skuId, token));
+            assertTeam2002(post("/api/v1/skus",
+                    "{\"product_id\":" + prdId + ",\"sku_code\":\"SKU-X\",\"name\":\"x\"}", token));
+            assertTeam2002(patch("/api/v1/skus/" + skuId, "{\"name\":\"x\"}", token));
+            assertTeam2002(delete("/api/v1/skus/" + skuId, token));
+            assertTeam2002(patch("/api/v1/skus/" + skuId + "/status", "{\"status\":\"ACTIVE\"}", token));
+        } finally {
+            jdbc.update("UPDATE teams SET status = 'ACTIVE' WHERE id = ?", TEAM_ID);
         }
 
-        // 对照组：管理角色能穿过角色判定，因而得到权威顺序要求的 TEAM-2002
-        for (String role : List.of("OWNER", "ADMIN")) {
-            String token = tokenOf(role);
-            jdbc.update("UPDATE teams SET status = 'DISABLED' WHERE id = ?", TEAM_ID);
-            try {
-                assertEquals(TEAM_2002, codeOf(get("/api/v1/teams/" + TEAM_ID + "/members", token)),
-                        role + " 应穿过角色判定并得到 TEAM-2002");
-            } finally {
-                jdbc.update("UPDATE teams SET status = 'ACTIVE' WHERE id = ?", TEAM_ID);
-            }
-        }
+        // ---- 阶段三：恢复 ACTIVE 后，同一批请求恢复 2xx（证明失败唯一原因 = 团队停用）----
+        assert2xx(get("/api/v1/warehouses", token));
+        assert2xx(post("/api/v1/warehouses", "{\"code\":\"WH-Y\",\"name\":\"y\"}", token));
     }
 
     // =====================================================================
@@ -405,6 +447,10 @@ class M2_AuthorizationMatrixIntegrationTest {
         return rest.exchange(path, HttpMethod.PATCH, entity(jsonBody, bearer), String.class);
     }
 
+    private ResponseEntity<String> delete(String path, String bearer) {
+        return rest.exchange(path, HttpMethod.DELETE, entity(null, bearer), String.class);
+    }
+
     private ResponseEntity<String> get(String path, String bearer) {
         return rest.exchange(path, HttpMethod.GET, entity(null, bearer), String.class);
     }
@@ -423,5 +469,26 @@ class M2_AuthorizationMatrixIntegrationTest {
     private String codeOf(ResponseEntity<String> response) throws Exception {
         JsonNode body = objectMapper.readTree(response.getBody());
         return body.get("code").asText();
+    }
+
+    /** 期望响应为 TEAM-2002（团队停用）且 HTTP 403。 */
+    private void assertTeam2002(ResponseEntity<String> response) throws Exception {
+        assertEquals(TEAM_2002, codeOf(response),
+                () -> "团队停用后业务端点应得 TEAM-2002，实测=" + response.getBody());
+        assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
+    }
+
+    /** 期望响应为 2xx（团队 ACTIVE）。 */
+    private void assert2xx(ResponseEntity<String> response) {
+        assertTrue(response.getStatusCode().is2xxSuccessful(),
+                () -> "团队 ACTIVE 时应 2xx，实测=" + response.getStatusCode() + " " + response.getBody());
+    }
+
+    /** 以 OWNER 令牌创建资源并解析 data.id（阶段一：团队 ACTIVE 时）。 */
+    private long createResource(String path, String jsonBody, String token) throws Exception {
+        ResponseEntity<String> r = post(path, jsonBody, token);
+        assertTrue(r.getStatusCode().is2xxSuccessful(),
+                () -> "创建资源应 2xx：" + path + " 实测=" + r.getStatusCode() + " " + r.getBody());
+        return objectMapper.readTree(r.getBody()).get("data").get("id").asLong();
     }
 }
