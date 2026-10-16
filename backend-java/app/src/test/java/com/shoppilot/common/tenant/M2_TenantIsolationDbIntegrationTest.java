@@ -79,6 +79,10 @@ class M2_TenantIsolationDbIntegrationTest {
             "SupplierMapper#selectTeamIdById",
             "ProductMapper#selectTeamIdById",
             "SkuMapper#selectTeamIdById",
+            "WarehouseMapper#selectTeamIdByCode",           // 跨团队归属探测（按编码）：仅取 team_id 单列，导入校验引用存在性/同团队（B3 裁定）
+            "SupplierMapper#selectTeamIdByCode",
+            "ProductMapper#selectTeamIdByCode",
+            "SkuMapper#selectTeamIdByCode",
             "AuditLogMapper#insert",                        // 无上下文（登录失败）也要能写：显式 team_id
             "AuditLogMapper#selectRecentByBiz"              // 显式 team_id 条件
     );

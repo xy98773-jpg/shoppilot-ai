@@ -100,6 +100,11 @@ public final class ErrorCodes {
     public static final String IMP_4005 = "IMP-4005";
     public static final String IMP_4006 = "IMP-4006";
     public static final String IMP_4007 = "IMP-4007";
+    public static final String IMP_4008 = "IMP-4008";
+    public static final String IMP_4009 = "IMP-4009";
+    public static final String IMP_4010 = "IMP-4010";
+    public static final String IMP_4011 = "IMP-4011";
+    public static final String IMP_4012 = "IMP-4012";
     public static final String IMP_4013 = "IMP-4013";
     public static final String IMP_4014 = "IMP-4014";
 
@@ -109,6 +114,12 @@ public final class ErrorCodes {
     public static final String INV_5003 = "INV-5003";
     public static final String INV_5006 = "INV-5006";
     public static final String INV_5009 = "INV-5009";
+
+    // SAL —— 销售（6001–6099）
+    public static final String SAL_6002 = "SAL-6002";
+    public static final String SAL_6003 = "SAL-6003";
+    public static final String SAL_6004 = "SAL-6004";
+    public static final String SAL_6005 = "SAL-6005";
 
     // ANL —— 分析任务（7001–7099）
     public static final String ANL_7001 = "ANL-7001";

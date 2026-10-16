@@ -46,5 +46,19 @@
             <artifactId>lombok</artifactId>
             <scope>provided</scope>
         </dependency>
+
+        <!-- M3-T03：Excel 解析（项目负责人裁定 C 批准引入 Apache POI；禁 EasyExcel 等其它库）。
+             ★ 版本【显式指定 5.3.0】：已实测 spring-boot-dependencies:3.5.16 的 BOM 不含
+               org.apache.poi（grep 计数 0），故不写版本会直接 "version is missing" 构建失败。 -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi</artifactId>
+            <version>${poi.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>${poi.version}</version>
+        </dependency>
     </dependencies>
 </project>

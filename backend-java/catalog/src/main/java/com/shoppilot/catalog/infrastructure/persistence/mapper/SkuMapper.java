@@ -24,4 +24,18 @@ public interface SkuMapper extends BaseMapper<SkuEntity> {
     @InterceptorIgnore(tenantLine = "true")
     @Select("SELECT team_id FROM skus WHERE id = #{id}")
     Long selectTeamIdById(@Param("id") Long id);
+
+    /**
+     * 按业务键 {@code sku_code} 取 {@code team_id}，<b>绕过租户线</b>——
+     * 供 {@code importdata} 模块区分 {@code CAT-3005}（异团队）与 {@code CAT-3001}（不存在）
+     * （{@code IMPORT_WORKFLOW §10.1} 团队隔离行 / §10.2 SKU 行）。
+     *
+     * <p>只返回 {@code team_id} 一列；跨团队同编码可共存，故需 {@code ORDER BY id LIMIT 1}。
+     *
+     * @param code SKU 编码
+     * @return 该编码所属团队的 {@code team_id}；不存在返回 {@code null}
+     */
+    @InterceptorIgnore(tenantLine = "true")
+    @Select("SELECT team_id FROM skus WHERE sku_code = #{code} ORDER BY id LIMIT 1")
+    Long selectTeamIdByCode(@Param("code") String code);
 }

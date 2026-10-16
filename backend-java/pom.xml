@@ -19,6 +19,10 @@
         <archunit.version>1.5.1</archunit.version>
         <!-- JWT 库（TECH_STACK.md §1.2：jjwt 0.12.x）；Boot BOM 不管理 jjwt，故在此统一版本 -->
         <jjwt.version>0.12.6</jjwt.version>
+        <!-- Apache POI（M3-T03 Excel 解析；项目负责人裁定 C 指定 5.3.0）。
+             ★ 已实测：spring-boot-dependencies:3.5.16 的 BOM 中 org.apache.poi 出现 0 次，
+               即 Boot BOM【不管理】POI，故必须显式指定版本（裁定 C：「否则显式指定 5.3.0」）。 -->
+        <poi.version>5.3.0</poi.version>
     </properties>
 
     <modules>

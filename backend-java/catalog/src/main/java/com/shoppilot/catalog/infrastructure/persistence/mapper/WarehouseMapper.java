@@ -33,4 +33,18 @@ public interface WarehouseMapper extends BaseMapper<WarehouseEntity> {
     @InterceptorIgnore(tenantLine = "true")
     @Select("SELECT team_id FROM warehouses WHERE id = #{id}")
     Long selectTeamIdById(@Param("id") Long id);
+
+    /**
+     * 按业务键 {@code code} 取 {@code team_id}，<b>绕过租户线</b>——
+     * 供 {@code importdata} 模块区分 {@code CAT-3005}（异团队）与 {@code CAT-3003}（仓库不存在）
+     * （{@code IMPORT_WORKFLOW §10.2}：{@code INVENTORY_SNAPSHOT} / {@code SALES_DAILY} 行）。
+     *
+     * <p>只返回 {@code team_id} 一列；跨团队同编码可共存，故需 {@code ORDER BY id LIMIT 1}。
+     *
+     * @param code 仓库编码
+     * @return 该编码所属团队的 {@code team_id}；不存在返回 {@code null}
+     */
+    @InterceptorIgnore(tenantLine = "true")
+    @Select("SELECT team_id FROM warehouses WHERE code = #{code} ORDER BY id LIMIT 1")
+    Long selectTeamIdByCode(@Param("code") String code);
 }
