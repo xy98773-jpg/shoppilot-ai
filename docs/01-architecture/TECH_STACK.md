@@ -64,6 +64,7 @@
 | SpringDoc OpenAPI | **2.x**（springdoc-openapi-starter-webmvc-ui，与 Boot 3.x 匹配） | API 文档 | 由注解生成 OpenAPI，供 `API_CONTRACT.md` 校验 | Springfox（已不维护） | 与 `docs/03-api/API_CONTRACT.md` 人工校验双轨 |
 | jjwt | **0.12.x** | JWT 编解码 | 若 `D-01` 采纳 JWT（无状态），需 JWT 库 | Nimbus JOSE + JWT | **与待决策 `D-01` 强相关**；Access 2h / Refresh 7d |
 | Lombok | **1.18.x** | 样板代码生成 | 减少 getter/setter/builder 样板 | Java Record、手写 | 与 `DESIGN_BASIS.md §4.2` 的 4 层结构配合；避免过度使用 |
+| Apache POI | **5.3.0**（显式指定，Boot BOM **不管理**） | Excel 解析 | M3 导入需读写 `.xlsx`（XSSF）与 `.xls`（HSSF），`F-IMP-01` 要求 CSV/Excel 双格式；采用 SAX 事件模型（`XSSFReader` + `XSSFSheetXMLHandler` / `HSSFEventFactory`）做流式解析，避免整文件读入内存（`IMPORT_WORKFLOW §8.5`） | EasyExcel（禁：`§2.1` 不引入）、JXL（已停维护） | M3-T03 引入（`poi:5.3.0` + `poi-ooxml:5.3.0`）。**★ 配套锁版**：`poi-ooxml` 运行时要求 `commons-compress ≥ 1.26.2`；Testcontainers 传递声明 `1.24.0`，按 Maven「最近者优先」胜出并进 fat jar，会致运行期 `NoSuchMethodError: ZipArchiveOutputStream.putArchiveEntry`（`.xlsx` 读写全废）。故在父 `pom.xml` `<dependencyManagement>` **锁定 `commons-compress:1.26.2`**——此属**既有传递依赖的版本纠正**，非新增依赖（见 R36 第二根因） |
 
 #### 1.2.1 Spring Boot 版本论证（重点）
 
