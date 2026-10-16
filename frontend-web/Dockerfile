@@ -27,4 +27,6 @@ RUN npm run build
 # ---------- 运行阶段：静态托管 ----------
 FROM nginx:1.27-alpine AS runtime
 COPY --from=build /app/dist /usr/share/nginx/html
+# SPA fallback（history 模式深链回落 index.html）；见 nginx.conf 头部说明
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
