@@ -73,6 +73,13 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>否则 → {@code VALIDATED}（部分错误不阻断，留待步骤 9 确认/导入时处理）。</li>
  * </ul>
  *
+ * <h2>★ R38 订正（裁定 M，P1）</h2>
+ * 本类<b>不再</b>把主数据（{@code PRODUCT}/{@code SKU}/{@code SUPPLIER}/{@code WAREHOUSE}）的
+ * 「库内已存在」判为 {@code ERROR CAT-3002}；依据 {@code IMPORT_WORKFLOW §10.2} 澄清栏 +
+ * {@code §7.1}–{@code §7.4}+{@code §8.6}：主数据命中 {@code uk_*_team_code} 一律
+ * <b>upsert 更新、不报错</b>，<b>只有「文件内重复」记后行 {@code ERROR}</b>。
+ * 原判定会堵死 upsert 更新路径（{@code R38} 缺陷根因）。
+ *
  * <h2>★ 裁定 F：依赖未建表的检查登记跳过</h2>
  * {@code INVENTORY_SNAPSHOT}/{@code SALES_DAILY} 的「命中库内已有行 → {@code IMP-4006}（WARNING）」
  * 依赖 {@code inventory_balances}（V1.0.6）/ {@code sales_daily}（V1.0.7，均未建），
@@ -178,8 +185,8 @@ public class ImportValidationService {
 
         // ---- 第一遍：收集引用编码用于批量探测 ----
         // 文件内重复探测集合（跨行累积，不按行重置）
-        Set<String> productSeen = new HashSet<>();
-        Set<String> skuSeen = new HashSet<>();
+        // ★ R38 订正：这些集合只服务「文件内重复 → 后行 ERROR」，不再用于「库内已存在」判定
+        SeenKeys seen = new SeenKeys(new HashSet<>(), new HashSet<>(), new HashSet<>(), new HashSet<>());
         // SALES_DAILY 文件内唯一键 (warehouse_code|sku_code|sale_date)
         Set<String> salesDailyKeys = new HashSet<>();
 
@@ -217,8 +224,9 @@ public class ImportValidationService {
                 validateField(bizType, target, spec, value, teamId, teamCache, issues);
             }
 
-            // §10.2 各业务类型特有：文件内唯一 / 库内唯一
-            applyBusinessUnique(bizType, targetCol, cells, productSeen, skuSeen, teamCache, issues);
+            // §10.2 各业务类型特有：文件内唯一
+            // ★ R38：库内命中一律 upsert 更新、不报 ERROR（原「库内已存在」判定已删除）
+            applyBusinessUnique(bizType, targetCol, cells, seen, issues);
             if (bizType == ImportBizType.SALES_DAILY) {
                 String wh = valueOf(targetCol, cells, "warehouse_code");
                 String sk = valueOf(targetCol, cells, "sku_code");
@@ -455,43 +463,53 @@ public class ImportValidationService {
     }
 
     // =====================================================================
-    // §10.2 唯一性（文件内 + 库内）
+    // §10.2 唯一性（★ R38 订正后：仅「文件内重复」记 ERROR）
     // =====================================================================
 
+    /**
+     * 四类主数据的业务键<b>文件内重复</b>检查（{@code IMPORT_WORKFLOW §8.6} + {@code §10.2}）。
+     *
+     * <h2>★ R38 订正（2026-10-17，裁定 M1 + M3）</h2>
+     * <ul>
+     *   <li><b>M1</b> 删除 {@code PRODUCT} / {@code SKU} 的「库内已存在 → {@code ERROR}」判定：
+     *       依据 {@code §10.2} 澄清栏 + {@code §7.1}/{@code §7.2} + {@code §8.6}，主数据命中
+     *       {@code uk_*_team_code} 一律 <b>upsert 更新、不报错</b>，只有「文件内重复」记 ERROR。</li>
+     *   <li><b>M3</b> 为 {@code SUPPLIER} / {@code WAREHOUSE} 补同等「文件内重复 → 后行
+     *       {@code ERROR CAT-3002}」检查（键为 {@code code}）。</li>
+     * </ul>
+     *
+     * <p><b>跨团队归属探测（{@code selectTeamIdByCode} + {@code CAT-3005}）不受本订正影响</b>：
+     * 它属于团队隔离校验而非重复校验，由 {@link #validateField} 在<b>引用字段</b>路径完成
+     * （{@code default_supplier_code} / {@code product_code} / {@code supplier_code} /
+     * {@code sku_code} / {@code warehouse_code}）。主数据<b>自身业务键</b>不做跨团队报错——
+     * {@code §7.1} 明确「跨团队同编码互不影响」（同编码在别的团队存在属正常，本团队需新建自己的行）。
+     */
     private void applyBusinessUnique(ImportBizType bizType, Map<String, Integer> targetCol,
-                                     List<String> cells, Set<String> productSeen, Set<String> skuSeen,
-                                     Map<ImportFieldSpec.ImportReference, Map<String, Long>> teamCache,
-                                     List<Issue> issues) {
-        long teamId = TeamContext.require().teamId();
-        if (bizType == ImportBizType.PRODUCT) {
-            String code = valueOf(targetCol, cells, "product_code");
-            if (!code.isBlank()) {
-                if (!productSeen.add(code)) {
-                    issues.add(new Issue("ERROR", ErrorCodes.CAT_3002, "product_code",
-                            "商品编码 " + code + " 在当前文件内重复"));
-                } else {
-                    Long owner = teamOf(ImportFieldSpec.ImportReference.PRODUCT, code, teamCache);
-                    if (owner != null && owner.equals(teamId)) {
-                        issues.add(new Issue("ERROR", ErrorCodes.CAT_3002, "product_code",
-                                "商品编码 " + code + " 在当前团队已存在"));
-                    }
-                }
+                                     List<String> cells, SeenKeys seen, List<Issue> issues) {
+        switch (bizType) {
+            case PRODUCT -> duplicateCode(targetCol, cells, "product_code", "商品编码", seen.product(), issues);
+            case SKU -> duplicateCode(targetCol, cells, "sku_code", "SKU 编码", seen.sku(), issues);
+            case SUPPLIER -> duplicateCode(targetCol, cells, "code", "供应商编码", seen.supplier(), issues);
+            case WAREHOUSE -> duplicateCode(targetCol, cells, "code", "仓库编码", seen.warehouse(), issues);
+            default -> {
+                // 其余类型（INVENTORY_SNAPSHOT / SALES_DAILY）的重复检查在调用处单列
             }
         }
-        if (bizType == ImportBizType.SKU) {
-            String code = valueOf(targetCol, cells, "sku_code");
-            if (!code.isBlank()) {
-                if (!skuSeen.add(code)) {
-                    issues.add(new Issue("ERROR", ErrorCodes.CAT_3002, "sku_code",
-                            "SKU 编码 " + code + " 在当前文件内重复"));
-                } else {
-                    Long owner = teamOf(ImportFieldSpec.ImportReference.SKU, code, teamCache);
-                    if (owner != null && owner.equals(teamId)) {
-                        issues.add(new Issue("ERROR", ErrorCodes.CAT_3002, "sku_code",
-                                "SKU 编码 " + code + " 在当前团队已存在"));
-                    }
-                }
-            }
+    }
+
+    /**
+     * 同一业务键在文件内<b>第二次及以后</b>出现 → 该行记 {@code ERROR CAT-3002}
+     * （{@code §8.6}「文件内重复」语义：后行 ERROR，要求用户先自行去重）。
+     */
+    private void duplicateCode(Map<String, Integer> targetCol, List<String> cells,
+                               String codeColumn, String label, Set<String> seen, List<Issue> issues) {
+        String code = valueOf(targetCol, cells, codeColumn);
+        if (code.isBlank()) {
+            return;
+        }
+        if (!seen.add(code)) {
+            issues.add(new Issue("ERROR", ErrorCodes.CAT_3002, codeColumn,
+                    label + " " + code + " 在当前文件内重复"));
         }
     }
 
@@ -572,5 +590,13 @@ public class ImportValidationService {
 
     /** 单行问题（ERROR / WARNING）。 */
     private record Issue(String level, String code, String field, String message) {
+    }
+
+    /**
+     * 主数据业务键的「文件内已出现」集合（★ R38 订正：只服务「文件内重复」判定，
+     * 不再用于「库内已存在」判定）。
+     */
+    private record SeenKeys(Set<String> product, Set<String> sku,
+                            Set<String> supplier, Set<String> warehouse) {
     }
 }
