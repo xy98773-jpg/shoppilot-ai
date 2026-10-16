@@ -1,5 +1,6 @@
 package com.shoppilot.identity.api;
 
+import com.shoppilot.common.annotation.RequireRole;
 import com.shoppilot.common.web.ApiResponse;
 import com.shoppilot.identity.application.TeamMemberService;
 import com.shoppilot.identity.application.TeamService;
@@ -50,13 +51,18 @@ public class TeamController {
         this.teamMemberService = teamMemberService;
     }
 
-    /** 我的团队列表（{@code GET /api/v1/teams}）。 */
+    /** 我的团队列表（{@code GET /api/v1/teams}，任何已登录用户）。 */
     @GetMapping
     public ApiResponse<List<TeamMembershipSummary>> listMyTeams() {
         return ApiResponse.success(teamService.listMyTeams());
     }
 
-    /** 团队配置查询（{@code GET /api/v1/teams/{teamId}}）。 */
+    /**
+     * 团队配置查询（{@code GET /api/v1/teams/{teamId}}，任何已登录成员）。
+     *
+     * <p>不标注 {@link RequireRole}：契约对该查询开放给「任何已登录成员」；跨团队 / 停用仍由
+     * 服务层 {@code assertPathTeam} / {@code requireActiveTeam}（TEAM-2001 / TEAM-2002）兜底。
+     */
     @GetMapping("/{teamId}")
     public ApiResponse<TeamDetail> getTeam(@PathVariable("teamId") Long teamId) {
         return ApiResponse.success(teamService.getTeam(teamId));
@@ -64,6 +70,7 @@ public class TeamController {
 
     /** 团队配置修改（{@code PATCH /api/v1/teams/{teamId}}，{@code OWNER}/{@code ADMIN}）。 */
     @PatchMapping("/{teamId}")
+    @RequireRole(value = {"OWNER", "ADMIN"}, teamIdParam = "teamId")
     public ApiResponse<TeamDetail> updateTeam(@PathVariable("teamId") Long teamId,
                                               @Valid @RequestBody UpdateTeamRequest request) {
         return ApiResponse.success(teamService.updateTeam(teamId, request));
@@ -71,19 +78,22 @@ public class TeamController {
 
     /** 成员列表（{@code GET /api/v1/teams/{teamId}/members}，{@code OWNER}/{@code ADMIN}）。 */
     @GetMapping("/{teamId}/members")
+    @RequireRole(value = {"OWNER", "ADMIN"}, teamIdParam = "teamId")
     public ApiResponse<List<TeamMemberSummary>> listMembers(@PathVariable("teamId") Long teamId) {
         return ApiResponse.success(teamMemberService.listMembers(teamId));
     }
 
     /** 添加成员（{@code POST /api/v1/teams/{teamId}/members}，{@code OWNER}/{@code ADMIN}）。 */
     @PostMapping("/{teamId}/members")
+    @RequireRole(value = {"OWNER", "ADMIN"}, teamIdParam = "teamId")
     public ApiResponse<TeamMemberSummary> addMember(@PathVariable("teamId") Long teamId,
                                                     @Valid @RequestBody AddTeamMemberRequest request) {
         return ApiResponse.success(teamMemberService.addMember(teamId, request));
     }
 
-    /** 修改成员角色（{@code PATCH /api/v1/teams/{teamId}/members/{userId}}）。 */
+    /** 修改成员角色（{@code PATCH /api/v1/teams/{teamId}/members/{userId}}，{@code OWNER}/{@code ADMIN}）。 */
     @PatchMapping("/{teamId}/members/{userId}")
+    @RequireRole(value = {"OWNER", "ADMIN"}, teamIdParam = "teamId")
     public ApiResponse<TeamMemberSummary> updateMemberRole(
             @PathVariable("teamId") Long teamId,
             @PathVariable("userId") Long userId,
@@ -91,8 +101,9 @@ public class TeamController {
         return ApiResponse.success(teamMemberService.updateMemberRole(teamId, userId, request));
     }
 
-    /** 移出成员（{@code DELETE /api/v1/teams/{teamId}/members/{userId}}，软删）。 */
+    /** 移出成员（{@code DELETE /api/v1/teams/{teamId}/members/{userId}}，软删，{@code OWNER}/{@code ADMIN}）。 */
     @DeleteMapping("/{teamId}/members/{userId}")
+    @RequireRole(value = {"OWNER", "ADMIN"}, teamIdParam = "teamId")
     public ApiResponse<TeamMemberSummary> removeMember(@PathVariable("teamId") Long teamId,
                                                        @PathVariable("userId") Long userId) {
         return ApiResponse.success(teamMemberService.removeMember(teamId, userId));

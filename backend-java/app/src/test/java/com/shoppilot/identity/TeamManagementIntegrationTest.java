@@ -241,6 +241,32 @@ class TeamManagementIntegrationTest {
     }
 
     // =====================================================================
+    // M2-T07 @RequireRole 切面专项（硬门槛 §5-1 / §5-2）
+    // =====================================================================
+
+    @Test
+    @DisplayName("M2-T07 §5-1 切面角色授权：VIEWER 调成员管理 → 403 TEAM-2003（非 OWNER/ADMIN）")
+    void requireRoleAspectDeniesNonManager_TEAM2003() throws Exception {
+        // @RequireRole({"OWNER","ADMIN"}) 由切面统一拦截；VIEWER 不在允许集合 → TEAM-2003
+        assertEquals("TEAM-2003", code(get("/api/v1/teams/" + TEAM_ID + "/members", viewerToken())),
+                "成员列表应被切面拒绝");
+        assertEquals("TEAM-2003", code(post("/api/v1/teams/" + TEAM_ID + "/members",
+                "{\"user_id\":" + OUTSIDER_ID + ",\"role\":\"VIEWER\"}", viewerToken())), "添加成员应被拒");
+        assertEquals("TEAM-2003", code(patch("/api/v1/teams/" + TEAM_ID,
+                "{\"name\":\"x\"}", viewerToken())), "改配置应被拒");
+    }
+
+    @Test
+    @DisplayName("M2-T07 §5-2 切面判定顺序：跨团队非管理角色 → 403 TEAM-2001（非 TEAM-2003）")
+    void requireRoleAspectCrossTeamOrder_TEAM2001() throws Exception {
+        // ★ 关键顺序证明：viewer01 是 team7 的 VIEWER（非管理角色），访问 team8 的成员列表。
+        //   若切面先做角色判定，VIEWER 会被误判为「无权限」→ TEAM-2003；
+        //   正确实现必须<b>先做团队归属</b> → 跨团队 → TEAM-2001（先于角色）。
+        assertEquals("TEAM-2001", code(get("/api/v1/teams/" + OTHER_TEAM_ID + "/members", viewerToken())),
+                "跨团队必须先返回 TEAM-2001（团队归属），而非 TEAM-2003（角色）");
+    }
+
+    // =====================================================================
     // §3-6 团队配置
     // =====================================================================
 
