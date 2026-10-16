@@ -47,4 +47,16 @@ public interface WarehouseMapper extends BaseMapper<WarehouseEntity> {
     @InterceptorIgnore(tenantLine = "true")
     @Select("SELECT team_id FROM warehouses WHERE code = #{code} ORDER BY id LIMIT 1")
     Long selectTeamIdByCode(@Param("code") String code);
+
+    /**
+     * 按业务键 {@code code} 取<b>本团队内</b>该行的主键，供 {@code upsertWarehouseByCode} 解析既有仓库
+     * （M3-B4 裁定 G3 方案 1）。
+     *
+     * <p><b>不绕过租户线</b>（{@code IMPORT_WORKFLOW §7.4}）。
+     *
+     * @param code 仓库编码
+     * @return 本团队内该编码的主键；不存在返回 {@code null}
+     */
+    @Select("SELECT id FROM warehouses WHERE code = #{code} ORDER BY id LIMIT 1")
+    Long selectIdByCode(@Param("code") String code);
 }

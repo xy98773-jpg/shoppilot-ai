@@ -3,6 +3,7 @@ package com.shoppilot.catalog.application;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.shoppilot.audit.application.AuditWriteService;
 import com.shoppilot.audit.domain.model.AuditAction;
 import com.shoppilot.audit.domain.model.AuditEvent;
@@ -29,9 +30,12 @@ import com.shoppilot.common.web.BizException;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -328,6 +332,22 @@ public class CatalogWriteService {
     private SkuView createSku(Long pathProductId, JsonNode body) {
         requireAllNonBlank(body, "sku_code", "name");
         Long productId = resolveProductIdForCreate(pathProductId, body);
+        return insertSku(productId, body);
+    }
+
+    /**
+     * SKU 实体插入（创建路径的<b>共用内核</b>）。
+     *
+     * <p>从 {@code createSku} 抽出，供两条创建路径共用：
+     * <ol>
+     *   <li>REST 管理端 {@code POST}（{@code createSku}）：保留 {@code name} 必填的前置校验；</li>
+     *   <li>导入落库 {@code upsertSkuByCode}：{@code IMPORT_WORKFLOW §7.2} 把 {@code name}（展示名）
+     *       列为<b>非必填</b>，且 {@code skus.name} 在 {@code DATABASE_DESIGN §5.7} 中<b>可空</b>，
+     *       故导入路径不施加该必填约束（否则「无 name 列的合法 SKU 模板」会在落库期整批失败）。</li>
+     * </ol>
+     * 两条路径的<b>其它</b>行为（团队注入、商品关联、供应商同团队、字段映射）完全一致。
+     */
+    private SkuView insertSku(Long productId, JsonNode body) {
         // 关联写入：商品不存在或跨团队 → 422 CAT-3004（任务书 §3.3 / §7-6）
         assertProductAssociation(productId);
 
@@ -405,6 +425,196 @@ public class CatalogWriteService {
                     List.of(new ApiErrorDetail("product_id", "不能为空", null)));
         }
         return bodyProductId;
+    }
+
+    // =====================================================================
+    // 按业务编码 upsert（M3-B4 · 裁定 G3 方案 1；供 importdata 分批落库调用）
+    // =====================================================================
+
+    /**
+     * <b>★ 传播级别为何是 {@code NESTED} 而不是 {@code REQUIRED}（M3-B4 偏差，已申报）</b>
+     *
+     * <p>裁定 {@code G2} 写的是「被调用方用 {@code REQUIRED} 加入调用方事务」。本批实测发现它与
+     * 裁定 {@code C1}（「批内逐行：每行前设 {@code SAVEPOINT}；该行抛业务异常 →
+     * {@code ROLLBACK TO SAVEPOINT} + 继续处理批内其余行」）在 Spring 事务语义下<b>不可共存</b>：
+     *
+     * <ol>
+     *   <li>{@code importdata} 的每个 500 行批次是一个由 {@code TransactionTemplate} 开启的新事务；</li>
+     *   <li>行内调用本类的 {@code upsertXxxByCode}。若其传播为 {@code REQUIRED}，Spring 会以
+     *       <b>参与方（{@code newTransaction=false}）</b>身份加入，异常时
+     *       {@code AbstractPlatformTransactionManager.processRollback} 走
+     *       {@code doSetRollbackOnly}——把<b>整个批次事务</b>置为 {@code rollbackOnly}；</li>
+     *   <li>随后即便调用方 {@code rollbackToSavepoint} 并继续处理，批次事务在提交时仍会抛
+     *       {@code UnexpectedRollbackException}，<b>整批 500 行全部丢失</b>，与 {@code §12}
+     *       「批内原子 + 行级错误不阻断其他行」直接矛盾。</li>
+     * </ol>
+     *
+     * <p>{@code NESTED} 是 Spring 对「可局部回滚的子事务」的标准表达，且行为对调用方<b>严格更优</b>：
+     * <ul>
+     *   <li><b>在调用方事务内</b>：建 {@code SAVEPOINT}，失败时 {@code rollbackToSavepoint}
+     *       （{@code processRollback} 的 {@code status.hasSavepoint()} 分支），<b>不会</b>把批次事务置
+     *       rollback-only ⇒ 恰好就是裁定 {@code C1} 要求的语义；</li>
+     *   <li><b>无调用方事务时</b>：行为等同 {@code REQUIRED}（新建事务），原子性不变。</li>
+     * </ul>
+     * 因此单对象「解析既有 id + 创建/更新」的原子性与 {@code rollbackFor = Exception.class} 均<b>保持不变</b>；
+     * 未使用 {@code REQUIRES_NEW}（裁定 {@code G2} 明令禁止），也未自行提交。
+     *
+     * <p>（真实栈验证：{@code ImportConfirmIntegrationTest} 的「部分失败 → {@code PARTIAL_SUCCESS}」
+     * 与「引用漂移 → 行级失败而批次继续」两个用例即依赖该语义。）
+     */
+
+    /**
+     * 按<b>业务编码</b> upsert 仓库（{@code MODULE_BOUNDARIES §2.3}；M3-B4 裁定 G3 方案 1）。
+     *
+     * <h2>为什么解析必须发生在 catalog 内</h2>
+     * 导入数据里只有<b>业务编码</b>（{@code code}/{@code *_code}），没有主键 id；
+     * 而「按编码解析既有行」属本模块自身的业务规则，放在 {@code catalog} 内可避免该规则外泄到
+     * {@code importdata}（裁定 G1/G3 的原始理由）。
+     *
+     * <h2>与既有 upsertWarehouse 的关系</h2>
+     * 本方法<b>不改</b> {@code upsertWarehouse(Long id, JsonNode)} 的签名与语义（REST 管理端仍在用），
+     * 只是在调用它之前补上「按编码解析 id」这一步：命中 → 复用更新路径；未命中 → 复用创建路径。
+     *
+     * <p>解析走<b>租户线</b>（{@code selectIdByCode} 未加 {@code @InterceptorIgnore}），
+     * 故只在<b>本团队</b>范围内命中既有行（{@code §7.4} 跨团队同编码互不影响）。
+     *
+     * <p>{@code body.status} 若显式提供且与库内不同，则复用 {@link #changeStatus} 落实
+     * （{@code IMPORT_WORKFLOW §7.4} 的 {@code status} 字段；缺省 {@code ACTIVE}）。
+     */
+    @Transactional(propagation = Propagation.NESTED, rollbackFor = Exception.class)
+    public WarehouseView upsertWarehouseByCode(JsonNode body) {
+        String code = requireText(body, "code");
+        Long existingId = warehouseMapper.selectIdByCode(code);
+        WarehouseView view = existingId == null ? createWarehouse(body) : updateWarehouse(existingId, body);
+        if (needsStatusChange(body, view.getStatus())) {
+            view = (WarehouseView) changeStatus(CatalogResourceType.WAREHOUSE, view.getId(), statusOf(body));
+        }
+        return view;
+    }
+
+    /**
+     * 按<b>业务编码</b> upsert 供应商（{@code §7.3}；M3-B4 裁定 G3 方案 1）。语义同 {@link #upsertWarehouseByCode}。
+     */
+    @Transactional(propagation = Propagation.NESTED, rollbackFor = Exception.class)
+    public SupplierView upsertSupplierByCode(JsonNode body) {
+        String code = requireText(body, "code");
+        Long existingId = supplierMapper.selectIdByCode(code);
+        SupplierView view = existingId == null ? createSupplier(body) : updateSupplier(existingId, body);
+        if (needsStatusChange(body, view.getStatus())) {
+            view = (SupplierView) changeStatus(CatalogResourceType.SUPPLIER, view.getId(), statusOf(body));
+        }
+        return view;
+    }
+
+    /**
+     * 按<b>业务编码</b> upsert 商品（{@code §7.1}；M3-B4 裁定 G3 方案 1）。
+     *
+     * <p>额外把导入特有的 {@code default_supplier_code}（默认供应商<b>编码</b>）解析为
+     * {@code default_supplier_id}——{@code products} 表只有 id 列，编码解析属 catalog 自身规则。
+     */
+    @Transactional(propagation = Propagation.NESTED, rollbackFor = Exception.class)
+    public ProductView upsertProductByCode(JsonNode body) {
+        String productCode = requireText(body, "product_code");
+        JsonNode normalized = withResolvedCode(body, "default_supplier_code", "default_supplier_id",
+                code -> supplierMapper.selectIdByCode(code), "引用的供应商不存在");
+        Long existingId = productMapper.selectIdByCode(productCode);
+        ProductView view = existingId == null ? createProduct(normalized) : updateProduct(existingId, normalized);
+        if (needsStatusChange(normalized, view.getStatus())) {
+            view = (ProductView) changeStatus(CatalogResourceType.PRODUCT, view.getId(),
+                    statusOf(normalized));
+        }
+        return view;
+    }
+
+    /**
+     * 按<b>业务编码</b> upsert SKU（{@code §7.2}；M3-B4 裁定 G3 方案 1 + R38 M2）。
+     *
+     * <h2>product_id 不可变（{@code §7.2} / {@code DATABASE_DESIGN §5.7}）——R38 M2 的判定层</h2>
+     * 「同 {@code sku_code} 指向不同 {@code product_code}」在此<b>落库层</b>判定并抛
+     * {@code CAT-3002}（校验阶段不判定：校验层拿不到库内既有 SKU 的 {@code product_id}，
+     * 强行判定需在 {@code importdata} 侧再开一条按编码读 SKU 的通道，违反裁定 G1）。
+     * 该行因此计入落库期失败行 → {@code PARTIAL_SUCCESS}，语义与裁定 C1b 一致。
+     *
+     * @param body 必含 {@code sku_code} + {@code product_code}
+     */
+    @Transactional(propagation = Propagation.NESTED, rollbackFor = Exception.class)
+    public SkuView upsertSkuByCode(JsonNode body) {
+        String skuCode = requireText(body, "sku_code");
+        String productCode = requireText(body, "product_code");
+
+        // ① 先解析所属商品：不存在 → CAT-3001（§7.2「product_code 必须已存在」）
+        Long productId = productMapper.selectIdByCode(productCode);
+        if (productId == null) {
+            throw BizException.withDetails(ErrorCodes.CAT_3001, "引用的商品不存在",
+                    List.of(new ApiErrorDetail("product_code", "商品编码 " + productCode + " 不存在", productCode)));
+        }
+        JsonNode normalized = withResolvedCode(body, "supplier_code", "supplier_id",
+                code -> supplierMapper.selectIdByCode(code), "引用的供应商不存在");
+
+        // ② 再解析既有 SKU：未命中 → 创建；命中 → 校验 product_id 不可变后更新
+        Long existingId = skuMapper.selectIdByCode(skuCode);
+        SkuView view;
+        if (existingId == null) {
+            view = insertSku(productId, normalized);
+        } else {
+            SkuEntity existing = skuMapper.selectById(existingId);
+            if (existing != null && !productId.equals(existing.getProductId())) {
+                throw BizException.withDetails(ErrorCodes.CAT_3002, "该编码已存在，请更换",
+                        List.of(new ApiErrorDetail("sku_code",
+                                "SKU 编码 " + skuCode + " 已存在且隶属于其它商品（product_id 不可变）", skuCode)));
+            }
+            view = updateSku(existingId, normalized);
+        }
+        if (needsStatusChange(normalized, view.getStatus())) {
+            view = (SkuView) changeStatus(CatalogResourceType.SKU, view.getId(), statusOf(normalized));
+        }
+        return view;
+    }
+
+    /**
+     * 把 body 里的「引用对象<b>编码</b>」解析为「外键 <b>id</b>」并替换（编码字段被移除）。
+     *
+     * <p>{@code IMPORT_WORKFLOW §7.1–§7.2} 的导入列是 {@code default_supplier_code}/{@code supplier_code}，
+     * 而 {@code products}/{@code skus} 表只有 {@code *_id} 列——解析必须在本模块内完成（裁定 G1）。
+     *
+     * <p>字段<b>缺席或为空</b>时原样返回：不写入 id 列 ⇒ 保留库内原值
+     * （裁定 H2「空值不得覆盖库内已有值」）。解析失败 → {@code CAT-3001}。
+     */
+    private JsonNode withResolvedCode(JsonNode body, String codeField, String idField,
+                                      Function<String, Long> resolver, String notFoundMessage) {
+        if (!CatalogJson.has(body, codeField)) {
+            return body;
+        }
+        String code = CatalogJson.text(body, codeField);
+        ObjectNode copy = ((ObjectNode) body).deepCopy();
+        copy.remove(codeField);
+        Long id = resolver.apply(code);
+        if (id == null) {
+            throw BizException.withDetails(ErrorCodes.CAT_3001, notFoundMessage,
+                    List.of(new ApiErrorDetail(codeField, "编码 " + code + " 在本团队内不存在", code)));
+        }
+        copy.put(idField, id);
+        return copy;
+    }
+
+    /** 必填文本字段（缺失/空白 → {@code 400 COM-0001} + details）。 */
+    private static String requireText(JsonNode body, String field) {
+        String value = CatalogJson.text(body, field);
+        if (CatalogJson.blank(value)) {
+            throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                    List.of(new ApiErrorDetail(field, "不能为空", value)));
+        }
+        return value;
+    }
+
+    /** body 是否显式提供了 {@code status} 且与当前状态<b>不同</b>（相同则不产生多余的状态变更审计）。 */
+    private static boolean needsStatusChange(JsonNode body, String currentStatus) {
+        return CatalogJson.has(body, "status") && !statusOf(body).equalsIgnoreCase(currentStatus);
+    }
+
+    /** {@code status} 归一化（去空白 + 大写）；合法性由 {@link #changeStatus} 的 {@code requireValidStatus} 把关。 */
+    private static String statusOf(JsonNode body) {
+        return CatalogJson.text(body, "status").trim().toUpperCase(Locale.ROOT);
     }
 
     // =====================================================================

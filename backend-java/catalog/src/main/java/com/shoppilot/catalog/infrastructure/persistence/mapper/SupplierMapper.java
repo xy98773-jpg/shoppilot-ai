@@ -38,4 +38,17 @@ public interface SupplierMapper extends BaseMapper<SupplierEntity> {
     @InterceptorIgnore(tenantLine = "true")
     @Select("SELECT team_id FROM suppliers WHERE code = #{code} ORDER BY id LIMIT 1")
     Long selectTeamIdByCode(@Param("code") String code);
+
+    /**
+     * 按业务键 {@code code} 取<b>本团队内</b>该行的主键，供 {@code upsertSupplierByCode} 解析既有供应商
+     * （M3-B4 裁定 G3 方案 1）；亦用于解析 {@code default_supplier_code}/{@code supplier_code}
+     * 的引用（写入路径，必须限本团队）。
+     *
+     * <p><b>不绕过租户线</b>（{@code IMPORT_WORKFLOW §7.3}）。
+     *
+     * @param code 供应商编码
+     * @return 本团队内该编码的主键；不存在返回 {@code null}
+     */
+    @Select("SELECT id FROM suppliers WHERE code = #{code} ORDER BY id LIMIT 1")
+    Long selectIdByCode(@Param("code") String code);
 }

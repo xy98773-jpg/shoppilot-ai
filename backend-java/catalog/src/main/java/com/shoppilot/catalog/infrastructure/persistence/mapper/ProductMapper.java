@@ -43,4 +43,23 @@ public interface ProductMapper extends BaseMapper<ProductEntity> {
     @InterceptorIgnore(tenantLine = "true")
     @Select("SELECT team_id FROM products WHERE product_code = #{code} ORDER BY id LIMIT 1")
     Long selectTeamIdByCode(@Param("code") String code);
+
+    /**
+     * 按业务键 {@code product_code} 取<b>本团队内</b>该行的主键，供「按业务编码 upsert」解析既有 id
+     * （{@code MODULE_BOUNDARIES §2.3} 的 {@code upsertProductByCode}，M3-B4 裁定 G3 方案 1）。
+     *
+     * <h2>★ 不绕过租户线（与 {@link #selectTeamIdByCode} 的本质区别）</h2>
+     * 本方法是<b>写入路径</b>的解析入口：必须在<b>本团队范围内</b>解析既有行，故
+     * <b>刻意不加</b> {@code @InterceptorIgnore(tenantLine="true")}——租户线会自动追加
+     * {@code AND team_id = <当前团队>}，从而「跨团队同编码」天然互不影响
+     * （{@code DESIGN_BASIS §6} 规则 2；{@code IMPORT_WORKFLOW §7.1}）。
+     *
+     * <p>只返回 {@code id} 一列，不泄露业务字段；团队内部 {@code uk_prod_team_code} 已保证唯一，
+     * {@code ORDER BY id LIMIT 1} 仅为 SQL 形状确定（不依赖查询计划）。
+     *
+     * @param code 商品编码
+     * @return 本团队内该编码的主键；不存在返回 {@code null}
+     */
+    @Select("SELECT id FROM products WHERE product_code = #{code} ORDER BY id LIMIT 1")
+    Long selectIdByCode(@Param("code") String code);
 }

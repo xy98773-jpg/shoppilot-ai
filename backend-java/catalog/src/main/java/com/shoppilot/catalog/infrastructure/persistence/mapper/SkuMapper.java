@@ -38,4 +38,17 @@ public interface SkuMapper extends BaseMapper<SkuEntity> {
     @InterceptorIgnore(tenantLine = "true")
     @Select("SELECT team_id FROM skus WHERE sku_code = #{code} ORDER BY id LIMIT 1")
     Long selectTeamIdByCode(@Param("code") String code);
+
+    /**
+     * 按业务键 {@code sku_code} 取<b>本团队内</b>该行的主键，供 {@code upsertSkuByCode} 解析既有 SKU
+     * （M3-B4 裁定 G3 方案 1）。
+     *
+     * <p><b>不绕过租户线</b>：租户线自动追加 {@code AND team_id = <当前团队>}，
+     * 保证跨团队同 {@code sku_code} 不互相干扰（{@code IMPORT_WORKFLOW §7.2}）。
+     *
+     * @param code SKU 编码
+     * @return 本团队内该编码的主键；不存在返回 {@code null}
+     */
+    @Select("SELECT id FROM skus WHERE sku_code = #{code} ORDER BY id LIMIT 1")
+    Long selectIdByCode(@Param("code") String code);
 }
