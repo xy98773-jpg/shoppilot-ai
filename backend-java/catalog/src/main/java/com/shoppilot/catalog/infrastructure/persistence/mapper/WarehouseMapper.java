@@ -1,0 +1,36 @@
+package com.shoppilot.catalog.infrastructure.persistence.mapper;
+
+import com.baomidou.mybatisplus.annotation.InterceptorIgnore;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.shoppilot.catalog.infrastructure.persistence.entity.WarehouseEntity;
+import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
+
+/**
+ * {@code warehouses} 表 Mapper。
+ *
+ * <p>普通 CRUD 走 {@link BaseMapper}，租户线自动追加 {@code AND team_id = <当前团队>}。
+ * {@link #selectTeamIdById(Long)} 是本模块<b>唯一</b>受控的租户线例外（见其 javadoc）。
+ */
+@Mapper
+public interface WarehouseMapper extends BaseMapper<WarehouseEntity> {
+
+    /**
+     * 按主键取 {@code team_id}，<b>绕过租户线</b>——仅用于「资源真实存在但属他人团队」的归属探测。
+     *
+     * <h2>为何必须绕过租户线</h2>
+     * 常规查询（{@code selectById}）被租户线约束后，跨团队资源会「查不到」，与「不存在」表现一致，
+     * 无法区分 {@code 403 TEAM-2001}（真实存在、异团队）与 {@code 404 CAT-3003}（不存在）。
+     * 本方法用 {@code @InterceptorIgnore(tenantLine="true")} 仅取一列 {@code team_id}，
+     * <b>不返回任何业务字段</b>，把结果交给服务层做「先归属、后 404」的判定（{@code API_CONTRACT §5.6} 例外口径）。
+     *
+     * <p>SQL 显式携带主键参数，团队归属判定<b>只由服务端</b>完成，绝不接受客户端 team_id。
+     *
+     * @param id 主键
+     * @return 该行 {@code team_id}；行不存在返回 {@code null}
+     */
+    @InterceptorIgnore(tenantLine = "true")
+    @Select("SELECT team_id FROM warehouses WHERE id = #{id}")
+    Long selectTeamIdById(@Param("id") Long id);
+}

@@ -23,6 +23,8 @@ public final class ErrorCodes {
     public static final String COM_0002 = "COM-0002";
     /** 资源不存在（404）—— 按 team_id 过滤后查不到，不区分「不存在」与「属他人团队」（防枚举）。 */
     public static final String COM_0003 = "COM-0003";
+    /** 分页或排序参数不合法（400）—— page < 1、pageSize 不在 1..200、sort 字段不在白名单（API_CONTRACT §2.2）。 */
+    public static final String COM_0007 = "COM-0007";
     /** 幂等键冲突（409）—— 同 Idempotency-Key 重复请求但请求体不一致；**不得用于兜底其他异常**。 */
     public static final String COM_0009 = "COM-0009";
 
@@ -71,10 +73,20 @@ public final class ErrorCodes {
     public static final String TEAM_2009 = "TEAM-2009";
 
     // CAT —— 商品 / SKU / 供应商 / 仓库（3001–3099）
+    /** 商品/SKU/供应商不存在（404）—— 主数据按 team_id 过滤后查不到。 */
     public static final String CAT_3001 = "CAT-3001";
+    /** 编码在该团队内已存在（409）—— uk_*_team_code 冲突（同团队内唯一，跨团队可重复）。 */
     public static final String CAT_3002 = "CAT-3002";
+    /** 仓库不存在（404）—— warehouse_id 无效。 */
+    public static final String CAT_3003 = "CAT-3003";
+    /** SKU 不属于该商品或该团队（422）—— sku.product_id != {id}，或商品/SKU 跨团队不匹配。 */
+    public static final String CAT_3004 = "CAT-3004";
     /** 关联对象不属于同一团队（403）—— supplier/warehouse.team_id != 当前 team_id（DESIGN_BASIS §6 规则 4）。 */
     public static final String CAT_3005 = "CAT-3005";
+    /** 主数据已停用（422）—— 对 INACTIVE 对象执行需启用的操作（ERROR_CODES §2.4）。 */
+    public static final String CAT_3006 = "CAT-3006";
+    /** 供应商交期/MOQ 配置非法（400）—— lead_time_days 为负数、order_multiple <= 0（ERROR_CODES §2.4）。 */
+    public static final String CAT_3011 = "CAT-3011";
 
     // IMP —— 数据导入（4001–4099）
     public static final String IMP_4001 = "IMP-4001";

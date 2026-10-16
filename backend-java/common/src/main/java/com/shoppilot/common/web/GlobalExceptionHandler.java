@@ -5,8 +5,12 @@ import com.shoppilot.common.error.ErrorCodes;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
@@ -53,6 +57,26 @@ public class GlobalExceptionHandler {
         }
         return ResponseEntity.status(status)
                 .body(ApiResponse.fail(ex.getErrorCode(), ex.getMessage(), ex.getDetails()));
+    }
+
+    /**
+     * 唯一约束冲突：<b>409 + {@code CAT-3002}</b>（契约 §10.3，主数据编码团队内唯一）。
+     *
+     * <p>MyBatis-Spring 会把 MySQL {@code errno 1062 / SQLState 23000}（重复键）翻译成
+     * {@link DuplicateKeyException}。若不做此归类，唯一约束冲突会落到 {@code Exception} 兜底 →
+     * {@code 500 COM-0002}，把「可归类的业务冲突」误报为系统故障（{@code ERROR_CODES §2 使用规范}：
+     * 能归类必须归类）。此处统一翻译为 {@code 409 CAT-3002}，并尽力从约束名解析出冲突字段写入
+     * {@code details[]}（如 {@code uk_prod_team_code → product_code}）。
+     */
+    @ExceptionHandler(DuplicateKeyException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDuplicateKey(DuplicateKeyException ex) {
+        String field = resolveDuplicateField(ex.getMessage());
+        List<ApiErrorDetail> details = field == null
+                ? null
+                : List.of(ApiErrorDetail.of(field, "已存在相同编码"));
+        log.warn("唯一约束冲突 code={} field={}", ErrorCodes.CAT_3002, field);
+        return ResponseEntity.status(ErrorCodeHttpStatus.resolve(ErrorCodes.CAT_3002))
+                .body(ApiResponse.fail(ErrorCodes.CAT_3002, "编码在该团队内已存在", details));
     }
 
     /** 请求体字段级校验失败：400 + COM-0001 + details[]（契约 §3）。 */
@@ -172,5 +196,37 @@ public class GlobalExceptionHandler {
             }
         }
         return sb.toString();
+    }
+
+    /** MySQL 唯一键名 → 冲突字段（snake_case）；仅列已知主数据唯一键，其余返回 {@code null}。 */
+    private static final Map<String, String> UNIQUE_KEY_TO_FIELD = Map.of(
+            "uk_wh_team_code", "code",
+            "uk_sup_team_code", "code",
+            "uk_prod_team_code", "product_code",
+            "uk_sku_team_code", "sku_code");
+
+    /** 提取 MySQL「Duplicate entry '...' for key 'uk_...'」中的键名。 */
+    private static final Pattern DUP_KEY = Pattern.compile("for key '([^']+)'");
+
+    /**
+     * 从重复键异常消息解析出冲突字段；已知键才给出字段名（未知键返回 {@code null}，此时 details 省略）。
+     *
+     * <p>MySQL 消息形如：{@code Duplicate entry 'P-BAG-001' for key 'products.uk_prod_team_code'}，
+     * 键名可能带表名前缀，故只取最后一段（{@code uk_prod_team_code}）。
+     */
+    private static String resolveDuplicateField(String message) {
+        if (message == null) {
+            return null;
+        }
+        Matcher m = DUP_KEY.matcher(message);
+        if (!m.find()) {
+            return null;
+        }
+        String key = m.group(1);
+        int dot = key.lastIndexOf('.');
+        if (dot >= 0) {
+            key = key.substring(dot + 1);
+        }
+        return UNIQUE_KEY_TO_FIELD.get(key);
     }
 }
