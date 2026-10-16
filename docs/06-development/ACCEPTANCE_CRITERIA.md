@@ -92,11 +92,11 @@
 - [ ] **登录成功**：`curl -X POST .../api/v1/auth/login -d '{"username":"owner_a","password":"..."}'` → 返回令牌
 - [ ] **登录失败不区分用户**：错误密码与不存在用户均返回 `AUTH-1002`
 - [ ] **禁用用户被拒**：`PATCH /users/{id}/status` 置 `DISABLED` 后登录 → `AUTH-1003`
-- [ ] **令牌刷新**：`POST /auth/refresh` → 成功换发；过期令牌 → `AUTH-1001`
+- [ ] **令牌刷新**：`POST /auth/refresh` → 成功换发；过期令牌 → `AUTH-1005`（见 ERROR_CODES §2.1）
 - [ ] **跨团队读被拒**：用 B 团队 Token `GET /api/v1/skus/{a_sku_id}` → 403 `TEAM-2001`
-- [ ] **请求体伪造被忽略**：A 的 Token 创建采购明细并传 `teamId=B` → 403 `TEAM-2001`，且产生 `TEAM_CROSS_ACCESS_DENIED` 审计
+- [ ] **请求体伪造被忽略**：A 的 Token 创建采购明细并传 `teamId=B` → 403 `TEAM-2001`，且产生 `TEAM_CROSS_ACCESS_DENIED` 审计（对象属 M6，M6 验收时勾选）
 - [ ] **团队停用**：置 `teams.status='DISABLED'` 后任意接口 → 403 `TEAM-2002`
-- [ ] **角色越权**：`OPERATOR` 调用审批接口 → 403 `TEAM-2003`
+- [ ] **角色越权**：`OPERATOR` 调用审批接口 → 403 `TEAM-2003`（审批接口属 M6，M6 验收时勾选）
 - [ ] **主数据 CRUD**：仓库/供应商/商品/SKU 的增改查可用
 - [ ] **编码唯一性**：同团队重复 `sku_code` → `CAT-3002`；跨团队同 `sku_code` → 成功
 - [ ] **主数据启停**：停用 SKU 后，历史数据仍可查（`§9.4`）
