@@ -57,4 +57,18 @@ public interface ImportRowErrorMapper extends BaseMapper<ImportRowErrorEntity> {
     long countByBatch(@Param("batchId") Long batchId,
                       @Param("errorLevel") String errorLevel,
                       @Param("rowNo") Integer rowNo);
+
+    /**
+     * 取该批次某错误级别下的<b>不同数据行号</b>，供批次详情的错误统计（M3-T07 裁定 J2）。
+     *
+     * <p>口径与 {@code POST /{id}/validate} 的 {@code ValidationResultView} 一致：同一行命中多条
+     * 同级别规则仍只算 1 个「错误行/警告行」。返回集合由服务层做差集（
+     * {@code warning_rows} = 有 WARNING 且<b>无</b> ERROR 的行数），故需同时取两个级别。
+     *
+     * <p>租户线对 {@code @Select} 同样生效（本类不写 {@code @InterceptorIgnore}），故无需手拼 {@code team_id}；
+     * 跨团队/不存在的批次由控制器先经 {@code loadOwned} 拦下。
+     */
+    @Select("SELECT DISTINCT row_no FROM import_row_errors WHERE batch_id = #{batchId} "
+            + "AND error_level = #{level}")
+    List<Integer> selectDistinctRowNosByLevel(@Param("batchId") Long batchId, @Param("level") String level);
 }
