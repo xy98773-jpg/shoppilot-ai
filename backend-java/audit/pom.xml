@@ -20,5 +20,12 @@
             <groupId>com.shoppilot</groupId>
             <artifactId>shoppilot-common</artifactId>
         </dependency>
+
+        <!-- M2-T11：实体样板代码（与 identity/catalog 同口径；provided 不传递，故本模块需自行声明）。 -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 </project>
