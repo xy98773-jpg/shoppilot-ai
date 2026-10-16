@@ -57,8 +57,8 @@ class AuthFlowIntegrationTest {
             .withUrlParam("allowPublicKeyRetrieval", "true");
 
     /** 全部测试账号共用同一口令的 BCrypt 哈希（只算一次，避免每用例重复 BCrypt 开销）。 */
-    private static final String RAW_PASSWORD = "S3cret!Pass";
-    private static final String PASSWORD_HASH = new BCryptPasswordEncoder().encode(RAW_PASSWORD);
+    private static final String RAW_PASSWORD = com.shoppilot.TestCredentials.RAW_PASSWORD;
+    private static final String PASSWORD_HASH = com.shoppilot.TestCredentials.PASSWORD_HASH;
 
     private static final long TEAM_ID = 7L;
     private static final long OPERATOR_ID = 1001L;

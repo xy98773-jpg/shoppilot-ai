@@ -58,8 +58,8 @@ class AuditDecouplingIntegrationTest {
             .withUrlParam("useSSL", "false")
             .withUrlParam("allowPublicKeyRetrieval", "true");
 
-    private static final String RAW_PASSWORD = "S3cret!Pass";
-    private static final String PASSWORD_HASH = new BCryptPasswordEncoder().encode(RAW_PASSWORD);
+    private static final String RAW_PASSWORD = com.shoppilot.TestCredentials.RAW_PASSWORD;
+    private static final String PASSWORD_HASH = com.shoppilot.TestCredentials.PASSWORD_HASH;
 
     @DynamicPropertySource
     static void datasourceAndJwt(DynamicPropertyRegistry registry) {

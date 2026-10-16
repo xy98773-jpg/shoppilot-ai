@@ -70,8 +70,8 @@ class M2_AuthorizationMatrixIntegrationTest {
             .withUrlParam("allowPublicKeyRetrieval", "true");
 
     /** 测试专用口令（仅存在于测试进程；真实口令由环境变量注入，不入仓）。 */
-    private static final String RAW_PASSWORD = "S3cret!Pass";
-    private static final String PASSWORD_HASH = new BCryptPasswordEncoder().encode(RAW_PASSWORD);
+    private static final String RAW_PASSWORD = com.shoppilot.TestCredentials.RAW_PASSWORD;
+    private static final String PASSWORD_HASH = com.shoppilot.TestCredentials.PASSWORD_HASH;
 
     private static final long TEAM_ID = 7L;
     private static final long OTHER_TEAM_ID = 8L;

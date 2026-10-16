@@ -68,8 +68,8 @@ class M2_AuthBoundaryIntegrationTest {
             .withUrlParam("allowPublicKeyRetrieval", "true");
 
     /** 测试专用口令（仅存在于测试进程）。 */
-    private static final String RAW_PASSWORD = "S3cret!Pass";
-    private static final String PASSWORD_HASH = new BCryptPasswordEncoder().encode(RAW_PASSWORD);
+    private static final String RAW_PASSWORD = com.shoppilot.TestCredentials.RAW_PASSWORD;
+    private static final String PASSWORD_HASH = com.shoppilot.TestCredentials.PASSWORD_HASH;
 
     /** 与 {@code @DynamicPropertySource} 注入的签名密钥保持一致（仅测试进程可见）。 */
     private static final String TEST_JWT_SECRET = "test-only-jwt-secret-0123456789abcdef";

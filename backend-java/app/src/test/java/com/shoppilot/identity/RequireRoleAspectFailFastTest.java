@@ -55,8 +55,8 @@ class RequireRoleAspectFailFastTest {
             .withUrlParam("useSSL", "false")
             .withUrlParam("allowPublicKeyRetrieval", "true");
 
-    private static final String RAW_PASSWORD = "S3cret!Pass";
-    private static final String PASSWORD_HASH = new BCryptPasswordEncoder().encode(RAW_PASSWORD);
+    private static final String RAW_PASSWORD = com.shoppilot.TestCredentials.RAW_PASSWORD;
+    private static final String PASSWORD_HASH = com.shoppilot.TestCredentials.PASSWORD_HASH;
 
     private static final long TEAM_ID = 7L;
 
