@@ -1,5 +1,6 @@
 package com.shoppilot.catalog.application;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.shoppilot.catalog.application.dto.ProductView;
@@ -57,6 +58,7 @@ public class CatalogWriteService {
     private static final Logger log = LoggerFactory.getLogger(CatalogWriteService.class);
 
     private static final String STATUS_ACTIVE = "ACTIVE";
+    private static final String STATUS_INACTIVE = "INACTIVE";
 
     private final WarehouseMapper warehouseMapper;
     private final SupplierMapper supplierMapper;
@@ -376,6 +378,104 @@ public class CatalogWriteService {
                     List.of(new ApiErrorDetail("product_id", "不能为空", null)));
         }
         return bodyProductId;
+    }
+
+    // =====================================================================
+    // 启停（M2-T10）
+    // =====================================================================
+
+    /**
+     * 统一启停入口（{@code MODULE_BOUNDARIES §2.3}：{@code changeStatus(resourceType, id, status)}）。
+     *
+     * <p>4 个 {@code DELETE /{id}}（软删 → {@code INACTIVE}）与 2 个 {@code PATCH /{id}/status}
+     * （显式改状态，含重新启用）全部经此收敛。<b>DELETE 一律软删</b>：只改 {@code status} 列，
+     * 物理行保留（{@code API_CONTRACT §1.2} 硬规则 1）；对已 {@code INACTIVE} 对象重复 DELETE 仍返回成功
+     * （幂等，任务书 §3-1），不做乐观锁、不报 409/422。
+     *
+     * @param resourceType 资源类型（区分四表）
+     * @param id           资源主键
+     * @param status       目标状态；仅接受 {@code ACTIVE} / {@code INACTIVE}，否则 400 {@code COM-0001}+details
+     * @return 更新后的资源视图对象（具体类型与 {@code resourceType} 对应，由调用方按类型接收）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Object changeStatus(CatalogResourceType resourceType, Long id, String status) {
+        String target = requireValidStatus(status);
+        return switch (resourceType) {
+            case WAREHOUSE -> changeWarehouseStatus(id, target);
+            case SUPPLIER -> changeSupplierStatus(id, target);
+            case PRODUCT -> changeProductStatus(id, target);
+            case SKU -> changeSkuStatus(id, target);
+        };
+    }
+
+    private WarehouseView changeWarehouseStatus(Long id, String status) {
+        WarehouseEntity current = CatalogGuards.requireInTeam(warehouseMapper.selectById(id),
+                () -> warehouseMapper.selectTeamIdById(id), ErrorCodes.CAT_3003, "仓库不存在");
+
+        // TODO(M3/M6): CAT-3007 关联校验（在途采购/库存/补货建议）——依赖表属 M3/M6，本阶段不存在，故不实现
+        UpdateWrapper<WarehouseEntity> w = new UpdateWrapper<>();
+        w.eq("id", id).set("status", status).set("updated_by", currentUserId());
+        // 停用默认仓：同事务把 is_default 置 0，避免下游 getDefaultWarehouse 命中已停用仓（任务书 §3-4）
+        if (STATUS_INACTIVE.equals(status) && Boolean.TRUE.equals(current.getIsDefault())) {
+            w.set("is_default", false);
+        }
+        warehouseMapper.update(null, w);
+        log.info("仓库状态已变更 id={} status={}", id, status);
+        return WarehouseView.of(warehouseMapper.selectById(id));
+    }
+
+    private SupplierView changeSupplierStatus(Long id, String status) {
+        CatalogGuards.requireInTeam(supplierMapper.selectById(id),
+                () -> supplierMapper.selectTeamIdById(id), ErrorCodes.CAT_3001, "供应商不存在");
+
+        // TODO(M3/M6): CAT-3007 关联校验（在途采购/库存/补货建议）——依赖表属 M3/M6，本阶段不存在，故不实现
+        UpdateWrapper<SupplierEntity> w = new UpdateWrapper<>();
+        w.eq("id", id).set("status", status).set("updated_by", currentUserId());
+        supplierMapper.update(null, w);
+        log.info("供应商状态已变更 id={} status={}", id, status);
+        return SupplierView.of(supplierMapper.selectById(id));
+    }
+
+    private ProductView changeProductStatus(Long id, String status) {
+        CatalogGuards.requireInTeam(productMapper.selectById(id),
+                () -> productMapper.selectTeamIdById(id), ErrorCodes.CAT_3001, "商品不存在");
+
+        // CAT-3009：停用商品前其下不得存在 ACTIVE SKU（ERROR_CODES §2.4；本批必做，任务书 §3-3）
+        if (STATUS_INACTIVE.equals(status)) {
+            Long activeSkus = skuMapper.selectCount(new QueryWrapper<SkuEntity>()
+                    .eq("product_id", id)
+                    .eq("status", STATUS_ACTIVE));
+            if (activeSkus != null && activeSkus > 0) {
+                throw new BizException(ErrorCodes.CAT_3009, "该商品下仍有启用的 SKU，请先停用");
+            }
+        }
+        // TODO(M3/M6): CAT-3007 关联校验（在途采购/库存/补货建议）——依赖表属 M3/M6，本阶段不存在，故不实现
+        UpdateWrapper<ProductEntity> w = new UpdateWrapper<>();
+        w.eq("id", id).set("status", status).set("updated_by", currentUserId());
+        productMapper.update(null, w);
+        log.info("商品状态已变更 id={} status={}", id, status);
+        return ProductView.of(productMapper.selectById(id));
+    }
+
+    private SkuView changeSkuStatus(Long id, String status) {
+        CatalogGuards.requireInTeam(skuMapper.selectById(id),
+                () -> skuMapper.selectTeamIdById(id), ErrorCodes.CAT_3001, "SKU 不存在");
+
+        // TODO(M3/M6): CAT-3007 关联校验（在途采购/库存/补货建议）——依赖表属 M3/M6，本阶段不存在，故不实现
+        UpdateWrapper<SkuEntity> w = new UpdateWrapper<>();
+        w.eq("id", id).set("status", status).set("updated_by", currentUserId());
+        skuMapper.update(null, w);
+        log.info("SKU 状态已变更 id={} status={}", id, status);
+        return SkuView.of(skuMapper.selectById(id));
+    }
+
+    /** {@code status} 入参校验（任务书 §3-2）：缺失 / 非法枚举 → 400 {@code COM-0001} + {@code details[]}。 */
+    private static String requireValidStatus(String status) {
+        if (!STATUS_ACTIVE.equals(status) && !STATUS_INACTIVE.equals(status)) {
+            throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                    List.of(new ApiErrorDetail("status", "必须为 ACTIVE 或 INACTIVE", status)));
+        }
+        return status;
     }
 
     // =====================================================================

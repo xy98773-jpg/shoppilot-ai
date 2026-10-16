@@ -1,6 +1,7 @@
 package com.shoppilot.catalog.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.shoppilot.catalog.application.CatalogResourceType;
 import com.shoppilot.catalog.application.CatalogWriteService;
 import com.shoppilot.catalog.application.SupplierQueryService;
 import com.shoppilot.catalog.application.dto.CatalogPageQuery;
@@ -10,6 +11,7 @@ import com.shoppilot.common.web.ApiResponse;
 import com.shoppilot.common.web.PageResult;
 import java.util.List;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -24,7 +26,8 @@ import org.springframework.web.bind.annotation.RestController;
  * 供应商端点（M2-T09，{@code API_CONTRACT §10.3} 的 4 个在批端点）。
  *
  * <p>鉴权口径同 {@link WarehouseController}：写端点四角色显式列举（含 APPROVER）+ {@code teamIdParam=""}；
- * 读端点不标注。启停端点属 M2-T10，不实现。
+ * 读端点不标注。启停端点仅 {@code DELETE /{id}}（软删）属 M2-T10；<b>无 {@code PATCH /{id}/status}</b>
+ * （契约 {@code §10.3} 未定义，不得"补全"）。
  */
 @RestController
 @RequestMapping("/api/v1/suppliers")
@@ -67,5 +70,18 @@ public class SupplierController {
     @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
     public ApiResponse<SupplierView> update(@PathVariable("id") Long id, @RequestBody JsonNode body) {
         return ApiResponse.success(catalogWriteService.upsertSupplier(id, body));
+    }
+
+    /**
+     * 停用供应商（软删 → {@code INACTIVE}，物理行保留；幂等；{@code OWNER/ADMIN/OPERATOR/APPROVER}）→ 200。
+     *
+     * <p><b>供应商无 {@code PATCH /{id}/status} 端点</b>（{@code API_CONTRACT §10.3} 仅对 {@code warehouses}
+     * 与 {@code skus} 定义该路径，属契约明确范围，不得"补全"）。
+     */
+    @DeleteMapping("/{id}")
+    @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
+    public ApiResponse<SupplierView> deactivate(@PathVariable("id") Long id) {
+        return ApiResponse.success((SupplierView) catalogWriteService.changeStatus(
+                CatalogResourceType.SUPPLIER, id, "INACTIVE"));
     }
 }

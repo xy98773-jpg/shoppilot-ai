@@ -1,15 +1,18 @@
 package com.shoppilot.catalog.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.shoppilot.catalog.application.CatalogResourceType;
 import com.shoppilot.catalog.application.CatalogWriteService;
 import com.shoppilot.catalog.application.WarehouseQueryService;
 import com.shoppilot.catalog.application.dto.CatalogPageQuery;
 import com.shoppilot.catalog.application.dto.WarehouseView;
+import com.shoppilot.catalog.application.support.CatalogJson;
 import com.shoppilot.common.annotation.RequireRole;
 import com.shoppilot.common.web.ApiResponse;
 import com.shoppilot.common.web.PageResult;
 import java.util.List;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -32,8 +35,9 @@ import org.springframework.web.bind.annotation.RestController;
  *       跨团队 / 不存在由服务层（{@link WarehouseQueryService}）兜底。</li>
  * </ul>
  *
- * <p>启停端点（{@code DELETE /{id}}、{@code PATCH /{id}/status}）属 M2-T10，本批<b>不实现</b>。
- * 响应码：POST → {@code 201}，PATCH → {@code 200}，GET → {@code 200}（契约 §2）。
+ * <p>启停端点（{@code DELETE /{id}} 软删、{@code PATCH /{id}/status}）属 M2-T10，经
+ * {@link CatalogWriteService#changeStatus} 收敛；两者同为写角色（四名显式列举）。
+ * 响应码：POST → {@code 201}，PATCH / DELETE → {@code 200}，GET → {@code 200}（契约 §2 / §1.3）。
  */
 @RestController
 @RequestMapping("/api/v1/warehouses")
@@ -79,5 +83,21 @@ public class WarehouseController {
     @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
     public ApiResponse<WarehouseView> update(@PathVariable("id") Long id, @RequestBody JsonNode body) {
         return ApiResponse.success(catalogWriteService.upsertWarehouse(id, body));
+    }
+
+    /** 停用仓库（软删 → {@code INACTIVE}，物理行保留；幂等；{@code OWNER/ADMIN/OPERATOR/APPROVER}）→ 200。 */
+    @DeleteMapping("/{id}")
+    @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
+    public ApiResponse<WarehouseView> deactivate(@PathVariable("id") Long id) {
+        return ApiResponse.success((WarehouseView) catalogWriteService.changeStatus(
+                CatalogResourceType.WAREHOUSE, id, "INACTIVE"));
+    }
+
+    /** 显式改仓库状态（{@code ACTIVE}/{@code INACTIVE}，含重新启用；{@code OWNER/ADMIN/OPERATOR/APPROVER}）→ 200。 */
+    @PatchMapping("/{id}/status")
+    @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
+    public ApiResponse<WarehouseView> changeStatus(@PathVariable("id") Long id, @RequestBody JsonNode body) {
+        return ApiResponse.success((WarehouseView) catalogWriteService.changeStatus(
+                CatalogResourceType.WAREHOUSE, id, CatalogJson.textOrNull(body, "status")));
     }
 }

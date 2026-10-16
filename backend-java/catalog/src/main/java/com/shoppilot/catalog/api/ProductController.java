@@ -1,6 +1,7 @@
 package com.shoppilot.catalog.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.shoppilot.catalog.application.CatalogResourceType;
 import com.shoppilot.catalog.application.CatalogWriteService;
 import com.shoppilot.catalog.application.ProductQueryService;
 import com.shoppilot.catalog.application.SkuQueryService;
@@ -12,6 +13,7 @@ import com.shoppilot.common.web.ApiResponse;
 import com.shoppilot.common.web.PageResult;
 import java.util.List;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -26,7 +28,8 @@ import org.springframework.web.bind.annotation.RestController;
  * 商品端点（M2-T09，{@code API_CONTRACT §10.3} 的 6 个在批端点，含商品下 SKU 子资源）。
  *
  * <p>鉴权口径同 {@link WarehouseController}：写端点四角色显式列举（含 APPROVER）+ {@code teamIdParam=""}；
- * 读端点不标注。启停端点属 M2-T10，不实现。
+ * 读端点不标注。启停端点仅 {@code DELETE /{id}}（软删，含 {@code CAT-3009} 前置校验）属 M2-T10；
+ * <b>无 {@code PATCH /{id}/status}</b>（契约 {@code §10.3} 未定义，不得"补全"）。
  */
 @RestController
 @RequestMapping("/api/v1/products")
@@ -94,5 +97,19 @@ public class ProductController {
     @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
     public ApiResponse<SkuView> createSku(@PathVariable("id") Long id, @RequestBody JsonNode body) {
         return ApiResponse.success(catalogWriteService.upsertSku(null, id, body));
+    }
+
+    /**
+     * 停用商品（软删 → {@code INACTIVE}，物理行保留；幂等；{@code OWNER/ADMIN/OPERATOR/APPROVER}）→ 200。
+     *
+     * <p>前置校验 {@code CAT-3009}：商品下存在 {@code ACTIVE} SKU 时 → 422（{@code ERROR_CODES §2.4}）。
+     * <b>商品无 {@code PATCH /{id}/status} 端点</b>（{@code API_CONTRACT §10.3} 仅对 {@code warehouses}/{@code skus}
+     * 定义该路径，不得"补全"）。
+     */
+    @DeleteMapping("/{id}")
+    @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
+    public ApiResponse<ProductView> deactivate(@PathVariable("id") Long id) {
+        return ApiResponse.success((ProductView) catalogWriteService.changeStatus(
+                CatalogResourceType.PRODUCT, id, "INACTIVE"));
     }
 }

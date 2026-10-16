@@ -85,6 +85,10 @@ public final class ErrorCodes {
     public static final String CAT_3005 = "CAT-3005";
     /** 主数据已停用（422）—— 对 INACTIVE 对象执行需启用的操作（ERROR_CODES §2.4）。 */
     public static final String CAT_3006 = "CAT-3006";
+    /** 存在关联数据不可删除/停用（409）—— 停用被在途采购/启用 SKU 引用的对象（ERROR_CODES §2.4）。 */
+    public static final String CAT_3007 = "CAT-3007";
+    /** 商品下存在启用 SKU，不可停用（422）—— 停用商品但含 ACTIVE SKU（ERROR_CODES §2.4）。 */
+    public static final String CAT_3009 = "CAT-3009";
     /** 供应商交期/MOQ 配置非法（400）—— lead_time_days 为负数、order_multiple <= 0（ERROR_CODES §2.4）。 */
     public static final String CAT_3011 = "CAT-3011";
 

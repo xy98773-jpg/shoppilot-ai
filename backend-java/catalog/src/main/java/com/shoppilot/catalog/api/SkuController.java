@@ -1,15 +1,18 @@
 package com.shoppilot.catalog.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.shoppilot.catalog.application.CatalogResourceType;
 import com.shoppilot.catalog.application.CatalogWriteService;
 import com.shoppilot.catalog.application.SkuQueryService;
 import com.shoppilot.catalog.application.dto.CatalogPageQuery;
 import com.shoppilot.catalog.application.dto.SkuView;
+import com.shoppilot.catalog.application.support.CatalogJson;
 import com.shoppilot.common.annotation.RequireRole;
 import com.shoppilot.common.web.ApiResponse;
 import com.shoppilot.common.web.PageResult;
 import java.util.List;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -24,7 +27,8 @@ import org.springframework.web.bind.annotation.RestController;
  * SKU 端点（M2-T09，{@code API_CONTRACT §10.3} 的 4 个在批端点）。
  *
  * <p>鉴权口径同 {@link WarehouseController}：写端点四角色显式列举（含 APPROVER）+ {@code teamIdParam=""}；
- * 读端点不标注。独立 {@code POST /skus} 须在请求体带 {@code product_id}；启停端点属 M2-T10，不实现。
+ * 读端点不标注。独立 {@code POST /skus} 须在请求体带 {@code product_id}；启停端点（{@code DELETE /{id}} 软删、
+ * {@code PATCH /{id}/status}）属 M2-T10，经 {@link CatalogWriteService#changeStatus} 收敛。
  */
 @RestController
 @RequestMapping("/api/v1/skus")
@@ -70,5 +74,21 @@ public class SkuController {
     @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
     public ApiResponse<SkuView> update(@PathVariable("id") Long id, @RequestBody JsonNode body) {
         return ApiResponse.success(catalogWriteService.upsertSku(id, null, body));
+    }
+
+    /** 停用 SKU（软删 → {@code INACTIVE}，物理行保留；幂等；{@code OWNER/ADMIN/OPERATOR/APPROVER}）→ 200。 */
+    @DeleteMapping("/{id}")
+    @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
+    public ApiResponse<SkuView> deactivate(@PathVariable("id") Long id) {
+        return ApiResponse.success((SkuView) catalogWriteService.changeStatus(
+                CatalogResourceType.SKU, id, "INACTIVE"));
+    }
+
+    /** 显式改 SKU 状态（{@code ACTIVE}/{@code INACTIVE}，含重新启用；{@code OWNER/ADMIN/OPERATOR/APPROVER}）→ 200。 */
+    @PatchMapping("/{id}/status")
+    @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
+    public ApiResponse<SkuView> changeStatus(@PathVariable("id") Long id, @RequestBody JsonNode body) {
+        return ApiResponse.success((SkuView) catalogWriteService.changeStatus(
+                CatalogResourceType.SKU, id, CatalogJson.textOrNull(body, "status")));
     }
 }
