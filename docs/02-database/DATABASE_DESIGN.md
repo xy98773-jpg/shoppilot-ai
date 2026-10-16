@@ -1714,6 +1714,8 @@ replenishment_items.status = 'APPROVED'
 ### 9.3 版本号编排原则
 
 1. **按模块依赖顺序递增**：`identity → catalog → {inventory, sales} → importdata → analysis → replenishment → purchasing → audit`（与 `§7.1` 依赖方向一致）。
+
+   > **实际编号口径（M3 启动裁定，2026-10-16）**：本条的列举表达**依赖方向**，**不作为编号强制执行顺序**；版本号按**开发批次顺序**连续递增（原则 4/5 优先于本条列举），只要依赖方向不被违反即可。实际链条以 `flyway_schema_history` 为准——`V1.0.4` = audit 已先于 inventory / sales 落地（M2-T11）。详见 `DESIGN_REVIEW.md` R32。
 2. **一个迁移只做一件事**：一个迁移内只建 1~4 张**同一领域、同一依赖层**的表，便于失败时定位。
 3. **`V` 号只增不改**：一旦迁移在**任一环境**执行过，**禁止修改其内容**（Flyway 校验和会失败）。
 4. **不排期预留号**：不写 `V100__future` 之类的空位；版本号连续递增即可。
