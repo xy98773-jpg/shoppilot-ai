@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>用真实 MySQL 8.0.36（Testcontainers）执行真实迁移与<b>真实 SQL 约束</b>，
  * 断言 {@code DESIGN_BASIS §6} 与 {@code DATABASE_DESIGN §5.4-§5.7} 的数据库级保障：
  * <ul>
- *   <li>Flyway 应用 {@code V1.0.0} → {@code V1.0.3} 共四条迁移（含 M2-T08 catalog）；</li>
+ *   <li>Flyway 应用 {@code V1.0.0} → {@code V1.0.4} 共五条迁移（含 M2-T08 catalog、M2-T11 audit）；</li>
  *   <li>团队内唯一约束（uk_*_team_code）冲突 → 完整性约束（SQLState 23xx）；</li>
  *   <li>跨团队同编码<b>可重复</b>插入成功（D2，§6.3）；</li>
  *   <li>四表全部 13 条索引（4 个 uk_* + 9 个 idx_*）<b>team_id 为最左列</b>（逐条断言）；</li>

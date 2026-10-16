@@ -62,8 +62,17 @@ function toApiError(body: ApiResponse, httpStatus?: number): ApiError {
   return err
 }
 
+/**
+ * API 版本前缀（契约 `API_CONTRACT §8.1`：所有业务端点形如 `/api/v1/...`）。
+ *
+ * ★ M2-T12 修正：M1 骨架原为 `baseURL: '/api'`，与各 `api/<module>.ts` 中的资源相对路径
+ *   （如 `/auth/login`）拼接后得到 `/api/auth/login`，**缺少 `/v1` 段**，与后端
+ *   `@RequestMapping("/api/v1/...")` 不匹配（必 404）。此处把版本段收敛到唯一位置。
+ */
+export const API_BASE_URL = '/api/v1'
+
 const http: AxiosInstance = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL,
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
