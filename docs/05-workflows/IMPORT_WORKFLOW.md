@@ -643,7 +643,7 @@ stateDiagram-v2
 | --- | --- | --- | --- |
 | 1 | ~~`SYSTEM_ARCHITECTURE.md §4.1` / `PRD.md §10.1` vs `API_CONTRACT.md §10.6`~~ | 前者曾使用 `/api/v1/imports`、`.../execute`；权威为 `/api/v1/import/batches*`、`.../confirm` | **已解决**：M0 审查中已把前者修正为权威路径，本条关闭（详见 `DESIGN_REVIEW.md` 检查项 14）。 |
 | 2 | `DESIGN_BASIS.md §9.5` | `DUPLICATE_REJECTED` 行描述"→ `FORCE_REIMPORT`"，但 `FORCE_REIMPORT` 未作为枚举值定义（`USER_ROLES.md §7.3` 第 2 条同样指出） | **与 `DESIGN_BASIS.md §9.5` 表述不完整，建议修订**：明确 `FORCE_REIMPORT` 为"动作"（对应 `/reimport`），而非 `ImportBatchStatus` 取值。本文档按"动作"处理。 |
-| 3 | `DESIGN_BASIS.md §8` vs `§9.5` | `import_batches` 唯一约束写作 `uk_imp_team_hash_biz (team_id, file_hash, biz_type)`，与 `DUPLICATE_REJECTED` / `FORCE_REIMPORT` 物理上不可同时满足 | **与 `DESIGN_BASIS.md §8 不一致，建议修订**（已在 `DATABASE_DESIGN.md §11.1` INC-1 登记为 `D-09`）。本文档沿用约束名与业务语义，物理列按 `dedupe_hash` 槽位方案。 |
+| 3 | ~~`DESIGN_BASIS.md §8` vs `§9.5`~~ | 原写 `uk_imp_team_hash_biz (team_id, file_hash, biz_type)`，与 `DUPLICATE_REJECTED` / `FORCE_REIMPORT` 物理上不可同时满足 | ✅ **已解决**：`DESIGN_BASIS §8` 表行已订正为 `(team_id, dedupe_hash, biz_type)`（M3 前置订正批，登记 `DESIGN_REVIEW R31`）；`DATABASE_DESIGN.md §11.1` INC-1 同步标注已闭环。本文档沿用约束名与业务语义，物理列按 `dedupe_hash` 槽位方案。 |
 | 4 | 待决策编号冲突 | `DATABASE_DESIGN.md §11.2` 用 `D-09` 表示"导入幂等槽位列"；`USER_ROLES.md §7.2` / `API_CONTRACT.md §11.7` / `ERROR_CODES.md` 用 `D-09` 表示"四眼原则" | **跨文档编号冲突**：两个互不相关的决策占用了同一编号。**建议**：为一者改号并统一登记到 `DESIGN_BASIS.md §15`。本文档引用 `D-09` 时**明确标注语义**（导入幂等槽位列）。 |
 | 5 | 导入 WARNING 码 | `IMP-4006`/`IMP-4014` 已存在于 `ERROR_CODES.md §2.5`，并已固化于 `DESIGN_BASIS.md §12.3` | **已解决**：`DESIGN_BASIS.md §12.3` 已覆盖 `IMP-4006`/`IMP-4014`（登记 `D-12`）。本文档按 `ERROR_CODES.md` 使用。 |
 | 6 | 异步导入 | SSOT 未定义"异步导入任务" | 本文档明确**首期不做异步导入任务**（§8.5），属**新增设计结论**，建议在 `DESIGN_BASIS.md §15` 或 ADR 备案。 |

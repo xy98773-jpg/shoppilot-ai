@@ -302,7 +302,7 @@ identity ← catalog ← {inventory, sales} ← analysis ← replenishment ← p
 | 9 | `inventory_balances` | 库存余额 | inventory | ✅ | id | `uk_invbal_team_wh_sku (team_id,warehouse_id,sku_id)` |
 | 10 | `inventory_transactions` | 库存流水 | inventory | ✅ | id | `uk_invtxn_team_idem (team_id,idempotency_key)`、`uk_invtxn_team_reversed (team_id,reversed_txn_id)`（`reversed_txn_id` 可空且唯一 → **一笔流水只能被冲销一次**） |
 | 11 | `sales_daily` | 日销售 | sales | ✅ | id | `uk_sales_team_wh_sku_date (team_id,warehouse_id,sku_id,sale_date)` |
-| 12 | `import_batches` | 导入批次 | importdata | ✅ | id | `uk_imp_team_hash_biz (team_id,file_hash,biz_type)` |
+| 12 | `import_batches` | 导入批次 | importdata | ✅ | id | `uk_imp_team_hash_biz (team_id,dedupe_hash,biz_type)`（物理列＝**可空槽位列** `dedupe_hash`，值取文件内容 SHA-256；见下方「导入幂等的物理实现」与 `§9.5`） |
 | 13 | `import_row_errors` | 导入行错误 | importdata | ✅ | id | 无（普通索引） |
 | 14 | `analysis_runs` | 分析任务 | analysis | ✅ | id | `uk_run_team_no (team_id,run_no)`、`uk_run_team_idem` |
 | 15 | `analysis_items` | 分析明细（快照） | analysis | ✅ | id | `uk_ai_run_sku_wh (run_id,sku_id,warehouse_id)` |
