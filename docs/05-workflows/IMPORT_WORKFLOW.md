@@ -467,12 +467,15 @@ flowchart TD
 | `ImportBizType` | 特有校验 | 错误码 | 级别 |
 | --- | --- | --- | --- |
 | `PRODUCT` | `default_supplier_code` 存在且同团队 | `CAT-3001` / `CAT-3005` | ERROR |
-| `PRODUCT` | `product_code` 团队内唯一（文件内 + 库内） | `CAT-3002` | ERROR（文件内）/ 见 §7.1 upsert |
+| `PRODUCT` | `product_code` **文件内重复** → 后行 `ERROR`；**库内已存在 → 不报错**（`§7.1` upsert 更新非键字段） | `CAT-3002` | ERROR（**仅限文件内重复**） |
+| `SKU` | `sku_code` **文件内重复** → 后行 `ERROR`；**库内已存在 → 不报错**（`§7.2` upsert） | `CAT-3002` | ERROR（**仅限文件内重复**） |
 | `SKU` | **`product_code` 必须已存在** | `CAT-3001` | ERROR |
 | `SKU` | `supplier_code` 存在且同团队 | `CAT-3001` / `CAT-3005` | ERROR |
 | `SKU` | `product_id` 不可变（同编码不得改挂商品） | `CAT-3002` | ERROR |
 | `SKU` | `listed_date` ≤ 今天 | `COM-0001` | ERROR |
+| `SUPPLIER` | `code` **文件内重复** → 后行 `ERROR`；**库内已存在 → 不报错**（`§7.3` upsert） | `CAT-3002` | ERROR（**仅限文件内重复**） |
 | `SUPPLIER` | `order_multiple > 0`（若填）、`lead_time_days ≥ 0` | `CAT-3011` | ERROR |
+| `WAREHOUSE` | `code` **文件内重复** → 后行 `ERROR`；**库内已存在 → 不报错**（`§7.4` upsert） | `CAT-3002` | ERROR（**仅限文件内重复**） |
 | `WAREHOUSE` | `is_default` 同团队至多一行 | `CAT-3008` | ERROR |
 | `INVENTORY_SNAPSHOT` | **`sku_code` 必须存在**且同团队 | `CAT-3001` / `CAT-3005` | ERROR |
 | `INVENTORY_SNAPSHOT` | **仓库必须存在**且同团队 | `CAT-3003` | ERROR |
@@ -483,6 +486,8 @@ flowchart TD
 | `SALES_DAILY` | 同一 `(wh, sku, date)` 文件内唯一 | `SAL-6004` | ERROR |
 | `SALES_DAILY` | 命中库内已有行 → 提示将覆盖 | `IMP-4006` | WARNING |
 | `SALES_DAILY` | 日期缺口（同 SKU 区间内缺失 > 30%） | `IMP-4014` | WARNING |
+
+> **主数据「库内已存在」的统一口径（2026-10-17 澄清，`DESIGN_REVIEW R38`）**：四类主数据（`PRODUCT` / `SKU` / `SUPPLIER` / `WAREHOUSE`）命中 `uk_*_team_code` 一律 **upsert 更新、不报错**（`§7.1`–`§7.4`、`§8.6`）；**只有"文件内重复"记 `ERROR`**（后行）。此口径是本表早期表述（"文件内 + 库内"）的澄清，不改变 `§7` / `§8.6` 的既有语义。`INVENTORY_SNAPSHOT` / `SALES_DAILY` 的库内命中分别见 `§7.5`（累加 + `IMP-4006` WARNING）与 `§7.6`（覆盖 + `IMP-4006` WARNING）。
 
 > **数据质量与 `D` 的关系**：`SALES_DAILY` 的日期缺口检查是保证 `§10.1` 的 `n`（有效天数）口径可信的关键（`DATABASE_DESIGN.md §6-E.6`）。`IMP-4014` 为 `WARNING`，不阻断导入但提示用户补齐零销量日。
 
