@@ -7,7 +7,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * 声明式角色校验注解（配置在 {@code api} 层 Controller 方法 / 类上）。
+ * 声明式角色校验注解（仅配置在 {@code api} 层 Controller <b>方法</b>上）。
  *
  * <p>依据 {@code MODULE_BOUNDARIES.md §6}：权限矩阵（{@code USER_ROLES.md §2.2}）以声明式元数据形式
  * 标注在接口方法上，由统一鉴权切面（M2-T07 {@code RequireRoleAspect}）在执行前校验。
@@ -21,8 +21,13 @@ import java.lang.annotation.Target;
  * <p><b>M2-T07 扩展</b>：新增 {@link #teamIdParam()}，声明「从哪个方法参数取路径 {@code {teamId}}」，
  * 使切面在角色判定之前先做<b>团队归属</b>校验（{@code TEAM-2001}），保证判定顺序
  * （{@code USER_ROLES §4.1}：团队归属先于角色授权）不被打乱。
+ *
+ * <p><b>⚠️ 仅支持方法级注解（M2-T08 P-1）</b>：切面以 {@code @Around("@annotation(RequireRole)")}
+ * 只拦截<b>方法级</b>注解。若标注在<b>类</b>上会被<b>静默忽略</b>（编译通过、运行放行）——这是最危险的
+ * 安全静默失效。故本注解 {@code @Target} 仅含 {@code ElementType.METHOD}，<b>不允许</b>类级声明；
+ * 切勿为「省事」改成 {@code {METHOD, TYPE}} 后去扩切面（会引入方法/类注解谁优先的语义歧义，超范围）。
  */
-@Target({ElementType.METHOD, ElementType.TYPE})
+@Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
 public @interface RequireRole {

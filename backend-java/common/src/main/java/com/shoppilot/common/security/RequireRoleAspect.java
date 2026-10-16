@@ -41,9 +41,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class RequireRoleAspect {
 
-    /** 默认路径团队参数名（{@code teamIdParam} 为空时回退）。 */
-    private static final String DEFAULT_TEAM_ID_PARAM = "teamId";
-
     /**
      * 拦截带 {@link RequireRole} 的方法，先校验团队归属、再校验角色。
      *
@@ -69,22 +66,36 @@ public class RequireRoleAspect {
     /**
      * 从方法参数中解析路径 {@code {teamId}}（资源定位符）。
      *
-     * <p>优先用 {@link RequireRole#teamIdParam()} 指定的参数名；为空则用 {@link #DEFAULT_TEAM_ID_PARAM}。
-     * 找不到该参数时返回 {@code null}，调用方据此跳过归属步。
+     * <p>判定逻辑（M2-T08 P-2 fail-fast）：
+     * <ul>
+     *   <li>若 {@link RequireRole#teamIdParam()} <b>非空</b>（作者显式声明要做归属校验）：
+     *       必须解析到同名 {@code Number} 参数；解析不到（参数名拼错 / 被改名 / 类型非 Number）
+     *       → 抛 {@link IllegalStateException}（配置错误快速暴露，<b>不得静默跳过</b>）；</li>
+     *   <li>若 {@link RequireRole#teamIdParam()} <b>为空</b>（如 {@code GET /teams} 列表路径无 {@code {teamId}}）：
+     *       属合法场景 → 返回 {@code null}，调用方据此跳过归属步、只做角色授权。</li>
+     * </ul>
      */
     private Long resolveTeamId(ProceedingJoinPoint pjp, RequireRole requireRole) {
-        String paramName = requireRole.teamIdParam().isEmpty() ? DEFAULT_TEAM_ID_PARAM : requireRole.teamIdParam();
+        String paramName = requireRole.teamIdParam();
+        if (paramName.isEmpty()) {
+            // 未显式声明团队参数：路径无 {teamId}，跳过归属校验（合法）
+            return null;
+        }
         CodeSignature signature = (CodeSignature) pjp.getSignature();
         String[] names = signature.getParameterNames();
         Object[] args = pjp.getArgs();
-        if (names == null || args == null) {
-            return null;
-        }
-        for (int i = 0; i < names.length; i++) {
-            if (paramName.equals(names[i]) && i < args.length && args[i] instanceof Number number) {
-                return number.longValue();
+        if (names != null && args != null) {
+            for (int i = 0; i < names.length; i++) {
+                if (paramName.equals(names[i]) && i < args.length && args[i] instanceof Number number) {
+                    return number.longValue();
+                }
             }
         }
-        return null;
+        // ★ fail-fast：显式声明了 teamIdParam 却解析不到 Number 参数 → 配置错误，立即暴露，
+        //   绝不让归属校验静默丢失（静默失效比显式报错更危险）。
+        throw new IllegalStateException(
+                "RequireRole(teamIdParam='" + paramName + "') 解析失败：方法 ["
+                        + signature.getDeclaringType().getSimpleName() + "#" + signature.getName()
+                        + "] 不存在该名称的 Number 参数，团队归属校验（TEAM-2001）无法执行");
     }
 }
