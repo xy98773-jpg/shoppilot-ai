@@ -1,9 +1,7 @@
 package com.shoppilot.importdata.infrastructure.parser;
 
-import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.PushbackInputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -30,6 +28,7 @@ import org.apache.poi.hssf.record.StringRecord;
 import org.apache.poi.openxml4j.opc.OPCPackage;
 import org.apache.poi.openxml4j.opc.PackageAccess;
 import org.apache.poi.poifs.filesystem.NotOLE2FileException;
+import org.apache.poi.poifs.filesystem.POIFSFileSystem;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.util.XMLHelper;
@@ -135,11 +134,18 @@ public class ExcelImportParser implements ImportFileParser {
             SharedStrings strings = new ReadOnlySharedStringsTable(pkg);
             boolean parsed = false;
 
+            // ★ 顺序铁律（R36 根因）：XSSFReader.SheetIterator.getSheetName() 依赖 next() 才填充的
+            //   内部字段 xssfSheetRef —— 在 next() 之前调用必抛 NPE，被上方 catch(Exception) 吞为
+            //   IMP-4002，导致任何 .xlsx 都解析失败。此处改为「用 readSheetMeta 的按序名单 + 下标比对」
+            //   定位目标表，完全不依赖 getSheetName()，从根本上消除对调用时机的依赖
+            //   （项目负责人回修单 §3① 推荐方案；workbook.xml 的 <sheets> 顺序与 SheetIterator 顺序一致）。
             XSSFReader.SheetIterator sheetIt = (XSSFReader.SheetIterator) reader.getSheetsData();
+            int index = 0;
             while (sheetIt.hasNext()) {
-                String current = sheetIt.getSheetName();
                 try (InputStream sheetStream = sheetIt.next()) {
-                    if (!target.name.equals(current)) {
+                    String current = index < sheets.size() ? sheets.get(index).name() : null;
+                    index++;
+                    if (current == null || !target.name().equals(current)) {
                         continue;
                     }
                     parseSheet(sheetStream, styles, strings, options, sink);
@@ -244,7 +250,11 @@ public class ExcelImportParser implements ImportFileParser {
     // =====================================================================
 
     private void parseXls(Path file, ParseOptions options, ParseSink sink) throws Exception {
-        try (InputStream in = new BufferedInputStream(Files.newInputStream(file))) {
+        // ★ R36 顺带自查发现的 .xls 缺陷：.xls 是 OLE2/POIFS 容器，BIFF 记录位于 "Workbook" 流内。
+        //   B3 误用 `processEvents(HSSFRequest, InputStream)`——该重载读的是【裸 Workbook 流】，
+        //   把 OLE2 头（D0CF11E0…）当作 BIFF 记录解析 → 必然失败（表现为批次 FAILED + IMP-4002），
+        //   任何真实 .xls 都不可导入。正确做法：用 POIFSFileSystem 打开容器，再 processWorkbookEvents。
+        try (POIFSFileSystem fs = new POIFSFileSystem(file.toFile(), true)) {
             HssfCollector collector = new HssfCollector(options, sink);
             FormatTrackingHSSFListener formatListener =
                     new FormatTrackingHSSFListener(new MissingRecordAwareHSSFListener(collector));
@@ -252,7 +262,7 @@ public class ExcelImportParser implements ImportFileParser {
 
             HSSFRequest request = new HSSFRequest();
             request.addListenerForAllRecords(formatListener);
-            new HSSFEventFactory().processEvents(request, new PushbackInputStream(in, 8192));
+            new HSSFEventFactory().processWorkbookEvents(request, fs);
             collector.finish();
         }
     }
