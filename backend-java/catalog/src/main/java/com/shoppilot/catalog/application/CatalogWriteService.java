@@ -3,6 +3,10 @@ package com.shoppilot.catalog.application;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.shoppilot.audit.application.AuditWriteService;
+import com.shoppilot.audit.domain.model.AuditAction;
+import com.shoppilot.audit.domain.model.AuditEvent;
+import com.shoppilot.audit.domain.model.AuditResult;
 import com.shoppilot.catalog.application.dto.ProductView;
 import com.shoppilot.catalog.application.dto.SkuView;
 import com.shoppilot.catalog.application.dto.SupplierView;
@@ -51,6 +55,16 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>唯一约束冲突（{@code uk_*_team_code}）由 {@code DuplicateKeyException} 全局翻译为 {@code 409 CAT-3002}
  * （见 {@code GlobalExceptionHandler}），不泄露为 500。
+ *
+ * <h2>审计埋点（M2-T11，{@code DATABASE_DESIGN §6-J.1} #6）</h2>
+ * {@code DESIGN_BASIS §9.17}：{@code MASTER_DATA_STATUS_CHANGE} <b>覆盖</b>主数据的创建/更新/停用/启用四类，
+ * 以 {@code biz_type}（{@code WAREHOUSE}/{@code SUPPLIER}/{@code PRODUCT}/{@code SKU}）区分。分工：
+ * <ul>
+ *   <li><b>创建（POST）与启停（DELETE / PATCH status）</b>：在本类内<b>显式</b> {@code record()}——
+ *       这两类需要 {@code biz_no}（编号快照）与准确的操作摘要，只有拿到实体的本类能给；</li>
+ *   <li><b>更新（PATCH /{id}）</b>：由 Controller 上的 {@code @Audited} 切面记录
+ *       （{@code biz_id} 取自路径 {@code {id}}；切面不读业务表，故不填 {@code biz_no}）。</li>
+ * </ul>
  */
 @Service
 public class CatalogWriteService {
@@ -60,22 +74,31 @@ public class CatalogWriteService {
     private static final String STATUS_ACTIVE = "ACTIVE";
     private static final String STATUS_INACTIVE = "INACTIVE";
 
+    /** 审计业务对象类型（{@code DATABASE_DESIGN §6-J.1} #6，与表名大写一致）。 */
+    private static final String BIZ_TYPE_WAREHOUSE = "WAREHOUSE";
+    private static final String BIZ_TYPE_SUPPLIER = "SUPPLIER";
+    private static final String BIZ_TYPE_PRODUCT = "PRODUCT";
+    private static final String BIZ_TYPE_SKU = "SKU";
+
     private final WarehouseMapper warehouseMapper;
     private final SupplierMapper supplierMapper;
     private final ProductMapper productMapper;
     private final SkuMapper skuMapper;
     private final SkuQueryService skuQueryService;
+    private final AuditWriteService auditWriteService;
 
     public CatalogWriteService(WarehouseMapper warehouseMapper,
                                SupplierMapper supplierMapper,
                                ProductMapper productMapper,
                                SkuMapper skuMapper,
-                               SkuQueryService skuQueryService) {
+                               SkuQueryService skuQueryService,
+                               AuditWriteService auditWriteService) {
         this.warehouseMapper = warehouseMapper;
         this.supplierMapper = supplierMapper;
         this.productMapper = productMapper;
         this.skuMapper = skuMapper;
         this.skuQueryService = skuQueryService;
+        this.auditWriteService = auditWriteService;
     }
 
     // =====================================================================
@@ -109,6 +132,7 @@ public class CatalogWriteService {
         stampCreate(entity);
         warehouseMapper.insert(entity);
         log.info("仓库已创建 teamId={} id={} code={}", teamId, entity.getId(), entity.getCode());
+        recordMasterData(BIZ_TYPE_WAREHOUSE, entity.getId(), entity.getCode(), "创建仓库");
         return WarehouseView.of(warehouseMapper.selectById(entity.getId()));
     }
 
@@ -183,6 +207,7 @@ public class CatalogWriteService {
         stampCreate(entity);
         supplierMapper.insert(entity);
         log.info("供应商已创建 teamId={} id={} code={}", entity.getTeamId(), entity.getId(), entity.getCode());
+        recordMasterData(BIZ_TYPE_SUPPLIER, entity.getId(), entity.getCode(), "创建供应商");
         return SupplierView.of(supplierMapper.selectById(entity.getId()));
     }
 
@@ -256,6 +281,7 @@ public class CatalogWriteService {
         productMapper.insert(entity);
         log.info("商品已创建 teamId={} id={} productCode={}", entity.getTeamId(), entity.getId(),
                 entity.getProductCode());
+        recordMasterData(BIZ_TYPE_PRODUCT, entity.getId(), entity.getProductCode(), "创建商品");
         return ProductView.of(productMapper.selectById(entity.getId()));
     }
 
@@ -329,6 +355,7 @@ public class CatalogWriteService {
         skuMapper.insert(entity);
         log.info("SKU 已创建 teamId={} id={} productId={} skuCode={}", entity.getTeamId(), entity.getId(),
                 productId, entity.getSkuCode());
+        recordMasterData(BIZ_TYPE_SKU, entity.getId(), entity.getSkuCode(), "创建 SKU");
         return SkuView.of(skuMapper.selectById(entity.getId()));
     }
 
@@ -421,11 +448,13 @@ public class CatalogWriteService {
         }
         warehouseMapper.update(null, w);
         log.info("仓库状态已变更 id={} status={}", id, status);
+        recordMasterData(BIZ_TYPE_WAREHOUSE, id, current.getCode(),
+                STATUS_INACTIVE.equals(status) ? "停用仓库" : "启用仓库");
         return WarehouseView.of(warehouseMapper.selectById(id));
     }
 
     private SupplierView changeSupplierStatus(Long id, String status) {
-        CatalogGuards.requireInTeam(supplierMapper.selectById(id),
+        SupplierEntity current = CatalogGuards.requireInTeam(supplierMapper.selectById(id),
                 () -> supplierMapper.selectTeamIdById(id), ErrorCodes.CAT_3001, "供应商不存在");
 
         // TODO(M3/M6): CAT-3007 关联校验（在途采购/库存/补货建议）——依赖表属 M3/M6，本阶段不存在，故不实现
@@ -433,11 +462,13 @@ public class CatalogWriteService {
         w.eq("id", id).set("status", status).set("updated_by", currentUserId());
         supplierMapper.update(null, w);
         log.info("供应商状态已变更 id={} status={}", id, status);
+        recordMasterData(BIZ_TYPE_SUPPLIER, id, current.getCode(),
+                STATUS_INACTIVE.equals(status) ? "停用供应商" : "启用供应商");
         return SupplierView.of(supplierMapper.selectById(id));
     }
 
     private ProductView changeProductStatus(Long id, String status) {
-        CatalogGuards.requireInTeam(productMapper.selectById(id),
+        ProductEntity current = CatalogGuards.requireInTeam(productMapper.selectById(id),
                 () -> productMapper.selectTeamIdById(id), ErrorCodes.CAT_3001, "商品不存在");
 
         // CAT-3009：停用商品前其下不得存在 ACTIVE SKU（ERROR_CODES §2.4；本批必做，任务书 §3-3）
@@ -454,11 +485,13 @@ public class CatalogWriteService {
         w.eq("id", id).set("status", status).set("updated_by", currentUserId());
         productMapper.update(null, w);
         log.info("商品状态已变更 id={} status={}", id, status);
+        recordMasterData(BIZ_TYPE_PRODUCT, id, current.getProductCode(),
+                STATUS_INACTIVE.equals(status) ? "停用商品" : "启用商品");
         return ProductView.of(productMapper.selectById(id));
     }
 
     private SkuView changeSkuStatus(Long id, String status) {
-        CatalogGuards.requireInTeam(skuMapper.selectById(id),
+        SkuEntity current = CatalogGuards.requireInTeam(skuMapper.selectById(id),
                 () -> skuMapper.selectTeamIdById(id), ErrorCodes.CAT_3001, "SKU 不存在");
 
         // TODO(M3/M6): CAT-3007 关联校验（在途采购/库存/补货建议）——依赖表属 M3/M6，本阶段不存在，故不实现
@@ -466,6 +499,8 @@ public class CatalogWriteService {
         w.eq("id", id).set("status", status).set("updated_by", currentUserId());
         skuMapper.update(null, w);
         log.info("SKU 状态已变更 id={} status={}", id, status);
+        recordMasterData(BIZ_TYPE_SKU, id, current.getSkuCode(),
+                STATUS_INACTIVE.equals(status) ? "停用 SKU" : "启用 SKU");
         return SkuView.of(skuMapper.selectById(id));
     }
 
@@ -481,6 +516,32 @@ public class CatalogWriteService {
     // =====================================================================
     // 内部
     // =====================================================================
+
+    /**
+     * 主数据审计（{@code MASTER_DATA_STATUS_CHANGE}，{@code DATABASE_DESIGN §6-J.1} #6）。
+     *
+     * <p>{@code biz_type} 区分四类资源；{@code biz_id} = 资源 id；{@code biz_no} = 编号快照
+     * （{@code code}/{@code product_code}/{@code sku_code}——对象可能已软停用，故记快照）；
+     * 操作者与团队取当前上下文（角色为「当时角色」快照）。
+     *
+     * <p>只由<b>创建</b>与<b>启停</b>路径调用；更新（PATCH）路径由 Controller 上的
+     * {@code @Audited} 切面记录（见类级 Javadoc「审计埋点」）。
+     */
+    private void recordMasterData(String bizType, Long id, String bizNo, String changeSummary) {
+        TeamContext.Snapshot snapshot = TeamContext.get();
+        auditWriteService.record(AuditEvent.builder()
+                .teamId(snapshot == null ? 0L : snapshot.teamId())
+                .action(AuditAction.MASTER_DATA_STATUS_CHANGE)
+                .bizType(bizType)
+                .bizId(id)
+                .bizNo(bizNo)
+                .operatorId(snapshot == null ? null : snapshot.userId())
+                .operatorName(snapshot == null ? null : snapshot.username())
+                .operatorRole(snapshot == null || snapshot.roles().isEmpty() ? null : snapshot.roles().get(0))
+                .result(AuditResult.SUCCESS)
+                .changeSummary(changeSummary)
+                .build());
+    }
 
     /**
      * SKU 的商品关联校验：商品不存在或跨团队 → {@code 422 CAT-3004}（任务书 §3.3 / §7-6）。

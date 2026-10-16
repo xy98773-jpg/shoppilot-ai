@@ -8,6 +8,7 @@ import com.shoppilot.catalog.application.SkuQueryService;
 import com.shoppilot.catalog.application.dto.CatalogPageQuery;
 import com.shoppilot.catalog.application.dto.ProductView;
 import com.shoppilot.catalog.application.dto.SkuView;
+import com.shoppilot.common.annotation.Audited;
 import com.shoppilot.common.annotation.RequireRole;
 import com.shoppilot.common.web.ApiResponse;
 import com.shoppilot.common.web.PageResult;
@@ -73,9 +74,15 @@ public class ProductController {
         return ApiResponse.success(productQueryService.get(id));
     }
 
-    /** 修改商品（{@code OWNER/ADMIN/OPERATOR/APPROVER}）→ 200。 */
+    /**
+     * 修改商品（{@code OWNER/ADMIN/OPERATOR/APPROVER}）→ 200。
+     *
+     * <p>审计：{@code @Audited} 切面记录 {@code MASTER_DATA_STATUS_CHANGE} / {@code PRODUCT}
+     * （{@code biz_id} 取自路径 {@code {id}}）。
+     */
     @PatchMapping("/{id}")
     @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
+    @Audited(action = "MASTER_DATA_STATUS_CHANGE", bizType = "PRODUCT", desc = "更新商品", bizIdParam = "id")
     public ApiResponse<ProductView> update(@PathVariable("id") Long id, @RequestBody JsonNode body) {
         return ApiResponse.success(catalogWriteService.upsertProduct(id, body));
     }

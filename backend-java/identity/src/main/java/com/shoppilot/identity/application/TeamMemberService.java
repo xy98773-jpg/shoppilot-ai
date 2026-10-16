@@ -1,6 +1,10 @@
 package com.shoppilot.identity.application;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.shoppilot.audit.application.AuditWriteService;
+import com.shoppilot.audit.domain.model.AuditAction;
+import com.shoppilot.audit.domain.model.AuditEvent;
+import com.shoppilot.audit.domain.model.AuditResult;
 import com.shoppilot.common.context.TeamContext;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.tenant.TeamScopeValidator;
@@ -50,6 +54,12 @@ import org.springframework.transaction.annotation.Transactional;
  * {@code team_members} 含 {@code team_id}，{@code TenantLineInnerInterceptor} 会自动追加
  * {@code AND team_id = <当前团队>}（SELECT/UPDATE/DELETE）并补齐 INSERT 的 {@code team_id} 列。
  * 故本类<b>不再手写多余的 {@code team_id} 条件</b>，避免重复；INSERT 仍显式设值以策安全。
+ *
+ * <h2>审计埋点（M2-T11，{@code DATABASE_DESIGN §6-J.1} #4/#5/#28）</h2>
+ * 三个写操作各记一条 {@code biz_type=TEAM_MEMBER} 的审计：
+ * {@code TEAM_MEMBER_ROLE_CHANGE}（角色变更）、{@code TEAM_MEMBER_REMOVE}（移出，软删）、
+ * {@code TEAM_MEMBER_ADD}（加入）。操作者与团队取自 {@link TeamContext} 快照，
+ * {@code operator_role} 为「当时角色」快照。
  */
 @Service
 public class TeamMemberService {
@@ -61,16 +71,22 @@ public class TeamMemberService {
 
     private static final String ROLE_OWNER = TeamRole.OWNER.name();
 
+    /** 审计业务对象类型：团队成员（{@code DATABASE_DESIGN §6-J.1} #4/#5/#28）。 */
+    private static final String BIZ_TYPE_TEAM_MEMBER = "TEAM_MEMBER";
+
     private final TeamMapper teamMapper;
     private final TeamMemberMapper teamMemberMapper;
     private final UserMapper userMapper;
+    private final AuditWriteService auditWriteService;
 
     public TeamMemberService(TeamMapper teamMapper,
                              TeamMemberMapper teamMemberMapper,
-                             UserMapper userMapper) {
+                             UserMapper userMapper,
+                             AuditWriteService auditWriteService) {
         this.teamMapper = teamMapper;
         this.teamMemberMapper = teamMemberMapper;
         this.userMapper = userMapper;
+        this.auditWriteService = auditWriteService;
     }
 
     // ---------------------------------------------------------------------
@@ -139,6 +155,8 @@ public class TeamMemberService {
 
         log.info("成员已添加 teamId={} targetUserId={} role={} operator={}", team.getId(), user.getId(), role,
                 TeamScopeValidator.requireContext().userId());
+        recordMemberAudit(AuditAction.TEAM_MEMBER_ADD, team.getId(), user.getId(), user.getUsername(),
+                "加入团队，角色=" + role);
         return new TeamMemberSummary(user.getId(), user.getUsername(), user.getDisplayName(), role,
                 MemberStatus.ACTIVE.name());
     }
@@ -177,6 +195,9 @@ public class TeamMemberService {
         UserEntity user = userMapper.selectById(targetUserId);
         log.info("成员角色已更新 teamId={} targetUserId={} newRole={} operator={}", team.getId(), targetUserId,
                 newRole, TeamScopeValidator.requireContext().userId());
+        recordMemberAudit(AuditAction.TEAM_MEMBER_ROLE_CHANGE, team.getId(), targetUserId,
+                user == null ? null : user.getUsername(),
+                "角色 " + membership.getRole() + " → " + newRole);
         return new TeamMemberSummary(targetUserId,
                 user == null ? null : user.getUsername(),
                 user == null ? null : user.getDisplayName(),
@@ -216,6 +237,9 @@ public class TeamMemberService {
 
         UserEntity user = userMapper.selectById(targetUserId);
         log.info("成员已移出（软删） teamId={} targetUserId={} operator={}", team.getId(), targetUserId, operatorId);
+        recordMemberAudit(AuditAction.TEAM_MEMBER_REMOVE, team.getId(), targetUserId,
+                user == null ? null : user.getUsername(),
+                "移出团队（软删），原角色=" + membership.getRole());
         return new TeamMemberSummary(targetUserId,
                 user == null ? null : user.getUsername(),
                 user == null ? null : user.getDisplayName(),
@@ -252,6 +276,29 @@ public class TeamMemberService {
     // ---------------------------------------------------------------------
     // 内部
     // ---------------------------------------------------------------------
+
+    /**
+     * 成员操作审计（#4/#5/#28）：{@code biz_type=TEAM_MEMBER}，操作者与团队取当前上下文快照。
+     *
+     * <p>{@code biz_id} = 目标用户 ID；{@code biz_no} = 目标登录名快照（用户可能后续被停用）；
+     * {@code changeSummary} 由调用方给人类可读摘要（如「角色 VIEWER → OPERATOR」）。
+     */
+    private void recordMemberAudit(AuditAction action, Long teamId, Long targetUserId, String targetUsername,
+                                   String changeSummary) {
+        TeamContext.Snapshot snapshot = TeamScopeValidator.requireContext();
+        auditWriteService.record(AuditEvent.builder()
+                .teamId(teamId)
+                .action(action)
+                .bizType(BIZ_TYPE_TEAM_MEMBER)
+                .bizId(targetUserId)
+                .bizNo(targetUsername)
+                .operatorId(snapshot.userId())
+                .operatorName(snapshot.username())
+                .operatorRole(snapshot.roles().isEmpty() ? null : snapshot.roles().get(0))
+                .result(AuditResult.SUCCESS)
+                .changeSummary(changeSummary)
+                .build());
+    }
 
     /**
      * 判定顺序第 4/5 步：路径 {@code {teamId}} 归属（{@code TEAM-2001}）+ 团队存在与 {@code ACTIVE}

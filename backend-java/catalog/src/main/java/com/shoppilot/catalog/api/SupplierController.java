@@ -6,6 +6,7 @@ import com.shoppilot.catalog.application.CatalogWriteService;
 import com.shoppilot.catalog.application.SupplierQueryService;
 import com.shoppilot.catalog.application.dto.CatalogPageQuery;
 import com.shoppilot.catalog.application.dto.SupplierView;
+import com.shoppilot.common.annotation.Audited;
 import com.shoppilot.common.annotation.RequireRole;
 import com.shoppilot.common.web.ApiResponse;
 import com.shoppilot.common.web.PageResult;
@@ -65,9 +66,15 @@ public class SupplierController {
         return ApiResponse.success(supplierQueryService.get(id));
     }
 
-    /** 修改供应商（{@code OWNER/ADMIN/OPERATOR/APPROVER}；含 {@code lead_time_days}/{@code moq}/{@code order_multiple}）→ 200。 */
+    /**
+     * 修改供应商（{@code OWNER/ADMIN/OPERATOR/APPROVER}）→ 200。
+     *
+     * <p>审计：{@code @Audited} 切面记录 {@code MASTER_DATA_STATUS_CHANGE} / {@code SUPPLIER}
+     * （{@code biz_id} 取自路径 {@code {id}}）。
+     */
     @PatchMapping("/{id}")
     @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
+    @Audited(action = "MASTER_DATA_STATUS_CHANGE", bizType = "SUPPLIER", desc = "更新供应商", bizIdParam = "id")
     public ApiResponse<SupplierView> update(@PathVariable("id") Long id, @RequestBody JsonNode body) {
         return ApiResponse.success(catalogWriteService.upsertSupplier(id, body));
     }

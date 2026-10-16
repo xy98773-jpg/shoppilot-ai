@@ -7,6 +7,7 @@ import com.shoppilot.catalog.application.SkuQueryService;
 import com.shoppilot.catalog.application.dto.CatalogPageQuery;
 import com.shoppilot.catalog.application.dto.SkuView;
 import com.shoppilot.catalog.application.support.CatalogJson;
+import com.shoppilot.common.annotation.Audited;
 import com.shoppilot.common.annotation.RequireRole;
 import com.shoppilot.common.web.ApiResponse;
 import com.shoppilot.common.web.PageResult;
@@ -69,9 +70,15 @@ public class SkuController {
         return ApiResponse.success(skuQueryService.get(id));
     }
 
-    /** 修改 SKU（{@code OWNER/ADMIN/OPERATOR/APPROVER}；采购属性/交期/MOQ 等）→ 200。 */
+    /**
+     * 修改 SKU（{@code OWNER/ADMIN/OPERATOR/APPROVER}；采购属性/交期/MOQ 等）→ 200。
+     *
+     * <p>审计：{@code @Audited} 切面记录 {@code MASTER_DATA_STATUS_CHANGE} / {@code SKU}
+     * （{@code biz_id} 取自路径 {@code {id}}）。
+     */
     @PatchMapping("/{id}")
     @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
+    @Audited(action = "MASTER_DATA_STATUS_CHANGE", bizType = "SKU", desc = "更新 SKU", bizIdParam = "id")
     public ApiResponse<SkuView> update(@PathVariable("id") Long id, @RequestBody JsonNode body) {
         return ApiResponse.success(catalogWriteService.upsertSku(id, null, body));
     }

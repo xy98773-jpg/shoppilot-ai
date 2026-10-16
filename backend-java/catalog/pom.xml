@@ -24,6 +24,12 @@
             <groupId>com.shoppilot</groupId>
             <artifactId>shoppilot-common</artifactId>
         </dependency>
+        <!-- M2-T11：审计写入通道（主数据创建/更新/停用/启用埋点，MASTER_DATA_STATUS_CHANGE）。
+             audit 为叶子模块（仅依赖 common），catalog → audit 不构成环（MODULE_BOUNDARIES §2.10 / F-40 裁定）。 -->
+        <dependency>
+            <groupId>com.shoppilot</groupId>
+            <artifactId>shoppilot-audit</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

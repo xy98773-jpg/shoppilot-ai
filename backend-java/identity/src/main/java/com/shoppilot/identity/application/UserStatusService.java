@@ -1,5 +1,9 @@
 package com.shoppilot.identity.application;
 
+import com.shoppilot.audit.application.AuditWriteService;
+import com.shoppilot.audit.domain.model.AuditAction;
+import com.shoppilot.audit.domain.model.AuditEvent;
+import com.shoppilot.audit.domain.model.AuditResult;
 import com.shoppilot.common.context.TeamContext;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.tenant.TeamScopeValidator;
@@ -33,6 +37,10 @@ import org.springframework.transaction.annotation.Transactional;
  * 本服务只改 {@code users.status}；<b>下一个</b>请求由
  * {@code JwtAuthenticationFilter} 的授权判定第 2 步实时校验并返回 {@code AUTH-1003}（403）——
  * 无需吊销该用户的 Access Token，也不引入 jti 黑名单（{@code API_CONTRACT §5.5}）。
+ *
+ * <h2>审计埋点（M2-T11，{@code DATABASE_DESIGN §6-J.1} #3）</h2>
+ * 状态更新成功 → {@code USER_STATUS_CHANGE}（{@code biz_type=USER}，{@code result=SUCCESS}，
+ * {@code change_summary} 记 {@code 旧状态 → 新状态}；操作者与团队取自 {@link TeamContext} 快照）。
  */
 @Service
 public class UserStatusService {
@@ -43,12 +51,18 @@ public class UserStatusService {
     private static final List<String> MANAGE_MEMBERS_ROLES =
             List.of("OWNER", "ADMIN");
 
+    /** 审计业务对象类型：用户（{@code DATABASE_DESIGN §6-J.1} #3）。 */
+    private static final String BIZ_TYPE_USER = "USER";
+
     private final UserMapper userMapper;
     private final TeamMemberMapper teamMemberMapper;
+    private final AuditWriteService auditWriteService;
 
-    public UserStatusService(UserMapper userMapper, TeamMemberMapper teamMemberMapper) {
+    public UserStatusService(UserMapper userMapper, TeamMemberMapper teamMemberMapper,
+                             AuditWriteService auditWriteService) {
         this.userMapper = userMapper;
         this.teamMemberMapper = teamMemberMapper;
+        this.auditWriteService = auditWriteService;
     }
 
     /**
@@ -98,6 +112,20 @@ public class UserStatusService {
 
         log.info("用户状态已更新 targetUserId={} status={} operator={}", targetUserId, status,
                 snapshot.userId());
+
+        // #3 用户禁用/启用：operator_role 取「当时角色」快照（角色可变，审计记执行时点）
+        auditWriteService.record(AuditEvent.builder()
+                .teamId(snapshot.teamId())
+                .action(AuditAction.USER_STATUS_CHANGE)
+                .bizType(BIZ_TYPE_USER)
+                .bizId(targetUserId)
+                .bizNo(target.getUsername())
+                .operatorId(snapshot.userId())
+                .operatorName(snapshot.username())
+                .operatorRole(snapshot.roles().isEmpty() ? null : snapshot.roles().get(0))
+                .result(AuditResult.SUCCESS)
+                .changeSummary("用户状态 " + target.getStatus() + " → " + status)
+                .build());
 
         return new UserSummary(target.getId(), target.getUsername(), target.getDisplayName(), status);
     }

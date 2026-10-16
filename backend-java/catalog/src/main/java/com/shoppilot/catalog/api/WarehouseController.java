@@ -7,6 +7,7 @@ import com.shoppilot.catalog.application.WarehouseQueryService;
 import com.shoppilot.catalog.application.dto.CatalogPageQuery;
 import com.shoppilot.catalog.application.dto.WarehouseView;
 import com.shoppilot.catalog.application.support.CatalogJson;
+import com.shoppilot.common.annotation.Audited;
 import com.shoppilot.common.annotation.RequireRole;
 import com.shoppilot.common.web.ApiResponse;
 import com.shoppilot.common.web.PageResult;
@@ -78,9 +79,16 @@ public class WarehouseController {
         return ApiResponse.success(warehouseQueryService.get(id));
     }
 
-    /** 修改仓库（{@code OWNER/ADMIN/OPERATOR/APPROVER}）→ 200。 */
+    /**
+     * 修改仓库（{@code OWNER/ADMIN/OPERATOR/APPROVER}）→ 200。
+     *
+     * <p>审计：{@code @Audited} 切面记录 {@code MASTER_DATA_STATUS_CHANGE} / {@code WAREHOUSE}
+     * （{@code biz_id} 取自路径 {@code {id}}；创建与启停的埋点在 {@code CatalogWriteService} 内显式记录，
+     * 见其类级 Javadoc）。
+     */
     @PatchMapping("/{id}")
     @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
+    @Audited(action = "MASTER_DATA_STATUS_CHANGE", bizType = "WAREHOUSE", desc = "更新仓库", bizIdParam = "id")
     public ApiResponse<WarehouseView> update(@PathVariable("id") Long id, @RequestBody JsonNode body) {
         return ApiResponse.success(catalogWriteService.upsertWarehouse(id, body));
     }

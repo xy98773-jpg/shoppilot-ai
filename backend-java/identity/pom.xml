@@ -20,6 +20,12 @@
             <groupId>com.shoppilot</groupId>
             <artifactId>shoppilot-common</artifactId>
         </dependency>
+        <!-- M2-T11：审计写入通道（登录成功/失败、用户状态、成员加入/角色/移出 埋点）。
+             audit 为叶子模块（仅依赖 common），identity → audit 不构成环（MODULE_BOUNDARIES §2.10 / F-40 裁定）。 -->
+        <dependency>
+            <groupId>com.shoppilot</groupId>
+            <artifactId>shoppilot-audit</artifactId>
+        </dependency>
 
         <!-- M1-T04：JWT 编解码库（TECH_STACK.md §1.2 指定 jjwt 0.12.x）。
              api 编译期可见；impl / jackson 仅运行期需要，按官方推荐声明 runtime。

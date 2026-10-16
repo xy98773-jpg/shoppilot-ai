@@ -1,6 +1,10 @@
 package com.shoppilot.identity.application;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.shoppilot.audit.application.AuditWriteService;
+import com.shoppilot.audit.domain.model.AuditAction;
+import com.shoppilot.audit.domain.model.AuditEvent;
+import com.shoppilot.audit.domain.model.AuditResult;
 import com.shoppilot.common.context.TeamContext;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.tenant.TeamScopeValidator;
@@ -46,15 +50,22 @@ import org.springframework.transaction.annotation.Transactional;
  * 即时失效兜底由 {@code JwtAuthenticationFilter} 每请求实时校验
  * {@code users.status} / {@code team_members.status} 提供。
  *
- * <h2>审计日志（本批未落地，已登记为待办）</h2>
- * {@code API_CONTRACT §11.1} 要求登录成功/失败写 {@code audit_logs}（{@code team_id = 0} 系统域）。
- * 但 {@code audit_logs} 表<b>尚未迁移</b>（属 M2-T11 audit 批次），故本批<b>不写入</b>——
- * 强行写入会因表不存在而失败。已在交付报告中显式标注该依赖缺口。
+ * <h2>审计埋点（M2-T11，{@code API_CONTRACT §11.1} + {@code DATABASE_DESIGN §6-J.1} #1/#2）</h2>
+ * 登录成功 → {@code AUTH_LOGIN_SUCCESS}（{@code team_id} = 选中团队）；登录失败 →
+ * {@code AUTH_LOGIN_FAILED}（{@code result=FAILURE}，{@code team_id = 0} 系统域——
+ * 失败路径尚无团队上下文；{@code operator_id = NULL}，{@code operator_name} 记提交的登录名快照）。
+ * 两条均为<b>显式</b> {@code record()}：失败路径无注解可用，且需要 {@code error_code}。
  */
 @Service
 public class AuthService {
 
     private static final Logger log = LoggerFactory.getLogger(AuthService.class);
+
+    /** 系统域团队 ID（{@code DESIGN_BASIS §15 D-11}：无团队上下文的操作记 0）。 */
+    private static final long SYSTEM_DOMAIN_TEAM_ID = 0L;
+
+    /** 审计业务对象类型：用户（{@code DATABASE_DESIGN §6-J.1} #1/#2）。 */
+    private static final String BIZ_TYPE_USER = "USER";
 
     /** 防枚举：用户不存在时用于「等量 BCrypt 比较」的哑哈希（启动时生成，不硬编码口令）。 */
     private final String dummyPasswordHash;
@@ -66,6 +77,7 @@ public class AuthService {
     private final JwtTokenProvider jwtTokenProvider;
     private final JwtProperties jwtProperties;
     private final PasswordEncoder passwordEncoder;
+    private final AuditWriteService auditWriteService;
 
     public AuthService(UserMapper userMapper,
                        TeamMapper teamMapper,
@@ -73,7 +85,8 @@ public class AuthService {
                        RefreshTokenMapper refreshTokenMapper,
                        JwtTokenProvider jwtTokenProvider,
                        JwtProperties jwtProperties,
-                       PasswordEncoder passwordEncoder) {
+                       PasswordEncoder passwordEncoder,
+                       AuditWriteService auditWriteService) {
         this.userMapper = userMapper;
         this.teamMapper = teamMapper;
         this.teamMemberMapper = teamMemberMapper;
@@ -81,6 +94,7 @@ public class AuthService {
         this.jwtTokenProvider = jwtTokenProvider;
         this.jwtProperties = jwtProperties;
         this.passwordEncoder = passwordEncoder;
+        this.auditWriteService = auditWriteService;
         // 生成一次哑哈希（代价 = 一次 BCrypt），用于抹平「用户不存在」的时序侧信道
         this.dummyPasswordHash = passwordEncoder.encode("__shoppilot_anti_enumeration__");
     }
@@ -96,12 +110,33 @@ public class AuthService {
      * 返回<b>同一错误码 {@code AUTH-1002} 与同一提示文案</b>，且对前者执行一次
      * <b>等量 BCrypt 哑比较</b>，避免通过响应耗时判断账号是否存在。
      *
+     * <p><b>审计（M2-T11）</b>：成功记 {@code AUTH_LOGIN_SUCCESS}（{@code team_id} = 选中团队）；
+     * 任一 {@link BizException} 失败路径记 {@code AUTH_LOGIN_FAILED}
+     * （{@code team_id = 0} 系统域、{@code operator_id = NULL}、{@code operator_name} = 登录名快照）。
+     *
      * @param username 登录名或邮箱
      * @param password 明文口令
      * @param ipAddr   客户端 IP（写入撤销表，可空）
      * @param userAgent 客户端 UA（写入撤销表，可空）
      */
     public AuthTokenResponse login(String username, String password, String ipAddr, String userAgent) {
+        try {
+            return doLogin(username, password, ipAddr, userAgent);
+        } catch (BizException ex) {
+            // #2 登录失败：无团队上下文 → team_id = 0（系统域）；operator_id = NULL（登录名记入 operator_name 快照）
+            auditWriteService.record(AuditEvent.builder()
+                    .teamId(SYSTEM_DOMAIN_TEAM_ID)
+                    .action(AuditAction.AUTH_LOGIN_FAILED)
+                    .bizType(BIZ_TYPE_USER)
+                    .operatorName(username)
+                    .result(AuditResult.FAILURE)
+                    .errorCode(ex.getErrorCode())
+                    .build());
+            throw ex;
+        }
+    }
+
+    private AuthTokenResponse doLogin(String username, String password, String ipAddr, String userAgent) {
         UserEntity user = findByUsernameOrEmail(username);
         if (user == null) {
             // ★ 等量 BCrypt：耗时与真实比较同量级，但不泄露「用户是否存在」
@@ -122,7 +157,21 @@ public class AuthService {
         touchLastLogin(user.getId());
 
         log.info("登录成功 userId={} teamId={} role={}", user.getId(), selected.team.getId(), selected.role);
-        return issueTokens(user, selected.team, selected.role, ipAddr, userAgent);
+        AuthTokenResponse response = issueTokens(user, selected.team, selected.role, ipAddr, userAgent);
+
+        // #1 登录成功：team_id = 选中的会话团队（此时登录流程自行解析，非请求上下文）
+        auditWriteService.record(AuditEvent.builder()
+                .teamId(selected.team.getId())
+                .action(AuditAction.AUTH_LOGIN_SUCCESS)
+                .bizType(BIZ_TYPE_USER)
+                .bizId(user.getId())
+                .bizNo(user.getUsername())
+                .operatorId(user.getId())
+                .operatorName(user.getUsername())
+                .operatorRole(selected.role)
+                .result(AuditResult.SUCCESS)
+                .build());
+        return response;
     }
 
     // ---------------------------------------------------------------------
