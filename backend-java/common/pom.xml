@@ -28,6 +28,12 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
+        <!-- M2-T07：AOP（@Aspect 切面 + AspectJ 织入）。仅承载「声明式鉴权」横切关注点；
+             common 仍只依赖框架，不依赖任何业务模块。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
         <!-- M1-T04：Spring Security 6.5.x（随 Boot 3.5 管理，无需指定版本）。
              仅提供过滤器链骨架与 401 JSON 序列化；common 仍只依赖框架，不依赖任何业务模块。 -->
         <dependency>
