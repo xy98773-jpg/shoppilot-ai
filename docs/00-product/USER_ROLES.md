@@ -153,7 +153,7 @@ OWNER ⊃ ADMIN ⊃ APPROVER ⊃ OPERATOR ⊃ VIEWER
 服务端处理任一请求时，按以下顺序判定，**任一环节失败立即返回对应错误码并终止**：
 
 ```
-1. 认证：Token 是否有效？            否 → AUTH-1001
+1. 认证：Token 是否有效？            否 → AUTH-1001（Token 已过期 → AUTH-1005，逐码定义见 ERROR_CODES.md §2.2；缺失/格式错误/签名不符 → AUTH-1001）
 2. 用户状态：用户是否 ACTIVE？        否 → AUTH-1003
                             （UserStatus 见 DESIGN_BASIS §9.1）
 3. 团队解析：从 JWT claim 解析 team_id，绝不接受客户端传入
@@ -220,7 +220,7 @@ OWNER ⊃ ADMIN ⊃ APPROVER ⊃ OPERATOR ⊃ VIEWER
 
 ## 5. 越权场景示例
 
-> 以下场景均给出**期望返回的错误码**，错误码取自 `DESIGN_BASIS.md §12.3`。
+> 以下场景均给出**期望返回的错误码**，错误码取自 `DESIGN_BASIS.md §12.3` 与 `ERROR_CODES.md §2`（逐码定义以 `ERROR_CODES.md §2` 为准）。
 
 | # | 场景描述 | 请求者角色 | 期望结果 | 错误码 | 判定依据 |
 | --- | --- | --- | --- | --- | --- |
@@ -234,7 +234,7 @@ OWNER ⊃ ADMIN ⊃ APPROVER ⊃ OPERATOR ⊃ VIEWER
 | 8 | `OPERATOR` 起草了采购单后，尝试自行将其从 `DRAFT` 确认为 `PENDING`（生效） | `OPERATOR` | 拒绝 | `TEAM-2003` | `DESIGN_BASIS.md §5.1 第 2 条` |
 | 9 | `OPERATOR` 尝试查看本团队审计日志 | `OPERATOR` | 拒绝 | `TEAM-2003` | 本文档 §2.2 #11 |
 | 10 | 用户账号状态为 `DISABLED`，持旧 Token 访问 | 任意角色 | 拒绝 | `AUTH-1003` | `DESIGN_BASIS.md §9.1` |
-| 11 | 已登录但 Token 过期 | 任意角色 | 拒绝 | `AUTH-1001` | `DESIGN_BASIS.md §12.3` |
+| 11 | 已登录但 Token 过期（AUTH-1001 仅用于未登录 / 凭证缺失或格式非法） | 任意角色 | 拒绝 | `AUTH-1005` | `ERROR_CODES.md §2.2` |
 | 12 | 采购单属于 T1，采购明细参数中传入 T2 的 `sku_id` | T1 的 `APPROVER` | 拒绝 | `TEAM-2001` | `DESIGN_BASIS.md §6 第 4 条`（跨表同团队校验） |
 
 ### 5.1 场景判定顺序示例（场景 1 展开）
@@ -242,7 +242,7 @@ OWNER ⊃ ADMIN ⊃ APPROVER ⊃ OPERATOR ⊃ VIEWER
 ```mermaid
 flowchart TD
     A["请求 GET /api/v1/products/{id}"] --> B{"Token 有效?"}
-    B -- 否 --> B1["AUTH-1001"]
+    B -- 否 --> B1["AUTH-1001 / 已过期 AUTH-1005"]
     B -- 是 --> C{"用户 ACTIVE?"}
     C -- 否 --> C1["AUTH-1003"]
     C -- 是 --> D["从 JWT 解析 team_id = T1"]
