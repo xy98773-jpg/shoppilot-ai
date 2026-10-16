@@ -89,7 +89,7 @@ class CatalogSchemaConstraintTest {
     // ---------------------------------------------------------------------
 
     @Test
-    @DisplayName("§4-1 Flyway 全链跑通：V1.0.0 → V1.0.3 四条迁移均 success=1")
+    @DisplayName("§4-1 Flyway 全链跑通：V1.0.0 → V1.0.4 五条迁移均 success=1")
     void flywayChainAppliedFourVersions() throws Exception {
         List<String> tables = queryStrings(
                 "SELECT table_name FROM information_schema.tables "
@@ -100,8 +100,8 @@ class CatalogSchemaConstraintTest {
 
         List<String> versions = queryStrings(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank");
-        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3"), versions,
-                "应应用 V1.0.0 / V1.0.1 / V1.0.2 / V1.0.3 四条迁移");
+        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4"), versions,
+                "应应用 V1.0.0 / V1.0.1 / V1.0.2 / V1.0.3 / V1.0.4 五条迁移");
     }
 
     // ---------------------------------------------------------------------
