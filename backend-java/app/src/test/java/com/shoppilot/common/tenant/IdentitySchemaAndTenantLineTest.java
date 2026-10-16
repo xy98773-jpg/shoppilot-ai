@@ -45,7 +45,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>用真实 MySQL 8.0.36（Testcontainers）执行真实迁移与<b>真实 SQL 改写</b>，
  * 断言 {@code DESIGN_BASIS §6} 的数据库级与插件级保障：
  * <ul>
- *   <li>Flyway 应用 {@code V1.0.1__identity.sql} + {@code V1.0.2__refresh_tokens.sql}，
+ *   <li>Flyway 应用 {@code V1.0.1__identity.sql} + {@code V1.0.2__refresh_tokens.sql}
+ *       + {@code V1.0.3__catalog.sql}（M2-T08），
  *       表与唯一约束/CHECK 确实生效（含负向用例）；</li>
  *   <li>对含 {@code team_id} 的表发起查询，SQL <b>被自动追加 {@code team_id = <当前团队>}</b>；</li>
  *   <li>INSERT 自动补齐 {@code team_id}；</li>
@@ -79,7 +80,7 @@ class IdentitySchemaAndTenantLineTest {
         dataSource = new DriverManagerDataSource(
                 MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
 
-        // ---- 1) 真实执行 Flyway 迁移链（V1.0.0 baseline + V1.0.1 identity）----
+        // ---- 1) 真实执行 Flyway 迁移链（V1.0.0 baseline + V1.0.1 identity + V1.0.2 refresh_tokens + V1.0.3 catalog）----
         Flyway.configure()
                 .dataSource(dataSource)
                 .locations("classpath:db/migration")
@@ -144,8 +145,8 @@ class IdentitySchemaAndTenantLineTest {
 
         List<String> versions = queryStrings(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank");
-        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2"), versions,
-                "应应用 V1.0.0 / V1.0.1 / V1.0.2 三条迁移");
+        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3"), versions,
+                "应应用 V1.0.0 / V1.0.1 / V1.0.2 / V1.0.3 四条迁移（V1.0.3 为 M2-T08 catalog）");
 
         // CHECK 约束负向验证（MySQL 8.0.16+ 才生效，版本守卫已保证）
         try (Connection conn = dataSource.getConnection(); Statement st = conn.createStatement()) {
