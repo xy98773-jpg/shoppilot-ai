@@ -23,8 +23,25 @@ spring:
     # 禁止 clean（同 §9.5 生产约束，开发环境亦收紧）
     clean-disabled: true
 
+  # M3-T02：导入文件上传（IMPORT_WORKFLOW §8.1 / API_CONTRACT §10.6：单个文件 ≤ 20MB）。
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 20MB
+      max-request-size: 20MB
+      # ★ 必须 resolve-lazily=true：把 multipart 解析延后到【参数绑定】阶段，
+      #   超限异常才发生在 handler 内部 → ImportBatchController 的控制器级 @ExceptionHandler
+      #   才能把它译为 400 IMP-4001（否则在 DispatcherServlet 阶段抛出，只能落到全局 413 COM-0008）。
+      resolve-lazily: true
+
 server:
   port: 8080
+  tomcat:
+    # ★ M3-T02：导入文件超过 20MB 时，Tomcat 必须把剩余请求体【读完】再回 400 IMP-4001。
+    #   默认 max-swallow-size=2MB 不足以覆盖"20MB 上限之外的溢出部分"，Tomcat 会在客户端
+    #   仍在发送时中断连接（客户端表现为 chunked READING_LENGTH / connection reset），
+    #   导致前端拿不到错误码。-1 = 不限制 swallow（上限由 max-file-size 承担）。
+    max-swallow-size: -1
 
 # M2-T06：多团队数据隔离（DESIGN_BASIS §6 规则 4/5）。
 # 启用后 TenantLineInnerInterceptor 对所有含 team_id 的表自动追加/补齐 team_id 条件
@@ -44,6 +61,12 @@ shoppilot:
     refresh-ttl-seconds: ${JWT_REFRESH_TTL:604800}
     issuer: shoppilot-ai
     audience: frontend-web
+
+# M3-T02：导入原始文件落盘根目录（本地存储；不引入 MinIO/S3 等对象存储，见 IMPORT_WORKFLOW §4）。
+# 实际路径 = {storage-dir}/{teamId}/{yyyyMM}/{batchNo}_{消毒后文件名}。
+app:
+  import:
+    storage-dir: ${IMPORT_STORAGE_DIR:./data/import}
 
 # M1-T06：Actuator 健康检查（TECH_STACK.md：Micrometer + Actuator，NFR-OBS）。
 # 暴露面最小化：仅 health 与 info；env / beans / configprops / loggers / threaddump /

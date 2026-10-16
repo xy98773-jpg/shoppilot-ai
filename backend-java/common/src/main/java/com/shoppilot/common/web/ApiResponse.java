@@ -16,8 +16,10 @@ import java.util.List;
  *       {@code requestId}（== 响应头 {@code X-Request-Id}）、{@code timestamp}（ISO-8601 UTC，形如
  *       {@code 2026-10-14T08:00:00.000Z}）；</li>
  *   <li>§2.2 成功（分页）：分页元信息置于 {@code data} 内，形态见 {@link PageResult}；</li>
- *   <li>§2.3 失败：{@code code} 为错误码常量、{@code data} 恒为 {@code null}、
- *       {@code details[]} 仅用于字段级校验错误（无细节则省略）。</li>
+ *   <li>§2.3 失败：{@code code} 为错误码常量、{@code data} <b>通常</b>为 {@code null}、
+ *       {@code details[]} 仅用于字段级校验错误（无细节则省略）；
+ *       个别错误码需回带数据（如 {@code IMP-4004} 的 {@code existing_batch_id}）时，
+ *       用 {@link #fail(String, String, java.util.List, Object)} 重载，见 {@code DESIGN_REVIEW R33}。</li>
  * </ul>
  *
  * <p>注意：{@code code} 同时服务成功与失败——成功恒为 {@code "OK"}（前端只需判断
@@ -73,11 +75,36 @@ public class ApiResponse<T> implements Serializable {
     }
 
     public static <T> ApiResponse<T> fail(String code, String message, List<ApiErrorDetail> details) {
+        return fail(code, message, details, null);
+    }
+
+    /**
+     * 失败响应（<b>可携带 {@code data}</b>）——M3-T02 新增重载（{@code DESIGN_REVIEW R33}）。
+     *
+     * <h2>★ 为什么需要这个重载</h2>
+     * 契约 {@code API_CONTRACT §2.3} 通常规定「失败 {@code data} 恒为 null」，但个别错误码
+     * <b>必须</b>回带数据才能满足业务语义：典型如 {@code IMP-4004}（文件重复导入）要求
+     * {@code data:{existing_batch_id, existing_batch_no}}，前端据此跳原批次或发起强制重导。
+     *
+     * <p>而 {@code GlobalExceptionHandler.handleBiz} 返回 {@code ApiResponse<Void>}、
+     * {@code data} 恒为 null（R13 已闭环的全局包络，<b>不为其改动</b>）。故采用「本重载 +
+     * 控制器直接 {@code ResponseEntity.status(409).body(...)}」的最小改动方案：
+     * 全局出口零改动、零回归。
+     *
+     * <p>{@code data} 为 {@code null} 时输出与三参重载<b>完全一致</b>
+     * （类上 {@code @JsonInclude(ALWAYS)}，data 字段照常输出为 null），故既有断言不受影响。
+     *
+     * @param code    错误码常量
+     * @param message 中文提示
+     * @param details 字段级细节（无则 {@code null}）
+     * @param data    随错误返回的数据（通常仅个别错误码需要）
+     */
+    public static <T> ApiResponse<T> fail(String code, String message, List<ApiErrorDetail> details, T data) {
         ApiResponse<T> r = new ApiResponse<>();
         r.setCode(code);
         r.setMessage(message);
-        r.setData(null);
         r.setDetails(details == null || details.isEmpty() ? null : details);
+        r.setData(data);
         r.fillEnvelope();
         return r;
     }

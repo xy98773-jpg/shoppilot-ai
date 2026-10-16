@@ -32,5 +32,19 @@
             <groupId>com.shoppilot</groupId>
             <artifactId>shoppilot-common</artifactId>
         </dependency>
+        <!-- M3-T02：创建批次需埋 IMPORT_BATCH_CREATE（审计 #8）。
+             audit 为叶子模块（仅依赖 common），importdata → audit 不构成环
+             （同 catalog → audit，MODULE_BOUNDARIES §2.10 / F-40 裁定）。 -->
+        <dependency>
+            <groupId>com.shoppilot</groupId>
+            <artifactId>shoppilot-audit</artifactId>
+        </dependency>
+        <!-- Lombok 为 provided 作用域、不跨模块继承：每个使用 @Data 的模块都必须自行声明
+             （同 catalog / audit / identity / common），否则 getter 不生成、编译失败。 -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 </project>
