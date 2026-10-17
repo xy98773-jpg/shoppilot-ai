@@ -1,0 +1,107 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=31c5bb844c68eeadcfadad526cb500c821c74f608ae04848b0a819a7cb80adc6
+DATE=2026-10-17T17:29:57Z
+MYSQL_READY=1 (port 3338, 独立容器 b105-mysql)
+APP_PID=9298 (port 18118, stdout -> evidence-b105-app.log)
+APP_UP=1
+SEED_OK (seed-b95.sql：团队 7，仓库 9004，SKU-A=9002 / SKU-B=9003 / SKU-C=9005 各 10.000)
+TOKEN op=eyJhbGci
+---------------------------------------------------------------
+G1 INVENTORY_SNAPSHOT：库存快照导入（增量 + INIT_IMPORT 流水）
+G1-前置 SKU-A=10.000 SKU-B=10.000 流水=2
+G1-upload=201 batch=1 status=UPLOADED
+PASS G1-上传201 => 201
+G1-preview=200 status=PARSED rows=2
+PASS G1-预览200 => 200
+PASS G1-解析2行 => 2
+G1-mapping=200 status=MAPPED
+PASS G1-映射200 => 200
+G1-validate=200 body={"code":"OK","message":"success","data":{"batch_id":1,"status":"VALIDATED","total_rows":2,"error_rows":0,"warning_rows":2,"errors":[{"row_no":1,"error_level":"WARNING","error_code":"IMP-4006","error_field":"sku_code","error_message":"该仓库与 SKU 已有余额行，确认导入后将按增量累加（如需覆盖请使用盘点调整）"},{"row_no":2,"error_level":"WARNING","error_code":"IMP-4006","error_field":"sku_code","error_message":"该仓库与 SKU 已有余额行，确认导入后将按增量累加（如需覆盖请使用盘点调整）"}]},"requestId":"req_d31f7d24b99f0680a77454c1927d40d5","timestamp":"2026-10-17T17:30:47.194Z"}
+PASS G1-校验200 => 200
+PASS G1-校验0错误 => 0
+PASS G1-校验2行告警 => 2
+G1-告警列表=200 body={"code":"OK","message":"success","data":{"list":[{"id":1,"batch_id":1,"row_no":1,"error_level":"WARNING","error_code":"IMP-4006","error_field":"sku_code","error_message":"该仓库与 SKU 已有余额行，确认导入后将按增量累加（如需覆盖请使用盘点调整）","raw_data":null},{"id":2,"batch_id":1,"row_no":2,"error_level":"WARNING","error_code":"IMP-4006","error_field":"sku_code","error_message":"该仓库与 SKU 已有余额行，确认导入后将按增量累加（如需覆盖请使用盘点调整）","raw_data":null}],"total":2,"page":1,"pageSize":20},"requestId":"req_df1ddd0293d8aba7dd7c11c094274bcd","timestamp":"2026-10-17T17:30:50.520Z"}
+PASS G1-告警200 => 200
+PASS G1-告警2条 => 2
+PASS G1-告警码IMP-4006 => 含["error_code":"IMP-4006"]
+PASS G1-告警级别WARNING => 含["error_level":"WARNING"]
+G1-confirm=200 header=[] body={"code":"OK","message":"success","data":{"batch_id":1,"status":"COMPLETED","total_rows":2,"success_rows":2,"failed_rows":0,"started_at":"2026-10-17T17:30:53.421Z","finished_at":"2026-10-17T17:30:53.548Z"},"requestId":"req_4c7b1da42fc71af33efafdd6eb556675","timestamp":"2026-10-17T17:30:53.617Z"}
+PASS G1-确认200 => 200
+PASS G1-终态COMPLETED => COMPLETED
+PASS G1-成功2行 => 2
+PASS G1-首次无重放头 => 
+G1-余额 SKU-A=130.000 SKU-B=40.000 流水=4
+PASS G1-余额增量A => 130.000
+PASS G1-余额增量B => 40.000
+PASS G1-流水+2 => 4
+PASS G1-流水类型INIT_IMPORT => 2
+PASS G1-幂等键字面 => 1
+PASS G1-qty_before10 => 10.000
+PASS G1-qty_after130 => 130.000
+G1-重试=200 header=[true]
+PASS G1-重试200 => 200
+PASS G1-重试带重放头 => true
+PASS G1-重试余额不变 => 130.000
+PASS G1-重试流水不增 => 4
+---------------------------------------------------------------
+G2 SALES_DAILY：日销售导入（覆盖语义 + IMP-4006 + SALES_DAILY_UPSERT 审计）
+G2-upload=201 batch=2
+PASS G2-上传201 => 201
+G2-preview=200 status=PARSED rows=2
+PASS G2-预览200 => 200
+PASS G2-解析2行 => 2
+PASS G2-映射200 => 200
+G2-validate=200 VALIDATED err=0 warn=0
+PASS G2-校验200 => 200
+PASS G2-校验0错误 => 0
+PASS G2-校验0告警 => 0
+G2-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":2,"status":"COMPLETED","total_rows":2,"success_rows":2,"failed_rows":0,"started_at":"2026-10-17T17:31:30.437Z","finished_at":"2026-10-17T17:31:30.586Z"},"requestId":"req_a01a28b42a5b9dee7a1fe3c7bb1ab275","timestamp":"2026-10-17T17:31:30.643Z"}
+PASS G2-确认200 => 200
+PASS G2-终态COMPLETED => COMPLETED
+PASS G2-落库2行 => 2
+PASS G2-source=IMPORT => 2
+PASS G2-batch_id回指 => 2
+PASS G2-product_id派生 => 2
+PASS G2-qty原值 => 12.000
+PASS G2-审计1条 => 1
+G2-覆盖upload=201 batch=3
+PASS G2-覆盖上传201 => 201
+PASS G2-覆盖预览200 => 200
+PASS G2-覆盖映射200 => 200
+G2-覆盖validate=200 err=0 warn=2
+PASS G2-覆盖校验200 => 200
+PASS G2-覆盖2行告警 => 2
+G2-覆盖告警列表=200 body={"code":"OK","message":"success","data":{"list":[{"id":3,"batch_id":3,"row_no":1,"error_level":"WARNING","error_code":"IMP-4006","error_field":"sale_date","error_message":"该日期已存在销售数据，确认导入后将覆盖","raw_data":null},{"id":4,"batch_id":3,"row_no":2,"error_level":"WARNING","error_code":"IMP-4006","error_field":"sale_date","error_message":"该日期已存在销售数据，确认导入后将覆盖","raw_data":null}],"total":2,"page":1,"pageSize":20},"requestId":"req_679fd51906daf749e08b1d1906931f08","timestamp":"2026-10-17T17:31:48.571Z"}
+PASS G2-告警2条 => 2
+PASS G2-告警码IMP-4006 => 含["error_code":"IMP-4006"]
+PASS G2-覆盖文案 => 含[确认导入后将覆盖]
+G2-覆盖confirm=200 body={"code":"OK","message":"success","data":{"batch_id":3,"status":"COMPLETED","total_rows":2,"success_rows":2,"failed_rows":0,"started_at":"2026-10-17T17:31:51.149Z","finished_at":"2026-10-17T17:31:51.232Z"},"requestId":"req_f106c8570a4e4023bb575886a67e3b33","timestamp":"2026-10-17T17:31:51.256Z"}
+PASS G2-覆盖确认200 => 200
+PASS G2-覆盖后仍2行 => 2
+PASS G2-覆盖后qty => 20.500
+PASS G2-覆盖后batch_id回指 => 2
+PASS G2-审计共2条 => 2
+PASS G2-审计含被覆盖行数 => 含[覆盖 2 行 / 共 2 行]
+---------------------------------------------------------------
+G3 未知 sku_code（校验后漂移）→ 200 PARTIAL_SUCCESS + 行级 CAT-3001
+PASS G3-上传201 => 201
+PASS G3-预览200 => 200
+PASS G3-映射200 => 200
+G3-validate=200 err=0
+PASS G3-校验200 => 200
+PASS G3-校验0错误 => 0
+G3-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":4,"status":"PARTIAL_SUCCESS","total_rows":2,"success_rows":1,"failed_rows":1,"started_at":"2026-10-17T17:32:08.412Z","finished_at":"2026-10-17T17:32:08.493Z"},"requestId":"req_dd541522dce173450f8739208e0ff29e","timestamp":"2026-10-17T17:32:08.521Z"}
+PASS G3-确认200 => 200
+PASS G3-终态PARTIAL => PARTIAL_SUCCESS
+PASS G3-成功1行 => 1
+PASS G3-失败1行 => 1
+PASS G3-不变式 => 2
+PASS G3-错误码CAT-3001 => CAT-3001
+PASS G3-失败行号2 => 2
+PASS G3-只落成功行 => 3
+---------------------------------------------------------------
+B105_CHECK_TOTAL=68
+B105_FAIL_COUNT=0
+B105_RESULT=ALL PASS
+数据全景 team7：balances=3 txn=4 sales=3 batches=4
+--- cleanup ---

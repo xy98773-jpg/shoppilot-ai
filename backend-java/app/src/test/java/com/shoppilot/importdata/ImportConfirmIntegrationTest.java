@@ -100,6 +100,11 @@ class ImportConfirmIntegrationTest {
         jdbc.execute("DELETE FROM import_row_errors");
         jdbc.execute("DELETE FROM import_batches");
         jdbc.execute("DELETE FROM audit_logs");
+        // ★ M3-B10.5（R78）：INVENTORY_SNAPSHOT / SALES_DAILY 落库会写这三张表，
+        //   外键均 RESTRICT ⇒ 必须在删 skus / warehouses 之前清理，否则后续用例的种子会失败。
+        jdbc.execute("DELETE FROM inventory_transactions");
+        jdbc.execute("DELETE FROM inventory_balances");
+        jdbc.execute("DELETE FROM sales_daily");
         jdbc.execute("DELETE FROM refresh_tokens");
         jdbc.execute("DELETE FROM team_members");
         jdbc.execute("DELETE FROM users");
@@ -327,21 +332,30 @@ class ImportConfirmIntegrationTest {
     // =====================================================================
 
     @Test
-    @DisplayName("㊹ INVENTORY_SNAPSHOT 批次 confirm → 400 COM-0001 + details[bizType]，批次仍 VALIDATED")
-    void unsupportedBizTypeReturnsCom0001() throws Exception {
+    @DisplayName("㊹ INVENTORY_SNAPSHOT 批次 confirm → 200 COMPLETED，余额与 INIT_IMPORT 流水落库（R78）")
+    void inventorySnapshotBizTypeIsSupported() throws Exception {
+        // ★ M3-B10.5（R78）断言反转：本用例原先断言「400 COM-0001 + details[bizType]」，
+        //   即 R78 的缺陷本身。依赖表（V1.0.6 / V1.0.8）与两个写服务均已就绪，
+        //   SUPPORTED_BIZ_TYPES 已扩到六类，故此处改为断言「真的落库」。
+        //   细化断言（增量/幂等/IMP-4006/CAT-3001 等）见 ImportDataConfirmIntegrationTest。
         byte[] csv = csv("sku_code,warehouse_code,qty,snapshot_date\n"
                 + "SKU-BAG-001-BLK,WH-MAIN,120.000," + PAST_DATE + "\n");
         long batchId = validatedBatch(OPERATOR, "inv.csv", csv, "INVENTORY_SNAPSHOT", 0);
 
         ResponseEntity<String> resp = confirm(OPERATOR, batchId, "key-inv", Map.of());
-        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode(), resp.getBody());
-        JsonNode body = objectMapper.readTree(resp.getBody());
-        assertEquals("COM-0001", body.get("code").asText());
-        assertEquals("bizType", body.get("details").get(0).get("field").asText());
+        assertEquals(HttpStatus.OK, resp.getStatusCode(), resp.getBody());
+        JsonNode data = data(resp);
+        assertEquals("COMPLETED", data.get("status").asText(), resp.getBody());
+        assertEquals(1, data.get("success_rows").asInt());
 
-        assertEquals("VALIDATED", batchRow(batchId).get("status"), "未支持类型不得推进状态（先判定后推进）");
-        assertEquals(1, count("products", TEAM_ID), "目标表不得被触碰");
-        assertEquals(1, count("skus", TEAM_ID), "目标表不得被触碰");
+        assertEquals(1, count("inventory_transactions", TEAM_ID), "应写 1 条 INIT_IMPORT 流水");
+        assertEquals(0, new java.math.BigDecimal("120.000").compareTo(
+                        jdbc.queryForObject("SELECT on_hand_qty FROM inventory_balances "
+                                        + "WHERE team_id = ? AND sku_id = 9002 AND warehouse_id = 9004",
+                                java.math.BigDecimal.class, TEAM_ID)),
+                "余额应为 120.000（原无余额行，自动建行）");
+        assertEquals(1, count("products", TEAM_ID), "主数据不得被本类型触碰");
+        assertEquals(1, count("skus", TEAM_ID), "主数据不得被本类型触碰");
     }
 
     // =====================================================================

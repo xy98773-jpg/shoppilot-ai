@@ -1,0 +1,3 @@
+sku_code,warehouse_code,qty,snapshot_date,remark
+SKU-A,WH-MAIN,120.000,2026-10-10,期初导入
+SKU-B,WH-MAIN,30.000,2026-10-10,期初导入
