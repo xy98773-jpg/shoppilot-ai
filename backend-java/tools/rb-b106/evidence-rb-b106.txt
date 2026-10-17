@@ -1,0 +1,102 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=5b531218646dbf907cd91a021925403c5ea73494f2a34f134b55e594cd945da4
+DATE=2026-10-17T19:24:03Z
+REVIEWER=architect-independent-probe
+MYSQL_READY=1 (port 3341, 独立容器 rb106-mysql)
+APP_PID=20694 (port 18121)
+APP_UP=1
+SEED_OK (seed-b95.sql)
+TOKEN op=eyJhbGci admin=eyJhbGci
+SETUP 仓库=WH-MAIN,WH-B,WH-C
+---------------------------------------------------------------
+P1 库存侧 3 行「成功-失败-成功」：第 2 行同键异量必 INV-5003，第 3 行须照常落库
+P1-前置 A=10.000 C=10.000 流水=2
+PASS p1-three-rows.csv-上传201 => 201
+PASS p1-three-rows.csv-预览200 => 200
+PASS p1-three-rows.csv-映射200 => 200
+p1-three-rows.csv-validate=200 err=0 warn=3
+PASS p1-three-rows.csv-校验200 => 200
+P1-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":1,"status":"PARTIAL_SUCCESS","total_rows":3,"success_rows":2,"failed_rows":1,"started_at":"2026-10-17T19:24:42.269Z","finished_at":"2026-10-17T19:24:42.465Z"},"requestId":"req_312ab66fbb29cdb6595f1ca6cc88c867","timestamp":"2026-10-17T19:24:42.499Z"}
+PASS P1-确认200 => 200
+PASS P1-终态PARTIAL => PARTIAL_SUCCESS
+PASS P1-成功2行 => 2
+PASS P1-失败1行 => 1
+PASS P1-不变式 => 3
+P1-行级错误=2|INV-5003|ERROR
+PASS P1-失败行号2 => 2
+PASS P1-行级码INV-5003 => INV-5003
+PASS P1-不是COM-0002 => INV-5003（≠COM-0002）
+P1-后置 A=15.000 C=14.000 流水=4
+PASS P1-第1行已落库 A+5 => 15.000
+PASS P1-第3行已落库 C+4 => 14.000
+PASS P1-只写2条流水 => 4
+PASS P1-第3行有流水 => 1
+PASS P1-第2行无流水 => 0
+---------------------------------------------------------------
+P1b 销售侧 3 行「成功-失败-成功」：中间行 listed_date 漂移必 SAL-6003，两侧行须落库
+PASS p1b-three-rows.csv-上传201 => 201
+PASS p1b-three-rows.csv-预览200 => 200
+PASS p1b-three-rows.csv-映射200 => 200
+p1b-three-rows.csv-validate=200 err=0 warn=0
+PASS p1b-three-rows.csv-校验200 => 200
+P1b-漂移 SKU-B(9003).listed_date=2026-10-20 > 2026-10-10
+P1b-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":2,"status":"PARTIAL_SUCCESS","total_rows":3,"success_rows":2,"failed_rows":1,"started_at":"2026-10-17T19:25:09.201Z","finished_at":"2026-10-17T19:25:09.344Z"},"requestId":"req_f02cad39367f3a4cc222f955015918ac","timestamp":"2026-10-17T19:25:09.366Z"}
+PASS P1b-确认200 => 200
+PASS P1b-终态PARTIAL => PARTIAL_SUCCESS
+PASS P1b-成功2行 => 2
+PASS P1b-失败1行 => 1
+P1b-行级错误=2|SAL-6003|ERROR
+PASS P1b-失败行号2 => 2
+PASS P1b-行级码SAL-6003 => SAL-6003
+P1b-后置 sales=2 行（新增）
+PASS P1b-新增2行 => 2
+PASS P1b-失败SKU未落库 => 0
+PASS P1b-成功SKU-A落库 => 1
+PASS P1b-成功SKU-C落库 => 1
+---------------------------------------------------------------
+P2 同仓同 SKU 同数量（完全重复行）：实测幂等重放是静默去重还是报错
+P2-前置 SKU-C@WH-MAIN=14.000 流水=4
+PASS p2-identical-rows.csv-上传201 => 201
+PASS p2-identical-rows.csv-预览200 => 200
+PASS p2-identical-rows.csv-映射200 => 200
+p2-identical-rows.csv-validate=200 err=0 warn=2
+PASS p2-identical-rows.csv-校验200 => 200
+P2-校验期文件内重复是否被拦：err_rows=0
+P2-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":3,"status":"COMPLETED","total_rows":2,"success_rows":2,"failed_rows":0,"started_at":"2026-10-17T19:25:31.976Z","finished_at":"2026-10-17T19:25:32.053Z"},"requestId":"req_f2f4c8d40a9c7b9aad7f4b12ed867ab5","timestamp":"2026-10-17T19:25:32.088Z"}
+P2-实测 status=COMPLETED success_rows=2 余额 16.000（原 14.000）流水 5（原 4）
+P2-键=INIT_IMPORT:IMPORT:3:9005:9004
+P2-NOTE 该组为口径观察，不作为 PASS/FAIL 判定
+---------------------------------------------------------------
+P3 同批同 SKU 跨三仓：键后缀维度非「只支持两仓」
+PASS p3-three-warehouses.csv-上传201 => 201
+PASS p3-three-warehouses.csv-预览200 => 200
+PASS p3-three-warehouses.csv-映射200 => 200
+p3-three-warehouses.csv-validate=200 err=0 warn=1
+PASS p3-three-warehouses.csv-校验200 => 200
+P3-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":4,"status":"COMPLETED","total_rows":3,"success_rows":3,"failed_rows":0,"started_at":"2026-10-17T19:25:45.020Z","finished_at":"2026-10-17T19:25:45.113Z"},"requestId":"req_6f37cfd36d053332397d8e9bf4adee46","timestamp":"2026-10-17T19:25:45.134Z"}
+PASS P3-确认200 => 200
+PASS P3-终态COMPLETED => COMPLETED
+PASS P3-成功3行 => 3
+PASS P3-流水+3 => 8
+PASS P3-三个键后缀 => 3
+P3-余额 WH-B=2.000 WH-C=3.000 WH-MAIN=16.000
+PASS P3-WH-B=2.000 => 2.000
+PASS P3-WH-C=3.000 => 3.000
+PASS P3-键长度上限≤128 => 128
+P3-实际最长键=30
+---------------------------------------------------------------
+P4 PARTIAL_SUCCESS 的审计条数（库存侧）与行级错误并存明细
+P4-P1批次审计: IMPORT_BATCH_CREATE=1,IMPORT_BATCH_COMPLETE=1
+PASS P4-P1批次完成审计1条 => 1
+PASS P4-P1b销售审计2条 => 2
+PASS P4-P1b批次完成审计1条 => 1
+P4-P1批次行级错误全量: 1:IMP-4006:WARNING , 2:IMP-4006:WARNING , 3:IMP-4006:WARNING , 2:INV-5003:ERROR
+P4-P1批次 WARNING 行数=3 ERROR 行数=1
+PASS P4-同row_no可并存W+E => 2
+P4-失败行raw_data非空=OK
+---------------------------------------------------------------
+RB106_CHECK_TOTAL=51
+RB106_FAIL_COUNT=0
+RB106_RESULT=ALL PASS
+数据全景 team7：balances=5 txn=8 sales=2 batches=4
+--- cleanup ---

@@ -245,7 +245,8 @@ flowchart TD
 - **落库目标表**：`inventory_balances`（首行插入或增量累加）+ `inventory_transactions`（`txn_type = INIT_IMPORT`，`§9.6`）。
 - **唯一键**：`uk_invbal_team_wh_sku (team_id, warehouse_id, sku_id)`；流水 `uk_invtxn_team_idem (team_id, idempotency_key)`。
 - **冲突策略（结论）**：**默认增量（追加一条 `INIT_IMPORT` 流水），并对"该 `(warehouse, sku)` 已存在余额行"的行在 `VALIDATED` 阶段产生 `WARNING`**（提示"将按增量累加，如需覆盖请使用盘点调整"）。**不采用直接覆盖**，理由：`inventory_balances` 是**可推导物化状态**，只能由流水驱动（`DATABASE_DESIGN.md §5.9` 设计要点 2），直接覆盖会隐藏历史并破坏"余额可由流水推导"（`§3.1` 第 4 条）。覆盖口径请走 `COUNT_ADJUST`。详见 `INVENTORY_WORKFLOW.md §4.1`。
-- **幂等策略**：文件级幂等 + 流水幂等键 `<txn_type>:<biz_type>:<biz_ref_id>:<sku_id>`（`biz_type = IMPORT`，`biz_ref_id = batch_id`，`DATABASE_DESIGN.md §5.10` 设计要点 4），保证同一批次重复确认不重复累加。
+- **幂等策略**：文件级幂等 + 流水幂等键 `<txn_type>:<biz_type>:<biz_ref_id>:<sku_id>[:<suffix>]`（`biz_type = IMPORT`，`biz_ref_id = batch_id`，`DATABASE_DESIGN.md §5.10` 设计要点 4），保证同一批次重复确认不重复累加。
+  - ★ **`INIT_IMPORT` 的后缀是必填**：键必须写成 `INIT_IMPORT:IMPORT:<batch_id>:<sku_id>:<warehouse_id>`。余额与流水都是 `(team_id, warehouse_id, sku_id)` **三键**维度，而本模板 `warehouse_code` 为必填列 ⇒「同一批次内同一 SKU 出现在多个仓库」是**常规合法输入**；缺 `:<warehouse_id>` 会让第二个仓库的行命中同一幂等键，被 `replayIfIdempotent` 的 `sameContent` 判为「内容不一致」并报 `INV-5003`（`R80`，`M3-B10.6` 修复）。判定口径见 `DATABASE_DESIGN.md §5.10` 要点 4「若不加后缀会导致两条合法业务行同键，则该后缀是必填而非可选」。
 
 ### 7.6 `SALES_DAILY`（日销售）
 
@@ -341,7 +342,8 @@ flowchart TD
 
 | 子场景 | 检测方式 | 系统行为 | 错误码 | 可恢复 |
 | --- | --- | --- | --- | --- |
-| **文件内重复**（同一文件内两行键相同，如同一 `(wh, sku, date)`） | 校验阶段对业务键做集合去重 | `SALES_DAILY`：同一 `(wh, sku, date)` 出现多行 → 记 `ERROR`（不聚合，要求用户先聚合）；主数据：同一编码出现多行 → 后行记 `ERROR`（`CAT-3002` 的"文件内重复"语义） | `SAL-6004` / `COM-0001` | 是 |
+| **文件内重复**（同一文件内两行键相同，如同一 `(wh, sku, date)`） | 校验阶段对业务键做集合去重 | `SALES_DAILY`：同一 `(wh, sku, date)` 出现多行 → 记 `ERROR`（不聚合，要求用户先聚合）；主数据：同一编码出现多行 → 后行记 `ERROR`（`CAT-3002` 的"文件内重复"语义）；`INVENTORY_SNAPSHOT`：同一 `(wh, sku)` 出现多行 → 后行记 `ERROR`（`R83` 口径，**未实现**，见下） | `SAL-6004` / `CAT-3002` / `COM-0001` | 是 |
+| **文件内重复——`INVENTORY_SNAPSHOT` 的现状与口径（`R83`，`M3-B10.6` 复核登记）** | 校验阶段**未**做集合去重（`§10.2` 只对 `SALES_DAILY` 单列） | **口径（已定，待实现）**：同一 `(wh, sku)` 多行 → 后行 `ERROR`，不自动相加。**现状**：两行同仓同 SKU 且数量相同时，写服务按幂等键判为「同内容重放」→ **只累加一次**，但 `success_rows` 仍回 2 ⇒ 用户看到「2 行成功」而实际只计 1 行（数量不同则后行 `INV-5003`，文案「请勿重复提交」误导）。故定为 `ERROR` 前置拦截 | `COM-0001` | 是 |
 | **与库内重复——`SALES_DAILY`** | 命中 `uk_sales_team_wh_sku_date` | **upsert 覆盖**，`WARNING`（`IMP-4006`），确认后可导入 | `IMP-4006`（WARNING 级） | 是 |
 | **与库内重复——主数据** | 命中 `uk_*_team_code` | **upsert 更新**，不报错 | — | 是 |
 | **与库内重复——`INVENTORY_SNAPSHOT`** | 命中 `uk_invbal_team_wh_sku` | **增量累加** + `WARNING`（提示将累加/建议走盘点覆盖） | `IMP-4006`（WARNING 级） | 是 |
@@ -478,6 +480,7 @@ flowchart TD
 | `WAREHOUSE` | `code` **文件内重复** → 后行 `ERROR`；**库内已存在 → 不报错**（`§7.4` upsert） | `CAT-3002` | ERROR（**仅限文件内重复**） |
 | `WAREHOUSE` | `is_default` 同团队至多一行 | `CAT-3008` | ERROR |
 | `INVENTORY_SNAPSHOT` | **`sku_code` 必须存在**且同团队 | `CAT-3001` / `CAT-3005` | ERROR |
+| `INVENTORY_SNAPSHOT` | 同一 `(warehouse_code, sku_code)` 在**文件内重复** → 后行 `ERROR`（要求用户先自行聚合，**不自动相加**；口径见 `§8.6`，`R83`）▶ **现状：未实现**，当前实现会按幂等重放**静默只计一次**并回「成功」，见 `DESIGN_REVIEW` `R83`（M4 前置必修） | `COM-0001` | ERROR |
 | `INVENTORY_SNAPSHOT` | **仓库必须存在**且同团队 | `CAT-3003` | ERROR |
 | `INVENTORY_SNAPSHOT` | `qty ≥ 0`；累加后不得为负（本类型不会为负） | `COM-0001` | ERROR |
 | `INVENTORY_SNAPSHOT` | 目标 `(wh, sku)` 已存在余额 → 提示将增量累加 | `IMP-4006` | WARNING |

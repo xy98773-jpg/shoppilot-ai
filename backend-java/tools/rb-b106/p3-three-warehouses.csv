@@ -1,0 +1,4 @@
+sku_code,warehouse_code,qty,snapshot_date
+SKU-A,WH-B,2.000,2026-10-10
+SKU-A,WH-C,3.000,2026-10-10
+SKU-A,WH-MAIN,1.000,2026-10-10

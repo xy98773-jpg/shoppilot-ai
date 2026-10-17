@@ -1,0 +1,4 @@
+sku_code,warehouse_code,sale_date,qty
+SKU-A,WH-MAIN,2026-10-10,1.000
+SKU-B,WH-MAIN,2026-10-10,2.000
+SKU-C,WH-MAIN,2026-10-10,3.000

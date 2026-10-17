@@ -124,7 +124,8 @@ flowchart TD
 
 - **理由**：`inventory_balances` 是**可推导物化状态**，只能由流水驱动（`DATABASE_DESIGN.md §5.9` 设计要点 2）；若直接覆盖 `on_hand_qty` 而不写流水，将破坏"余额可由流水推导"（`§3.1` 第 4 条）与对账能力。
 - **对重复导入的处理**：`INVENTORY_SNAPSHOT` 命中已存在余额行 → 在 `VALIDATED` 阶段产生 **`WARNING`（`IMP-4006`）**"该 `(仓库, SKU)` 已有库存记录，本次将**按数量增量累加**；如需以快照为准请使用盘点调整"。
-- **幂等**：流水幂等键 `<txn_type>:<biz_type>:<biz_ref_id>:<sku_id>`（`biz_type = IMPORT`，`biz_ref_id = batch_id`），同一批次重复确认不重复累加；冲突且内容不一致 → `INV-5003`。
+- **幂等**：流水幂等键 `<txn_type>:<biz_type>:<biz_ref_id>:<sku_id>[:<suffix>]`（`biz_type = IMPORT`，`biz_ref_id = batch_id`），同一批次重复确认不重复累加；冲突且内容不一致 → `INV-5003`。
+  - ★ `INIT_IMPORT` 必须追加 `:<warehouse_id>`：`INIT_IMPORT:IMPORT:<batch_id>:<sku_id>:<warehouse_id>`（`DATABASE_DESIGN.md §5.10` 要点 4，`R80`）。理由同上：`(team_id, warehouse_id, sku_id)` 是三键维度，同批同 SKU 跨仓是合法输入。
 - **负库存**：`INIT_IMPORT` 只会增加，不会触发 `INV-5006`。
 
 ---
