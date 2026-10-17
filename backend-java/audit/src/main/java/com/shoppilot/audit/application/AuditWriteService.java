@@ -7,6 +7,10 @@ import com.shoppilot.audit.infrastructure.persistence.entity.AuditLogEntity;
 import com.shoppilot.common.web.RequestIdContext;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -36,6 +40,14 @@ import org.springframework.web.context.request.ServletRequestAttributes;
  * 业务方<b>不必</b>逐项传；取不到时置 {@code NULL}（系统任务场景）。
  * {@code request_uri} 剥离查询串（防 {@code ?token=...}），各字符串字段按列宽截断
  * （防 MySQL 严格模式报 {@code 1406 Data too long}）。
+ *
+ * <h2>★ 批量与延迟写入（{@code ADR-004} D1/D2，{@code B4-PERF}）</h2>
+ * <ul>
+ *   <li>{@link #recordAll}：一个 {@code REQUIRES_NEW} 事务批量写，<b>一次提交</b>；条数不变；</li>
+ *   <li>{@link #record} 的<b>唯一</b>行为扩展：当前线程处于 {@link AuditBufferScope} 内且事务活跃时
+ *       改为入缓冲，事务提交后批量写出。其余情况（无作用域 / 无事务）与旧实现<b>逐字节一致</b>——
+ *       REST 与 {@code @Audited} 切面路径完全不受影响。</li>
+ * </ul>
  */
 @Service
 public class AuditWriteService {
@@ -67,6 +79,13 @@ public class AuditWriteService {
                     event.getAction(), event.getBizType(), RequestIdContext.get());
             return;
         }
+        // ★ ADR-004 D2（B4-PERF）：当前线程处于 AuditBufferScope 内且事务活跃 → 只入缓冲，等业务
+        //   事务提交后由 afterCommit 一次性写出（每批一次提交）。无作用域 / 无事务时走下面原路径，
+        //   REST / AOP 的逐条写入行为逐字节不变。
+        //   occurred_at 已由 AuditEvent 在构造（=事实发生）时刻确定，延迟写入不改变其时间语义。
+        if (AuditBufferScope.enqueue(event)) {
+            return;
+        }
         try {
             auditLogWriter.insert(toEntity(event));
         } catch (Exception ex) {
@@ -75,6 +94,71 @@ public class AuditWriteService {
                     event.getAction(), event.getBizType(), event.getTeamId(), RequestIdContext.get(),
                     ex.toString());
         }
+    }
+
+    /**
+     * 批量记录审计（{@code ADR-004 D1}，{@code B4-PERF}）——<b>一个独立事务、一次提交</b>。
+     *
+     * <p>与 {@link #record} 的语义对齐：<b>永不抛异常</b>（失败只记 ERROR 后返回），
+     * 调用方无需 try/catch。差异只在提交粒度，<b>审计条数不变</b>：{@code n} 条有效事件
+     * 写出 {@code n} 行（{@code ADR-004 D3} 禁止抑制/采样/合并/汇总）。
+     *
+     * <h2>逐条跳过规则（与 {@code record} 同口径）</h2>
+     * {@code null} 元素、缺 {@code action} / 缺 {@code bizType} 的事件<b>逐条跳过</b>并记 ERROR
+     * （含定位信息），不影响同批其余事件——避免一条埋点疏漏拖垮整批审计。
+     *
+     * @param events 待写事件（{@code null} / 空 直接返回，不开启事务）
+     */
+    public void recordAll(List<AuditEvent> events) {
+        if (events == null || events.isEmpty()) {
+            return;
+        }
+        List<AuditLogEntity> entities = new ArrayList<>(events.size());
+        int skipped = 0;
+        for (AuditEvent event : events) {
+            if (event == null) {
+                skipped++;
+                continue;
+            }
+            if (event.getAction() == null || event.getBizType() == null || event.getBizType().isBlank()) {
+                skipped++;
+                log.error("审计事件缺少 action/bizType，已跳过写入：action={} bizType={} requestId={}",
+                        event.getAction(), event.getBizType(), RequestIdContext.get());
+                continue;
+            }
+            try {
+                entities.add(toEntity(event));
+            } catch (Exception ex) {
+                skipped++;
+                log.error("审计事件组装失败，已跳过写入：action={} bizType={} teamId={} err={}",
+                        event.getAction(), event.getBizType(), event.getTeamId(), ex.toString());
+            }
+        }
+        if (entities.isEmpty()) {
+            if (skipped > 0) {
+                log.error("审计批量写入跳过全部 {} 条事件（缺 action/bizType 或组装失败），本批未写库", skipped);
+            }
+            return;
+        }
+        try {
+            auditLogWriter.insertAll(entities);
+        } catch (Exception ex) {
+            // ★ 解耦兜底：审计失败不影响业务。ERROR 日志带【条数 + action 分布】作为补偿线索
+            //   （ADR-004 D6：recordAll 写入失败 → 业务不受影响，记 ERROR 含条数与 action 分布）
+            log.error("审计批量写入失败（业务不受影响）：条数={} action 分布={} teamId={} requestId={} err={}",
+                    entities.size(), actionDistribution(events), entities.get(0).getTeamId(),
+                    RequestIdContext.get(), ex.toString());
+        }
+    }
+
+    /** {@code action → 条数}（失败日志与补偿线索用；条目顺序稳定便于比对）。 */
+    private static Map<String, Integer> actionDistribution(List<AuditEvent> events) {
+        Map<String, Integer> dist = new TreeMap<>();
+        for (AuditEvent event : events) {
+            String key = event == null || event.getAction() == null ? "<null>" : event.getAction().name();
+            dist.merge(key, 1, Integer::sum);
+        }
+        return dist;
     }
 
     // ---------------------------------------------------------------------

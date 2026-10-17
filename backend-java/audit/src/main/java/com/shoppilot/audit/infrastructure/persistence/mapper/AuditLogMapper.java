@@ -57,6 +57,41 @@ public interface AuditLogMapper {
     int insert(AuditLogEntity entity);
 
     /**
+     * <b>多行</b> {@code INSERT}（{@code ADR-004 D1}「多行 {@code INSERT} 或 {@code ExecutorType.BATCH}」
+     * 的第一种，{@code B4-PERF} 采用）。
+     *
+     * <h2>为什么不是循环 {@link #insert}</h2>
+     * 循环 500 次 = 500 次 SQL 解析 + 500 次往返（实测单行审计约 {@code 3.5 ms}，其中 MyBatis +
+     * 租户线解析占一半以上）。多行 {@code INSERT} 把同一批压成<b>一条</b>语句，
+     * 审计<b>条数完全不变</b>（{@code n} 个 {@code VALUES} 元组）、提交次数也不变（仍由
+     * {@code REQUIRES_NEW} 事务控制）——{@code ADR-004 D3} 的「条数不减少」红线不受影响。
+     *
+     * <p>用完即弃的批量写入<b>不需要</b>回填自增主键（审计 id 不参与后续逻辑），故不带
+     * {@code useGeneratedKeys}（多行回填本身也不可靠）。
+     *
+     * <h2>为什么不加租户线忽略注解（与类内其它方法不同）</h2>
+     * {@code team_id} 已在本语句里<b>显式列明</b>（列清单第一项 + 每个 {@code VALUES} 元组都有
+     * {@code #{e.teamId}}）。{@code TenantLineInnerInterceptor#processInsert} 会先问
+     * {@code TenantLineHandler#ignoreInsert(columns, tenantIdColumn)}：列里已有租户列即<b>短路返回</b>，
+     * 不会重复追加、也不会去取 {@code TeamContext}。故无需绕过租户线——
+     * 这也让本类「新增租户线忽略注解行 = 0」的约束得以维持。
+     *
+     * @param entities 非空列表（调用方保证非空；元素非 {@code null}）
+     */
+    @Insert("<script>"
+            + "INSERT INTO audit_logs (team_id, action, biz_type, biz_id, biz_no, operator_id, "
+            + "operator_name, operator_role, http_method, request_uri, request_id, ip, user_agent, "
+            + "result, error_code, change_summary, before_json, after_json, occurred_at, created_by) VALUES "
+            + "<foreach collection='list' item='e' separator=','>"
+            + "(#{e.teamId}, #{e.action}, #{e.bizType}, #{e.bizId}, #{e.bizNo}, #{e.operatorId}, "
+            + "#{e.operatorName}, #{e.operatorRole}, #{e.httpMethod}, #{e.requestUri}, #{e.requestId}, "
+            + "#{e.ip}, #{e.userAgent}, #{e.result}, #{e.errorCode}, #{e.changeSummary}, "
+            + "#{e.beforeJson}, #{e.afterJson}, #{e.occurredAt}, #{e.createdBy})"
+            + "</foreach>"
+            + "</script>")
+    int insertBatch(@Param("list") List<AuditLogEntity> entities);
+
+    /**
      * 按业务对象读最近的审计记录（只读；走 {@code idx_al_team_biz_time}）。
      *
      * <p><b>显式带 {@code team_id}</b>：本方法已绕过租户线，团队隔离由参数的
