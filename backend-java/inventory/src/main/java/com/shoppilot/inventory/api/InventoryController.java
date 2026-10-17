@@ -15,7 +15,9 @@ import com.shoppilot.inventory.application.dto.AlertView;
 import com.shoppilot.inventory.application.dto.BalanceView;
 import com.shoppilot.inventory.application.dto.InventoryPageQuery;
 import com.shoppilot.inventory.application.dto.ReverseRequest;
+import com.shoppilot.inventory.application.dto.StockChangeResult;
 import com.shoppilot.inventory.application.dto.TransactionView;
+import jakarta.servlet.http.HttpServletResponse;
 import java.math.BigDecimal;
 import java.util.List;
 import org.springframework.http.HttpStatus;
@@ -104,13 +106,15 @@ public class InventoryController {
      * <p>★ R59：四写角色静态层（@RequireRole）→ VIEWER 直接 TEAM-2003；方法内对 MANUAL_ADJUST 额外要求
      * ADMIN+，否则 INV-5007。幂等键来自请求头 {@code Idempotency-Key}，<b>原样透传</b>给
      * {@link InventoryWriteService}，不自行构造（缺失/空白 → COM-0001；契约标注的 COM-0010 未固化，本批降级使用）。
+     * <p>★ 幂等重放命中（同键同内容）→ 结果与首次一致并补 {@code Idempotent-Replayed: true}（{@code §6.3}）。
      */
     @PostMapping("/adjustments")
     @ResponseStatus(HttpStatus.CREATED)
     @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
     public ApiResponse<AdjustmentResponse> adjustments(
             @RequestBody AdjustmentRequest req,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            HttpServletResponse httpResponse) {
         String key = requireIdempotencyKey(idempotencyKey);
 
         if (req.getWarehouseId() == null || req.getSkuId() == null) {
@@ -135,20 +139,20 @@ public class InventoryController {
                 throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
                         List.of(ApiErrorDetail.of("target_on_hand_qty", "盘点调整必填目标值")));
             }
-            response = AdjustmentResponse.from(
-                    writeService.applyCountAdjust(req.getSkuId(), req.getWarehouseId(),
-                            target, req.getReason(), null, key),
-                    req.getWarehouseId(), req.getSkuId());
+            StockChangeResult result = writeService.applyCountAdjust(req.getSkuId(), req.getWarehouseId(),
+                    target, req.getReason(), null, key);
+            markReplayed(httpResponse, result);
+            response = AdjustmentResponse.from(result, req.getWarehouseId(), req.getSkuId());
         } else {
             BigDecimal delta = req.getQtyDelta();
             if (delta == null) {
                 throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
                         List.of(ApiErrorDetail.of("qty_delta", "手工调整必填带符号增量")));
             }
-            response = AdjustmentResponse.from(
-                    writeService.applyManualAdjust(req.getSkuId(), req.getWarehouseId(),
-                            delta, req.getReason(), key),
-                    req.getWarehouseId(), req.getSkuId());
+            StockChangeResult result = writeService.applyManualAdjust(req.getSkuId(), req.getWarehouseId(),
+                    delta, req.getReason(), key);
+            markReplayed(httpResponse, result);
+            response = AdjustmentResponse.from(result, req.getWarehouseId(), req.getSkuId());
         }
         return ApiResponse.success(response);
     }
@@ -158,21 +162,25 @@ public class InventoryController {
      *
      * <p>★ 角色不足 → TEAM-2003（<b>不</b>用 INV-5007）。幂等键同样来自请求头 {@code Idempotency-Key}。
      * INV-5008 / INV-5010 / INV-5009 由 B6 的 {@link InventoryWriteService} 抛出，本层不做二次映射。
+     * <p>★ {@code R73}（{@code M3-B9.5}）：同幂等键 + 同内容的重放返回 <b>200</b> + 首次的
+     * {@code transaction_id}，并补 {@code Idempotent-Replayed: true}；同键不同内容 → {@code INV-5003}；
+     * 不同键的二次冲销 → {@code INV-5009}。判定顺序在服务层（{@code attemptReversal}），本层不重复实现。
      */
     @PostMapping("/transactions/{id}/reverse")
     @RequireRole(value = {"OWNER", "ADMIN"}, teamIdParam = "")
     public ApiResponse<AdjustmentResponse> reverse(
             @PathVariable("id") long id,
             @RequestBody ReverseRequest req,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            HttpServletResponse httpResponse) {
         String key = requireIdempotencyKey(idempotencyKey);
         if (req.getReason() == null || req.getReason().isBlank()) {
             throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
                     List.of(ApiErrorDetail.of("reason", "冲销原因必填")));
         }
-        AdjustmentResponse response = AdjustmentResponse.from(
-                writeService.applyReversal(id, req.getReason(), key), null, null);
-        return ApiResponse.success(response);
+        StockChangeResult result = writeService.applyReversal(id, req.getReason(), key);
+        markReplayed(httpResponse, result);
+        return ApiResponse.success(AdjustmentResponse.from(result, null, null));
     }
 
     /** 库存预警列表（F-INV-05，任何已登录成员；无状态、不落库）。 */
@@ -185,6 +193,19 @@ public class InventoryController {
             @RequestParam(name = "sku_id", required = false) Long skuId) {
         return ApiResponse.success(queryService.listAlerts(
                 InventoryPageQuery.of(page, pageSize, sort), warehouseId, skuId));
+    }
+
+    /**
+     * 幂等重放命中时补响应头 {@code Idempotent-Replayed: true}（{@code API_CONTRACT §6.3}「可带」，
+     * {@code M3-B9.5}；与 {@code importdata} 的 {@code confirm} 同口径）。
+     *
+     * <p>★ 只加 HTTP 头，<b>不动</b> {@link ApiResponse} 封装（公共响应结构是跨模块契约）。
+     * 首次执行不带该头；重放时业务结果与首次一致，客户端凭此头区分「重放」与「新执行」。
+     */
+    private static void markReplayed(HttpServletResponse httpResponse, StockChangeResult result) {
+        if (result != null && result.idempotentHit()) {
+            httpResponse.setHeader("Idempotent-Replayed", "true");
+        }
     }
 
     /** 幂等键：缺失/空白 → COM-0001（契约标注的 COM-0010 未固化，本批降级使用）。 */

@@ -48,8 +48,12 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li><b>审计（M3-T17 / B9）</b>：upsert 与 disable <b>同用</b> {@code #7 REPLENISHMENT_POLICY_UPSERT}
  *       （{@code §6-J.1 #7}「补货策略变更」覆盖创建/更新/停用），{@code biz_type=REPLENISHMENT_POLICY}、
  *       {@code biz_id=} 策略行 id；一次 upsert <b>只写一条</b>（不在内部再调 disable，避免双写）；
- *       写点在 {@code @Transactional} 方法体内、业务写库之后（{@code AuditWriteService} 走独立事务，
- *       失败只记 ERROR 不抛，故无需 try/catch）；无 {@code TeamContext} 团队上下文时不写。</li>
+ *       写点在 {@code @Transactional} 方法体内、业务写库之后；无 {@code TeamContext} 团队上下文时不写。</li>
+ *   <li><b>★ 事务通道（M3-B9.5 / R72）：本类走 {@code record}（{@code REQUIRES_NEW} 解耦），
+ *       与 {@link InventoryWriteService} 的 {@code recordInBusinessTx}（同事务）<u>刻意不同</u></b>。
+ *       依据 {@code MODULE_BOUNDARIES §2.10}：高风险清单是「库存调整、审批、确认到货、取消采购单」，
+ *       <b>不含</b>补货策略变更 ⇒ 策略审计失败只记 ERROR、<b>不</b>阻塞策略保存；
+ *       库存调整则相反（宁可业务失败，不可留痕缺失）。两者语义不同是<b>有意的</b>，不要"统一"掉。</li>
  * </ul>
  */
 @Service

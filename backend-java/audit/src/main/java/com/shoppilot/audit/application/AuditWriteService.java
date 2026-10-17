@@ -23,12 +23,22 @@ import org.springframework.web.context.request.ServletRequestAttributes;
  * <p>职责（{@code §2.10} 对外暴露的服务接口）：脱敏（{@link AuditSanitizer}）→ 组装实体
  * → 经 {@link AuditLogWriter} 以<b>独立事务</b>（{@code REQUIRES_NEW}）insert。
  *
- * <h2>★ 事务与失败兜底（M2-T11 裁定）</h2>
+ * <h2>★ 两条通道：解耦（默认）与同事务（高风险操作，{@code M3-B9.5}）</h2>
+ * <ul>
+ *   <li>{@link #record} / {@link #recordAll}：<b>独立事务</b>（{@code REQUIRES_NEW}）、
+ *       <b>永不抛异常</b>。适用于 §2.10 高风险清单<b>之外</b>的动作。</li>
+ *   <li>{@link #recordInBusinessTx}：<b>加入调用方业务事务</b>（{@code MANDATORY}）、
+ *       <b>失败即抛</b>。仅用于 §2.10 列举的<b>高风险操作</b>
+ *       （库存调整、审批、确认到货、取消采购单）——目的是消除「审计成功但业务未生效」
+ *       与「业务成功但审计缺失」两个中间态。<b>两者语义不同是有意的，不要"统一"掉</b>。</li>
+ * </ul>
+ *
+ * <h2>★ 事务与失败兜底（M2-T11 裁定，仅适用于 {@link #record} / {@link #recordAll}）</h2>
  * <ol>
  *   <li><b>独立事务</b>：按 {@code §2.10}「审计写入默认与业务事务解耦」，审计插入在
  *       {@code REQUIRES_NEW} 新事务中进行（实现见 {@link AuditLogWriter}）。理由：
  *       M2 埋点的操作（登录 / 成员 / 主数据）<b>均非</b> §2.10 列举的高风险操作
- *       （库存调整 / 审批 / 确认到货 / 取消采购单——那些属 M3/M6，见 {@code §8.2 E-3}）。</li>
+ *       （库存调整 / 审批 / 确认到货 / 取消采购单——那些走 {@link #recordInBusinessTx}，见 {@code §8.2 E-3}）。</li>
  *   <li><b>永不阻塞业务</b>：审计写入失败必须 catch 并记 <b>ERROR</b> 日志
  *       （含 {@code action}/{@code bizType}/{@code requestId}，作为补偿线索），
  *       ❌ 不得因审计失败抛异常导致业务 500。</li>
@@ -94,6 +104,42 @@ public class AuditWriteService {
                     event.getAction(), event.getBizType(), event.getTeamId(), RequestIdContext.get(),
                     ex.toString());
         }
+    }
+
+    /**
+     * 记录一条审计，<b>与调用方业务事务同生共死</b>（{@code MODULE_BOUNDARIES §2.10} 高风险操作，
+     * {@code M3-B9.5}）。库存调整（{@code #11}/{@code #12}）、冲销（{@code #13}）等「事后无法用
+     * 业务数据反推发生过什么」的操作必须走本方法。
+     *
+     * <h2>与 {@link #record} 的三点差异（★ 有意的差异，不要"统一"）</h2>
+     * <ol>
+     *   <li><b>事务</b>：加入业务事务（{@link org.springframework.transaction.annotation.Propagation#MANDATORY}），
+     *       不再 {@code REQUIRES_NEW}。业务回滚 ⇒ 审计一并撤销；业务提交 ⇒ 审计一并提交。
+     *       遂<b>不存在</b>「审计成功但业务未生效」（审计谎报）与「业务成功但审计缺失」（留痕丢失）。</li>
+     *   <li><b>失败</b>：<b>直接抛出</b>（不 catch）。审计写不进就必须让业务回滚——
+     *       这是 §2.10 对高风险操作的取舍：<b>宁可业务失败，不可留痕缺失</b>。</li>
+     *   <li><b>入参错误</b>（{@code null} 事件 / 缺 {@code action} / 缺 {@code bizType}）：抛
+     *       {@link IllegalArgumentException}，让埋点错误在测试期暴露，而不是像 {@link #record} 那样
+     *       记 ERROR 后静默跳过（那会让"埋点写错了"伪装成"审计没写"）。</li>
+     * </ol>
+     *
+     * <p>❌ 不走 {@link AuditBufferScope}：那是导入批量场景的延迟写优化（{@code ADR-004 D2}），
+     * 与本通道「立刻、且与业务同事务」的诉求直接冲突。
+     *
+     * @param event 审计事件（{@code action} / {@code bizType} / {@code teamId} 必填）
+     * @throws IllegalArgumentException 事件为 {@code null} 或缺 {@code action}/{@code bizType}
+     */
+    public void recordInBusinessTx(AuditEvent event) {
+        if (event == null) {
+            throw new IllegalArgumentException("审计事件不能为 null（recordInBusinessTx 为高风险操作通道，不接受空事件）");
+        }
+        if (event.getAction() == null || event.getBizType() == null || event.getBizType().isBlank()) {
+            // 与 record 的「记 ERROR 后跳过」刻意不同：高风险操作少一条留痕就是缺陷，必须炸出来
+            throw new IllegalArgumentException("审计事件缺少 action/bizType：action=" + event.getAction()
+                    + " bizType=" + event.getBizType() + " requestId=" + RequestIdContext.get());
+        }
+        // ★ 不 try/catch：写不进 ⇒ 异常冒泡 ⇒ 业务事务回滚（§2.10）
+        auditLogWriter.insertInTx(toEntity(event));
     }
 
     /**

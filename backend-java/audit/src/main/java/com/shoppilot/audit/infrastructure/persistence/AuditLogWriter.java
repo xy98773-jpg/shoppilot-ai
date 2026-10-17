@@ -17,9 +17,18 @@ import org.springframework.transaction.annotation.Transactional;
  * 拆成独立 Bean 后：审计插入在<b>自己的新事务</b>里，失败只回滚该新事务，
  * 业务事务完全不受影响（挂起 → 恢复），语义显式且可测。
  *
- * <p>本 Bean 只做一件事：在新事务中 insert——单条走 {@link #insert}，批量走 {@link #insertAll}
- * （{@code ADR-004 D1}，一次提交）。<b>不</b>做脱敏 / 组装 / 异常兜底
- * （那些在 {@code AuditWriteService}，保证"审计失败永不冒泡到业务"）。
+ * <p>本 Bean 只做一件事：insert。<b>不</b>做脱敏 / 组装 / 异常兜底
+ * （那些在 {@code AuditWriteService}）。
+ *
+ * <h2>★ 两条事务通道（{@code MODULE_BOUNDARIES §2.10}，{@code M3-B9.5}）</h2>
+ * <ul>
+ *   <li><b>默认（解耦）</b>：{@link #insert} / {@link #insertAll} —— {@code REQUIRES_NEW}，
+ *       审计独立提交，业务回滚不带走审计，审计失败也不污染业务事务。
+ *       适用于 §2.10 高风险清单<b>之外</b>的动作（登录 / 成员 / 主数据 / 导入批次 / 销售 / 补货策略变更）。</li>
+ *   <li><b>加入调用方事务</b>：{@link #insertInTx} —— {@code MANDATORY}，
+ *       与业务同生共死。适用于 §2.10 <b>高风险操作</b>
+ *       （库存调整、审批、确认到货、取消采购单）：宁可业务失败，不可留痕缺失。</li>
+ * </ul>
  */
 @Component
 public class AuditLogWriter {
@@ -40,6 +49,24 @@ public class AuditLogWriter {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public void insert(AuditLogEntity entity) {
+        auditLogMapper.insert(entity);
+    }
+
+    /**
+     * 在<b>调用方事务</b>内写入一条审计（高风险操作用，{@code MODULE_BOUNDARIES §2.10}）。
+     *
+     * <p>{@code MANDATORY}：<b>没有外层事务直接抛异常</b>——防止本方法被误用到无事务场景。
+     * 若在无事务场景下"静默降级成自动提交"，等于又变回独立提交，恰好抹掉本通道存在的全部意义；
+     * 让它在开发/测试期就炸出来，比线上出现「业务已提交、审计缺失」要便宜得多。
+     *
+     * <p>与 {@link #insert} 的差异只有事务传播：语义上
+     * 「业务提交 ⇒ 审计一并提交」「业务回滚 ⇒ 审计一并撤销」，不再有中间态的留痕缺失或残留。
+     * 异常一律上抛给 {@code AuditWriteService}（那条通道<b>不</b>做兜底）。
+     *
+     * @param entity 已组装、已脱敏的审计行（{@code team_id} 已由调用方显式设置）
+     */
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public void insertInTx(AuditLogEntity entity) {
         auditLogMapper.insert(entity);
     }
 

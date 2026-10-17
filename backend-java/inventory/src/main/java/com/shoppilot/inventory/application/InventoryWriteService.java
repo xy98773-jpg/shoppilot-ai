@@ -95,7 +95,13 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       暴露，流水 id 是唯一可追溯键）；冲销 → <b>被冲销的原流水 id</b>，新流水 id 写进
  *       {@code change_summary}。</li>
  *   <li><b>无团队上下文不写</b>：{@code team_id} / 操作人一律取 {@link TeamContext}，
- *       缺团队即跳过，<b>不造无主审计行</b>。</li>
+ *       缺团队即跳过并记 <b>WARN</b>（不静默），<b>不造无主审计行</b>。</li>
+ *   <li><b>★ 同事务（{@code M3-B9.5} / {@code R72}）</b>：三条动作走
+ *       {@code AuditWriteService.recordInBusinessTx}——审计与业务<b>同生共死</b>
+ *       （{@code MODULE_BOUNDARIES §2.10}「高风险操作审计与业务同事务」）。理由见 {@link #recordAudit}。
+ *       <b>与本模块 {@code InventoryPolicyService}（#7 策略变更）刻意不同</b>：§2.10 的高风险清单是
+ *       「库存调整、审批、确认到货、取消采购单」，<b>不含</b>补货策略变更；策略仍走解耦通道
+ *       {@code record}（审计失败不阻塞业务）。两者语义不同是<b>有意的</b>，不要统一。</li>
  * </ul>
  *
  * <h2>本批<b>刻意不做</b>的事（边界，勿在本类补）</h2>
@@ -412,7 +418,26 @@ public class InventoryWriteService {
                 null, null, reason, key, operatorId, ErrorCodes.INV_5006);
     }
 
-    /** 冲销：三态校验（不存在 / 本身是 REVERSAL / 已被冲销）后再写反向流水。 */
+    /**
+     * 冲销的死状态校验后再写反向流水。
+     *
+     * <p>★ <b>校验顺序（{@code R73} 裁定，{@code M3-B9.5}）</b>：
+     * <ol>
+     *   <li>{@code 不存在} → {@code INV-5008}（404）</li>
+     *   <li>{@code 本身是 REVERSAL} → {@code INV-5010}（422）—— 与幂等无关，任何情况下都不可冲销</li>
+     *   <li>{@code requireBalance}（{@code replayIfIdempotent} 需要余额快照）</li>
+     *   <li><b>{@code replayIfIdempotent}</b> —— 同幂等键命中：内容一致 → 返回首次结果；
+     *       内容不一致 → {@code INV-5003}</li>
+     *   <li>{@code 已被冲销} → {@code INV-5009}（409）</li>
+     *   <li>写反向流水</li>
+     * </ol>
+     *
+     * <p>★ 为什么幂等重放必须排在「已被冲销」之前：{@code API_CONTRACT §6.3} 规定
+     * 「同幂等键 + 请求体一致 ⇒ 返回首次结果，<b>不重复执行</b>」。首次冲销成功后，该笔流水当然
+     * 处于「已被冲销」状态；若先判 {@code INV-5009}，客户端因超时重试同一请求就会拿到 409，
+     * 把一次成功的操作报成失败（{@code R73} 的实证：旧顺序下重放得 409 且无 {@code transaction_id}）。
+     * 顺序调换后：<b>同键 → 重放 200</b>；<b>不同键 → 仍 409 {@code INV-5009}</b>（回归点）。
+     */
     private ReversalOutcome attemptReversal(long originalTxnId, String reason, String key) {
         long teamId = currentTeamId();
         Long operatorId = currentOperatorId();
@@ -424,15 +449,17 @@ public class InventoryWriteService {
         if (InventoryTxnType.REVERSAL.name().equals(original.getTxnType())) {
             throw new BizException(ErrorCodes.INV_5010, "该笔流水不可冲销");
         }
-        if (transactionMapper.countByReversedTxnId(originalTxnId) > 0) {
-            throw new BizException(ErrorCodes.INV_5009, "该笔流水已被冲销");
-        }
+        // 幂等重放需要余额快照（返回首次结果时带 balance.version），故 requireBalance 随之前移
         BalanceRow balance = requireBalance(original.getWarehouseId(), original.getSkuId());
         BigDecimal delta = original.getQtyDelta().negate();
+        // ★ R73：先判重放，再判「已被冲销」——否则同键重试会被 409 误杀
         StockChangeResult replay = replayIfIdempotent(InventoryTxnType.REVERSAL, InventoryBizType.REVERSAL,
                 originalTxnId, original.getSkuId(), original.getWarehouseId(), delta, false, key, balance);
         if (replay != null) {
             return new ReversalOutcome(replay, original.getSkuId(), original.getWarehouseId());
+        }
+        if (transactionMapper.countByReversedTxnId(originalTxnId) > 0) {
+            throw new BizException(ErrorCodes.INV_5009, "该笔流水已被冲销");
         }
         StockChangeResult result = writeChange(teamId, balance, InventoryTxnType.REVERSAL,
                 InventoryBizType.REVERSAL, delta, originalTxnId, originalTxnId, reason, key, operatorId,
@@ -619,22 +646,34 @@ public class InventoryWriteService {
     }
 
     /**
-     * 统一写审计。
+     * 统一写审计 —— <b>与业务同事务</b>（{@code AuditWriteService.recordInBusinessTx}，
+     * {@code MODULE_BOUNDARIES §2.10} 高风险操作，{@code M3-B9.5}）。
      *
-     * <p>★ 不包 {@code AuditBufferScope}、不 try/catch：{@code AuditWriteService.record} 自带
-     * 「失败只记 ERROR、不抛」兜底（{@code AuditWriteService:90-104}）；{@code AuditBufferScope}
-     * 是导入批量场景的优化（{@code ADR-004}），本批是请求级单条。
+     * <p>★ 为什么是「同事务」而不是 {@code record}（{@code REQUIRES_NEW} 解耦）：
+     * 本类三条动作（{@code #11}/{@code #12}/{@code #13}）都在 {@code @Transactional(REQUIRED)} 内，
+     * 若走 {@code REQUIRES_NEW}，审计会<b>先于业务提交</b>独立落库 ——
+     * 一旦业务随后回滚（或本事务在提交时失败），就会出现「审计说调了、余额没动」的谎报，
+     * 而库存调整<b>无法用业务数据反推</b>是否发生过，这条痕迹是唯一证据。
+     * {@code §2.10} 与 {@code PURCHASING_WORKFLOW:263} 明文要求同事务（回滚时一并撤销）。
      *
-     * <p>{@code team_id} / 操作人一律取自 {@link TeamContext}，缺团队即跳过（<b>禁止造无主审计行</b>）。
+     * <p>★ 失败即回滚：{@code recordInBusinessTx} <b>不</b>做异常兜底，
+     * 审计写不进 ⇒ 异常冒泡 ⇒ 整个库存变更回滚。这是 §2.10 的取舍：
+     * <b>宁可业务失败，不可留痕缺失</b>。
+     *
+     * <p>{@code team_id} / 操作人一律取自 {@link TeamContext}；缺团队时<b>不写</b>并记 WARN
+     * （{@code REST} 路径必有上下文，静默会掩盖未来批处理路径的缺陷）。
      */
     private void recordAudit(AuditAction action, String bizType, Long bizId, String summary,
                              String before, String after) {
         TeamContext.Snapshot snap = TeamContext.get();
         if (snap == null || snap.teamId() == null) {
-            // 无团队上下文（理论上 REST 路径不会发生）则不写审计，避免造无主审计行
+            // 无团队上下文则不写审计（避免造无主审计行）；但必须留痕——
+            // REST 路径走到这里说明过滤链/上下文注入出了故障，静默返回会把缺陷藏起来
+            log.warn("缺少 TeamContext，跳过审计写入（禁止造无主审计行）：action={} bizType={} bizId={}",
+                    action, bizType, bizId);
             return;
         }
-        auditWriteService.record(AuditEvent.builder()
+        auditWriteService.recordInBusinessTx(AuditEvent.builder()
                 .teamId(snap.teamId())
                 .action(action)
                 .bizType(bizType)
