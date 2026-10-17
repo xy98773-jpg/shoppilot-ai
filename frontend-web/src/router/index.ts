@@ -11,8 +11,9 @@
 //       · 审批页（矩阵 #8，仅 OWNER/ADMIN/APPROVER）→ ['OWNER','ADMIN','APPROVER']；
 //       · 管理页（矩阵 #11/#12/#13）→ ['OWNER','ADMIN']。
 //
-// ★ 本批仅实现：登录页、布局壳、工作台、主数据四页、403/404。
-//   其余页面**保持 Placeholder 不动**（属后续里程碑：导入 / 库存 / 销售 / 分析 / 补货 / 采购 / 团队 / 审计）。
+// ★ 已实现：登录页、布局壳、工作台、主数据四页、403/404（M2-T12）；
+//   导入两页 + 库存三页 + 销售一页（M3-B10 / T18）。
+//   其余页面**保持 Placeholder 不动**（属后续里程碑：分析 / 补货 / 采购 / 团队 / 审计）。
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { defineComponent, h } from 'vue'
 
@@ -83,45 +84,47 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '仓库列表' },
       },
 
-      // ---- 以下为后续里程碑页面（本批保持 Placeholder，仅订正角色口径） ----
+      // ---- 导入（M3-B10 / T18：导入向导 + 批次管理；OPERATOR+ 写页） ----
       { path: 'importdata', redirect: '/importdata/wizard' },
       {
         path: 'importdata/wizard',
         name: 'importdata-wizard',
-        component: () => Promise.resolve(Placeholder),
+        component: () => import('@/views/importdata/ImportWizard.vue'),
         meta: { title: '导入向导', roles: WRITE_ROLES },
       },
       {
         path: 'importdata/batches',
         name: 'importdata-batches',
-        component: () => Promise.resolve(Placeholder),
+        component: () => import('@/views/importdata/ImportBatchList.vue'),
         meta: { title: '导入批次', roles: WRITE_ROLES },
       },
 
+      // ---- 库存（M3-B10 / T18：概览 / 流水 / 盘点调整） ----
       { path: 'inventory', redirect: '/inventory/overview' },
       {
         path: 'inventory/overview',
         name: 'inventory-overview',
-        component: () => Promise.resolve(Placeholder),
+        component: () => import('@/views/inventory/InventoryOverview.vue'),
         meta: { title: '库存概览' },
       },
       {
         path: 'inventory/transactions',
         name: 'inventory-transactions',
-        component: () => Promise.resolve(Placeholder),
+        component: () => import('@/views/inventory/TransactionList.vue'),
         meta: { title: '库存流水' },
       },
       {
         path: 'inventory/count-adjust',
         name: 'inventory-count-adjust',
-        component: () => Promise.resolve(Placeholder),
+        component: () => import('@/views/inventory/CountAdjust.vue'),
         meta: { title: '盘点调整', roles: WRITE_ROLES },
       },
 
+      // ---- 销售（M3-B10 / T18：只读列表） ----
       {
         path: 'sales',
         name: 'sales-list',
-        component: () => Promise.resolve(Placeholder),
+        component: () => import('@/views/sales/SalesList.vue'),
         meta: { title: '销售记录' },
       },
 

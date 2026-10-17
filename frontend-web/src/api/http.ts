@@ -71,6 +71,20 @@ function toApiError(body: ApiResponse, httpStatus?: number): ApiError {
  */
 export const API_BASE_URL = '/api/v1'
 
+/**
+ * 内部标记头：请求需要回传「是否命中幂等重放」（`M3-B10`，{@code API_CONTRACT §6.3}）。
+ *
+ * ★ 只有 `postWithIdempotency` 会设置它；不设置它的**所有既有调用方**行为完全不变
+ *   （仍直接拿解包后的 `data`），因此本能力是**纯增量**，不改动既有错误码处理与 401 逻辑。
+ */
+const REPLAY_PROBE_HEADER = 'X-Shoppilot-Replay-Probe'
+
+/** 带幂等键写请求的返回：解包后的业务数据 + 服务端是否标记为重放。 */
+export interface ReplayableResult<T> {
+  data: T
+  replayed: boolean
+}
+
 const http: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
@@ -104,6 +118,14 @@ http.interceptors.response.use(
         // 理论兜底：成功状态码下仍返回非 OK（如 IMP-4006/IMP-4014 的 200 语义码）
         return Promise.reject(toApiError(body, response.status))
       }
+      // 幂等重放探测（M3-B10）：仅当请求显式带探测头时改变返回形态，
+      // 其它请求仍直接拿 data —— 既有调用方与错误码分支零影响。
+      if (response.config.headers.get(REPLAY_PROBE_HEADER) === '1') {
+        return {
+          data: body.data,
+          replayed: String(response.headers['idempotent-replayed'] ?? '') === 'true',
+        } as never
+      }
       // 成功：直接返回 data，减少调用方解包成本
       return body.data as never
     }
@@ -129,5 +151,25 @@ http.interceptors.response.use(
     return Promise.reject(error)
   },
 )
+
+/**
+ * 带幂等键的 POST（写操作统一入口，`API_CONTRACT §6.3`）。
+ *
+ * ★ 幂等键由调用方生成并**在一次用户意图内复用**（重试不换键），见 `utils/idempotency.ts`。
+ * ★ 返回 `{ data, replayed }`：`replayed` 取自响应头 `Idempotent-Replayed: true`，
+ *   为 `true` 时前端应提示「该操作已提交过」，无该头按新执行处理。
+ */
+export function postWithIdempotency<T>(
+  url: string,
+  body: unknown,
+  idempotencyKey: string,
+): Promise<ReplayableResult<T>> {
+  return http.post<unknown, ReplayableResult<T>>(url, body, {
+    headers: {
+      'Idempotency-Key': idempotencyKey,
+      [REPLAY_PROBE_HEADER]: '1',
+    },
+  })
+}
 
 export default http

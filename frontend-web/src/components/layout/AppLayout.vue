@@ -12,13 +12,20 @@
     </el-header>
     <el-container class="app-layout__body">
       <el-aside width="200px" class="app-layout__aside">
-        <!-- 侧栏：仅列本批已实现页面（工作台 + 主数据四页）；其余里程碑页面待实现后再挂。 -->
+        <!-- 侧栏：已实现页面（工作台 / 主数据 / 导入 / 库存 / 销售）；
+             写页按角色显隐（体验层，服务端仍是唯一安全边界）。 -->
         <el-menu :default-active="activePath" router class="app-layout__menu">
           <el-menu-item index="/dashboard">工作台</el-menu-item>
           <el-menu-item index="/catalog/products">商品</el-menu-item>
           <el-menu-item index="/catalog/skus">SKU</el-menu-item>
           <el-menu-item index="/catalog/suppliers">供应商</el-menu-item>
           <el-menu-item index="/catalog/warehouses">仓库</el-menu-item>
+          <el-menu-item v-if="canWrite" index="/importdata/wizard">导入向导</el-menu-item>
+          <el-menu-item v-if="canWrite" index="/importdata/batches">导入批次</el-menu-item>
+          <el-menu-item index="/inventory/overview">库存概览</el-menu-item>
+          <el-menu-item index="/inventory/transactions">库存流水</el-menu-item>
+          <el-menu-item v-if="canWrite" index="/inventory/count-adjust">盘点调整</el-menu-item>
+          <el-menu-item index="/sales">销售记录</el-menu-item>
         </el-menu>
       </el-aside>
       <el-main class="app-layout__main">
@@ -29,17 +36,23 @@
 </template>
 
 <script setup lang="ts">
-// 应用布局壳：顶栏（团队名 + 当前角色 + 登出） + 侧栏（主数据导航） + 内容区。
+// 应用布局壳：顶栏（团队名 + 当前角色 + 登出） + 侧栏（已实现页面导航） + 内容区。
 // 红线：不承载任何业务规则；角色仅作展示（体验层），服务端仍是唯一安全边界。
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { useTeamStore } from '@/stores/team'
+import { hasAnyRole } from '@/utils/permission'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 const teamStore = useTeamStore()
+
+/** 写页入口显隐（体验层）：与路由 `meta.roles` 的 WRITE_ROLES 口径一致。 */
+const canWrite = computed(() =>
+  hasAnyRole(teamStore.role, ['OWNER', 'ADMIN', 'OPERATOR', 'APPROVER']),
+)
 
 /** 当前激活菜单项：优先精确匹配，其次匹配 `/catalog/...` 前缀（如商品下 SKU 详情）。 */
 const activePath = computed(() => {
