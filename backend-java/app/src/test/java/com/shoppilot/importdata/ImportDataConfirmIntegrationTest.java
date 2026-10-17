@@ -3,12 +3,17 @@ package com.shoppilot.importdata;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shoppilot.TestCredentials;
 import com.shoppilot.app.ShopPilotApplication;
+import com.shoppilot.common.context.TeamContext;
+import com.shoppilot.common.web.BizException;
+import com.shoppilot.inventory.application.InventoryWriteService;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -30,6 +35,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.testcontainers.containers.MySQLContainer;
@@ -83,6 +90,24 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * {@code REQUIRED} 后，两项均失败且现象与缺陷报告一致（{@code status=FAILED}、
  * {@code success_rows=0}、{@code failed_rows=2}）；第 11 项（{@code R80}）同样在「键不含仓库」时
  * 失败（{@code PARTIAL_SUCCESS} 而非 {@code COMPLETED}）。见 {@code tools/b10.6/}。</p>
+ *
+ * <h2>★ M3-B10.7（R83）追加的第 16 节</h2>
+ * <ol start="17">
+ *   <li><b>R83-a</b> 同仓同 SKU <b>同数量</b>两行 → 后行 {@code ERROR COM-0001}、
+ *       {@code confirm} 被 {@code IMP-4009} 拦下、余额与流水均不变；且该行
+ *       <b>{@code ERROR} 与 {@code IMP-4006 WARNING} 并存</b>（R83 要求 5）；</li>
+ *   <li><b>R83-b</b> 同仓同 SKU <b>不同数量</b>两行 → 同样后行 {@code ERROR}
+ *       （<b>不是</b>留到 {@code confirm} 报 {@code INV-5003}）；</li>
+ *   <li><b>R83-c</b> 同 SKU <b>跨两仓</b> → 不误杀，{@code COMPLETED}、两仓余额各自正确
+ *       （{@code R80} 能力不得回退）；</li>
+ *   <li><b>R83-d</b> 回归：{@code SALES_DAILY} 的 {@code SAL-6004} 与主数据的 {@code CAT-3002}
+ *       行为一字不变。</li>
+ * </ol>
+ *
+ * <p>★ 第 12 项（{@code R79-1}）在 B10.7 被<b>迁移到服务层</b>：R83 之后「同批同仓同 SKU 两行」
+ * 在校验阶段即被拦下，{@code INV-5003} 在导入路径上不可达（这正是 R83 的目的），
+ * 故改为「外层事务 + 同幂等键两次调用」直接验证 {@code NESTED} 行级隔离——
+ * 探针强度不变，见方法内注释。</p>
  */
 @SpringBootTest(classes = ShopPilotApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -131,6 +156,13 @@ class ImportDataConfirmIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    /** R79-1 的服务层探针（R83 之后该场景在导入路径上不可达，见方法注释）。 */
+    @Autowired
+    private InventoryWriteService inventoryWriteService;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -540,36 +572,32 @@ class ImportDataConfirmIntegrationTest {
     // =====================================================================
 
     @Test
-    @DisplayName("R79-1 同批同 SKU 同仓两行：PARTIAL_SUCCESS + 行级 INV-5003（不是 COM-0002）+ 成功行已落库")
-    void sameSkuSameWarehouseIsIsolatedAtRowLevel() throws Exception {
-        // 同一幂等键（同 batch / 同 SKU / 同仓库）+ 不同数量 ⇒ 第二行必被判「内容不一致」INV-5003
-        byte[] csv = csv("sku_code,warehouse_code,qty\n"
-                + "SKU-A,WH-MAIN,5.000\n"
-                + "SKU-A,WH-MAIN,7.000\n");
-        // INVENTORY_SNAPSHOT 不做文件内重复校验（§10.2 只对 SALES_DAILY 单列）⇒ 校验 0 错 0 警
-        long batchId = validatedBatch("snapshot-same-wh.csv", csv, "INVENTORY_SNAPSHOT", 0, 0);
-
-        ResponseEntity<String> resp = confirm(batchId, "key-r79-same-wh", Map.of());
-        assertEquals(HttpStatus.OK, resp.getStatusCode(), resp.getBody());
-        JsonNode data = data(resp);
-        assertEquals("PARTIAL_SUCCESS", data.get("status").asText(),
-                "R79：写服务内部抛 BizException 必须是行级失败，而不是整批 0 行 + COM-0002：" + resp.getBody());
-        assertEquals(1, data.get("success_rows").asInt());
-        assertEquals(1, data.get("failed_rows").asInt());
-        assertEquals(data.get("total_rows").asInt(),
-                data.get("success_rows").asInt() + data.get("failed_rows").asInt(), "不变式");
-
-        Map<String, Object> error = jdbc.queryForMap("SELECT row_no, error_code, error_level, raw_data "
-                + "FROM import_row_errors WHERE batch_id = ?", batchId);
-        assertEquals(2L, ((Number) error.get("row_no")).longValue());
-        assertEquals("INV-5003", error.get("error_code"), "行级业务码不得被替换成通用码");
-        assertNotEquals("COM-0002", error.get("error_code"), "R79 的缺陷形态正是这个替换");
-        assertEquals("ERROR", error.get("error_level"));
-        assertNotNull(error.get("raw_data"), "失败行须回带原始全列");
-
-        assertEquals(0, new BigDecimal("5.000").compareTo(balanceOf(9004, 9002)),
-                "成功行（第 1 行）必须已落库，不得被第二行连坐回滚");
-        assertEquals(1, count("inventory_transactions", TEAM_ID), "只成功 1 行 → 1 条流水");
+    @DisplayName("R79-1（B10.7 迁移）库存写服务行级隔离：外层事务内第二行 INV-5003 只回滚到 SAVEPOINT，外层仍提交")
+    void inventoryWriteServiceIsolatesRowLevelFailure() {
+        // ★ M3-B10.7（R83）之后，本用例原来的载体（同批同仓同 SKU 两行 → 第二行 INV-5003）
+        //   在导入路径上已不可达：同批同仓同 SKU 的重复行现在由校验阶段直接判 ERROR（COM-0001），
+        //   confirm 被 IMP-4009 前置门拦下——这正是 R83 的目的，不是能力回退。
+        //   故把探针下移到服务层，直接验证 R79 的机制本身（探针强度不变）：
+        //   外层事务 + 同幂等键两次调用（数量不同 ⇒ 第二次 INV-5003）。
+        //   若 applyInitialImport 退回 REQUIRED，行内 BizException 会把共享事务标 rollback-only，
+        //   外层提交抛 UnexpectedRollbackException ⇒ 本用例失败。
+        //   负向有效性同源做法见 tools/b10.6/README.md 第七节。
+        TeamContext.set(new TeamContext.Snapshot(TEAM_ID, List.of("OPERATOR"), OPERATOR_ID, OPERATOR));
+        try {
+            new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                inventoryWriteService.applyInitialImport(9002L, 9004L, new BigDecimal("5.000"), 999L,
+                        "INIT_IMPORT:IMPORT:999:9002:9004");
+                BizException second = assertThrows(BizException.class, () ->
+                                inventoryWriteService.applyInitialImport(9002L, 9004L, new BigDecimal("7.000"),
+                                        999L, "INIT_IMPORT:IMPORT:999:9002:9004"),
+                        "同键不同数量 ⇒ 写服务内部必抛 INV-5003");
+                assertEquals("INV-5003", second.getErrorCode(), "行级业务码不得被替换成通用码");
+            });
+        } finally {
+            TeamContext.clear();
+        }
+        assertEquals(1, count("inventory_transactions", TEAM_ID), "第一行必须已提交，不得被第二行连坐回滚");
+        assertEquals(0, new BigDecimal("5.000").compareTo(balanceOf(9004, 9002)), "余额只累加一次");
     }
 
     @Test
@@ -689,6 +717,110 @@ class ImportDataConfirmIntegrationTest {
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM audit_logs "
                 + "WHERE action = 'IMPORT_BATCH_COMPLETE' AND biz_id = ?", Integer.class, batchId),
                 "批次完成审计恰好 1 条");
+    }
+
+    // =====================================================================
+    // 16) R83：INVENTORY_SNAPSHOT 文件内重复（wh, sku）→ 后行 ERROR（B10.7）
+    // =====================================================================
+
+    @Test
+    @DisplayName("R83-a 同仓同 SKU 同数量两行：后行 ERROR COM-0001，confirm 422 IMP-4009，WARNING 并存")
+    void snapshotDuplicateWithSameQtyIsError() throws Exception {
+        // 已有余额行 ⇒ 两行都会命中 IMP-4006（WARNING）；第 2 行再叠加「文件内重复」的 ERROR
+        jdbc.update("INSERT INTO inventory_balances (team_id, warehouse_id, sku_id, on_hand_qty) "
+                + "VALUES (?, 9004, 9002, 10.000)", TEAM_ID);
+        byte[] csv = csv("sku_code,warehouse_code,qty\n"
+                + "SKU-A,WH-MAIN,2.000\n"
+                + "SKU-A,WH-MAIN,2.000\n");
+        long batchId = validatedBatch("snapshot-dup-same-qty.csv", csv, "INVENTORY_SNAPSHOT", 1, 1);
+
+        Map<String, Object> error = jdbc.queryForMap("SELECT row_no, error_level, error_code, error_message, "
+                + "raw_data FROM import_row_errors WHERE batch_id = ? AND error_level = 'ERROR'", batchId);
+        assertEquals(2L, ((Number) error.get("row_no")).longValue(), "后行（第 2 行）才报错");
+        assertEquals("COM-0001", error.get("error_code"), "R83 口径：复用 COM-0001（不新增错误码）");
+        assertEquals("同一仓库、同一 SKU 在文件内重复", error.get("error_message"));
+        assertNotNull(error.get("raw_data"), "失败行须回带原始全列");
+
+        // 要求 5：WARNING（IMP-4006）与 ERROR 并存，不因该行已有 ERROR 就丢弃 WARNING
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM import_row_errors "
+                        + "WHERE batch_id = ? AND error_level = 'WARNING' AND error_code = 'IMP-4006'",
+                Integer.class, batchId), "两行都命中已有余额 ⇒ 2 条 IMP-4006（含第 2 行）");
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM import_row_errors "
+                + "WHERE batch_id = ? AND row_no = 2 AND error_level = 'WARNING'", Integer.class, batchId),
+                "同一 row_no 下 ERROR 与 WARNING 可并存");
+
+        // 有 ERROR 行 ⇒ confirm 被 IMP-4009 前置门拦下（不聚合、不自动相加）
+        ResponseEntity<String> resp = confirm(batchId, "key-r83-dup-same-qty", Map.of());
+        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, resp.getStatusCode(), resp.getBody());
+        JsonNode body = objectMapper.readTree(resp.getBody());
+        assertEquals("IMP-4009", body.get("code").asText());
+        assertEquals(1, body.get("data").get("error_rows").asInt());
+
+        assertEquals(0, new BigDecimal("10.000").compareTo(balanceOf(9004, 9002)), "被拦下的批次不得改余额");
+        assertEquals(0, count("inventory_transactions", TEAM_ID), "被拦下的批次不得写流水");
+    }
+
+    @Test
+    @DisplayName("R83-b 同仓同 SKU 不同数量两行：同样是后行 ERROR（不是留到 confirm 报 INV-5003）")
+    void snapshotDuplicateWithDifferentQtyIsError() throws Exception {
+        byte[] csv = csv("sku_code,warehouse_code,qty\n"
+                + "SKU-A,WH-MAIN,2.000\n"
+                + "SKU-A,WH-MAIN,3.000\n");
+        long batchId = validatedBatch("snapshot-dup-diff-qty.csv", csv, "INVENTORY_SNAPSHOT", 1, 0);
+
+        Map<String, Object> error = jdbc.queryForMap("SELECT row_no, error_code, error_message "
+                + "FROM import_row_errors WHERE batch_id = ? AND error_level = 'ERROR'", batchId);
+        assertEquals(2L, ((Number) error.get("row_no")).longValue());
+        assertEquals("COM-0001", error.get("error_code"));
+        assertEquals("同一仓库、同一 SKU 在文件内重复", error.get("error_message"));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM import_row_errors "
+                        + "WHERE batch_id = ? AND error_code = 'INV-5003'", Integer.class, batchId),
+                "校验阶段已拦下，不应再留到 confirm 报 INV-5003");
+
+        ResponseEntity<String> resp = confirm(batchId, "key-r83-dup-diff-qty", Map.of());
+        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, resp.getStatusCode(), resp.getBody());
+
+        assertNull(balanceOf(9004, 9002), "无余额行（未落库）");
+        assertEquals(0, count("inventory_transactions", TEAM_ID));
+    }
+
+    @Test
+    @DisplayName("R83-c 同 SKU 跨两仓 → 不误杀：0 错 0 警、COMPLETED、两仓余额各自正确（R80 不回退）")
+    void snapshotSameSkuAcrossWarehousesIsNotDuplicate() throws Exception {
+        insertSecondWarehouse();
+        byte[] csv = csv("sku_code,warehouse_code,qty\n"
+                + "SKU-A,WH-MAIN,5.000\n"
+                + "SKU-A,WH-B,7.000\n");
+        long batchId = validatedBatch("snapshot-cross-wh-r83.csv", csv, "INVENTORY_SNAPSHOT", 0, 0);
+
+        ResponseEntity<String> resp = confirm(batchId, "key-r83-cross-wh", Map.of());
+        assertEquals(HttpStatus.OK, resp.getStatusCode(), resp.getBody());
+        assertEquals("COMPLETED", data(resp).get("status").asText(), resp.getBody());
+        assertEquals(2, count("inventory_transactions", TEAM_ID), "两仓各 1 条 INIT_IMPORT");
+        assertEquals(0, new BigDecimal("5.000").compareTo(balanceOf(9004, 9002)));
+        assertEquals(0, new BigDecimal("7.000").compareTo(balanceOf(9005, 9002)));
+    }
+
+    @Test
+    @DisplayName("R83-d 回归：SALES_DAILY 的 SAL-6004 与主数据的 CAT-3002 行为一字不变")
+    void existingDuplicateChecksUnchanged() throws Exception {
+        // SALES_DAILY：三元组 (wh, sku, date) 重复 → 后行 SAL-6004（不是 COM-0001）
+        long salesBatch = validatedBatch("sales-dup-r83.csv", csv("sku_code,warehouse_code,sale_date,qty\n"
+                + "SKU-A,WH-MAIN," + PAST_DATE + ",1.000\n"
+                + "SKU-A,WH-MAIN," + PAST_DATE + ",2.000\n"), "SALES_DAILY", 1, 0);
+        Map<String, Object> salesError = jdbc.queryForMap("SELECT row_no, error_code FROM import_row_errors "
+                + "WHERE batch_id = ? AND error_level = 'ERROR'", salesBatch);
+        assertEquals("SAL-6004", salesError.get("error_code"), "R83 不得影响 SALES_DAILY 的既有错误码");
+        assertEquals(2L, ((Number) salesError.get("row_no")).longValue());
+
+        // 主数据 SKU：编码重复 → 后行 CAT-3002（不是 COM-0001）
+        long skuBatch = validatedBatch("sku-dup-r83.csv", csv("sku_code,product_code\n"
+                + "SKU-NEW-DUP,P-BAG-001\n"
+                + "SKU-NEW-DUP,P-BAG-001\n"), "SKU", 1, 0);
+        Map<String, Object> skuError = jdbc.queryForMap("SELECT row_no, error_code FROM import_row_errors "
+                + "WHERE batch_id = ? AND error_level = 'ERROR'", skuBatch);
+        assertEquals("CAT-3002", skuError.get("error_code"), "R83 不得影响主数据的既有错误码");
+        assertEquals(2L, ((Number) skuError.get("row_no")).longValue());
     }
 
     // =====================================================================

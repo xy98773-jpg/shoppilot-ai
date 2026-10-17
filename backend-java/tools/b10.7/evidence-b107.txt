@@ -1,0 +1,184 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=0aebc7db32985efd8dec08de960223324a7aec47fd2f08e19d062e416eaec844
+DATE=2026-10-17T20:06:47Z
+PORTS mysql=3342 app=18200（任务书指定 3350 被宿主 WorkBuddy.exe 占用，MySQL 下调至 3342）
+MYSQL_READY=1 (port 3342, 独立容器 b107-mysql)
+APP_PID=22840 (port 18200, stdout -> evidence-b107-app.log)
+APP_UP=1
+SEED_OK (seed-b95.sql：团队 7 仓库 9004=WH-MAIN，SKU-A=9002 / SKU-B=9003 / SKU-C=9005 各 10.000；团队 8 owner8)
+TOKEN op=eyJhbGci owner8=eyJhbGci
+SETUP WH-B(id=9006) 已插入；team7 仓库=WH-MAIN,WH-B
+G10-种子对账缺口行数=1（seed-b95.sql 的 SKU-B 余额无对应流水，非本批引入）
+G10-种子已补齐：3 条流水
+---------------------------------------------------------------
+G1 R83-a：同仓同 SKU【同数量】两行 → 后行 ERROR COM-0001，confirm 422 IMP-4009
+G1-前置 SKU-B@WH-MAIN=10.000 流水=3
+PASS G1-上传201 => 201
+PASS G1-预览200 => 200
+PASS G1-解析2行 => 2
+PASS G1-映射200 => 200
+G1-validate=200 err=1 warn=1
+G1-errors="errors":[{"row_no":2,"error_level":"ERROR","error_code":"COM-0001","error_field":"sku_code","error_message":"同一仓库、同一 SKU 在文件内重复"},{"row_no":2,"error_level":"WARNING","error_code":"IMP-4006","error_field":"sku_code","error_message":"该仓库与 SKU 已有余额行，确认导入后将按增量累加（如需覆盖请使用盘点调整）"},{"row_no":1,"error_level":"WARNING","error_code":"IMP-4006","error_field":"sku_code","error_message":"该仓库与 SKU 已有余额行，确认导入后将按增量累加（如需覆盖请使用盘点调整）"}]
+PASS G1-校验200 => 200
+PASS G1-error_rows=1 => 1
+G1-行级错误=2|COM-0001|ERROR
+PASS G1-失败行号2（后行） => 2
+PASS G1-错误码COM-0001 => COM-0001
+PASS G1-错误级别ERROR => ERROR
+PASS G1-文案逐字 => 含[同一仓库、同一 SKU 在文件内重复]
+PASS G1-WARNING与ERROR并存 => 1
+G1-confirm=422 body={"code":"IMP-4009","message":"批次存在错误行，请先修正或跳过错误行后再导入","data":{"batch_id":1,"status":"VALIDATED","error_rows":1},"requestId":"req_586c7ad9085a39c1da7e4829929a264b","timestamp":"2026-10-17T20:07:42.456Z"}
+PASS G1-confirm422前置门 => 422
+PASS G1-code=IMP-4009 => IMP-4009
+PASS G1-余额不变 => 10.000
+PASS G1-流水不变 => 3
+---------------------------------------------------------------
+G2 R83-b：同仓同 SKU【不同数量】两行 → 同样后行 ERROR（不是留到 confirm 报 INV-5003）
+PASS G2-上传201 => 201
+PASS G2-预览200 => 200
+PASS G2-映射200 => 200
+G2-validate=200 err=1 warn=1
+PASS G2-error_rows=1 => 1
+G2-行级错误=2|COM-0001|ERROR
+PASS G2-失败行号2 => 2
+PASS G2-错误码COM-0001 => COM-0001
+PASS G2-不是INV-5003 => COM-0001（≠INV-5003）
+PASS G2-文案逐字 => 含[同一仓库、同一 SKU 在文件内重复]
+G2-confirm=422 body={"code":"IMP-4009","message":"批次存在错误行，请先修正或跳过错误行后再导入","data":{"batch_id":2,"status":"VALIDATED","error_rows":1},"requestId":"req_6129d1ccae5131231f0a99530fb6fa61","timestamp":"2026-10-17T20:07:58.564Z"}
+PASS G2-confirm422 => 422
+PASS G2-code=IMP-4009 => IMP-4009
+PASS G2-不是PARTIAL_SUCCESS => VALIDATED（≠PARTIAL_SUCCESS）
+PASS G2-余额不变 => 10.000
+PASS G2-本批0条流水 => 0
+---------------------------------------------------------------
+G3 R83-c：同 SKU 跨两仓 → 不误杀，COMPLETED（R80 能力不回退）
+G3-前置 SKU-C@WH-MAIN=10.000 SKU-C@WH-B=[] 流水=3
+PASS G3-上传201 => 201
+PASS G3-预览200 => 200
+PASS G3-映射200 => 200
+G3-validate=200 err=0 warn=1
+PASS G3-校验0错误（不误杀） => 0
+G3-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":3,"status":"COMPLETED","total_rows":2,"success_rows":2,"failed_rows":0,"started_at":"2026-10-17T20:08:14.077Z","finished_at":"2026-10-17T20:08:14.174Z"},"requestId":"req_9f5920841ae2754ed82a5cffae4e189b","timestamp":"2026-10-17T20:08:14.200Z"}
+PASS G3-终态COMPLETED => COMPLETED
+PASS G3-成功2行 => 2
+PASS G3-主仓余额10+3 => 13.000
+PASS G3-副仓余额0+4 => 4.000
+PASS G3-本批2条INIT_IMPORT => 2
+PASS G3-幂等键主仓 => 1
+PASS G3-幂等键副仓 => 1
+---------------------------------------------------------------
+G4 R83-d 回归：SALES_DAILY 的 SAL-6004 与主数据 SKU 的 CAT-3002 行为一字不变
+PASS G4-销售上传201 => 201
+PASS G4-销售预览200 => 200
+PASS G4-销售映射200 => 200
+G4-销售validate=200 err=1
+PASS G4-销售error_rows=1 => 1
+G4-销售行级错误=2|SAL-6004|ERROR
+PASS G4-销售码SAL-6004 => SAL-6004
+PASS G4-销售失败行号2 => 2
+PASS G4-SKU上传201 => 201
+PASS G4-SKU预览200 => 200
+PASS G4-SKU映射200 => 200
+G4-SKUvalidate=200 err=1
+PASS G4-SKUerror_rows=1 => 1
+G4-SKU行级错误=2|CAT-3002|ERROR
+PASS G4-SKU码CAT-3002 => CAT-3002
+PASS G4-SKU失败行号2 => 2
+---------------------------------------------------------------
+G5 R84-e：导入成功 → reimport → 201 UPLOADED、原批被取代 + 槽位释放、审计 1 条
+PASS G5-上传201 => 201
+PASS G5-预览200 => 200
+PASS G5-映射200 => 200
+PASS G5-校验200 => 200
+PASS G5-校验0错误 => 0
+PASS G5-原批COMPLETED => COMPLETED
+G5-原批 id=6 hash=9838514b1df1… attempt_no=1
+G5-reimport=201 body={"code":"OK","message":"success","data":{"batch_id":7,"batch_no":"IMP-20261017-000007","biz_type":"SKU","file_name":"sku-master.csv","file_hash":"9838514b1df1c7a74523639978555177696e42715731dc5361784dca9dc90583","file_size":64,"status":"UPLOADED","created_at":"2026-10-17T20:08:50.150Z"},"requestId":"req_1144dd4f77a38ef8efa379748bd4c58c","timestamp":"2026-10-17T20:08:50.187Z"}
+PASS G5-reimport201 => 201
+PASS G5-新批UPLOADED => UPLOADED
+PASS G5-新批attempt_no=原+1 => 2
+PASS G5-新批占槽位 => 9838514b1df1c7a74523639978555177696e42715731dc5361784dca9dc90583
+PASS G5-新批duplicate_of为NULL => 0
+PASS G5-复制file_hash => 9838514b1df1c7a74523639978555177696e42715731dc5361784dca9dc90583
+PASS G5-复制storage_path => .\\data\\import\\7\\202610\\IMP-20261017-000006_sku-master.csv
+PASS G5-复制file_name => sku-master.csv
+PASS G5-复制biz_type => SKU
+PASS G5-复制template_version => v1
+PASS G5-计数列归零 => 0
+PASS G5-原批被取代 => 7
+PASS G5-原批槽位释放 => 0
+PASS G5-原批状态不变 => COMPLETED
+PASS G5-槽位唯一占用者=新批 => 7
+PASS G5-新批可预览 => 200
+PASS G5-审计恰好1条 => 1
+PASS G5-审计biz_id=新批 => 7
+PASS G5-审计biz_type => IMPORT_BATCH
+PASS G5-审计记原批id => 含[原批次 id=6]
+---------------------------------------------------------------
+G6 R84-f：未终结批次（UPLOADED / VALIDATED）reimport → 422 IMP-4005
+PASS G6-上传201 => 201
+G6-UPLOADED-reimport=422 body={"code":"IMP-4005","message":"当前批次状态不允许强制重导","data":null,"details":[{"field":"status","message":"仅终态批次可强制重导（COMPLETED / PARTIAL_SUCCESS / FAILED / CANCELLED / DUPLICATE_REJECTED），当前状态 UPLOADED","rejectedValue":"UPLOADED"}],"requestId":"req_13b09b3c4a97d51cf719f924bb65b16f","timestamp":"2026-10-17T20:09:19.503Z"}
+PASS G6-UPLOADED→422 => 422
+PASS G6-UPLOADED码 => IMP-4005
+PASS G6-UPLOADED状态未变 => UPLOADED
+PASS G6-VALIDATED就绪 => VALIDATED
+G6-VALIDATED-reimport=422 body={"code":"IMP-4005","message":"当前批次状态不允许强制重导","data":null,"details":[{"field":"status","message":"仅终态批次可强制重导（COMPLETED / PARTIAL_SUCCESS / FAILED / CANCELLED / DUPLICATE_REJECTED），当前状态 VALIDATED","rejectedValue":"VALIDATED"}],"requestId":"req_2de59be3edcff07002e1ceef4a467b0c","timestamp":"2026-10-17T20:09:26.651Z"}
+PASS G6-VALIDATED→422 => 422
+PASS G6-VALIDATED码 => IMP-4005
+PASS G6-被拒不建新批 => 0
+---------------------------------------------------------------
+G7 R84-g：不存在 / 跨团队 → 404 IMP-4007；已被取代 → 422 IMP-4005
+G7-不存在=404 body={"code":"IMP-4007","message":"导入批次不存在","data":null,"requestId":"req_8405236cbd6c38b9e89f18c2b381cd4c","timestamp":"2026-10-17T20:09:30.396Z"}
+PASS G7-不存在→404 => 404
+PASS G7-不存在码IMP-4007 => IMP-4007
+PASS G7-不用IMP-4004 => IMP-4007（≠IMP-4004）
+G7-跨团队批次 id=10 team=8
+G7-跨团队=404 body={"code":"IMP-4007","message":"导入批次不存在","data":null,"requestId":"req_881774b7056cc5a2ce05542f4b4e169b","timestamp":"2026-10-17T20:09:36.218Z"}
+PASS G7-跨团队→404 => 404
+PASS G7-跨团队码IMP-4007 => IMP-4007
+PASS G7-跨团队未被改 => 0
+G7-已取代=422 body={"code":"IMP-4005","message":"当前批次状态不允许强制重导","data":null,"details":[{"field":"superseded_by_batch_id","message":"该批次已被批次 7 取代，不允许再次重导（避免重导链条分叉）","rejectedValue":"7"}],"requestId":"req_a549ba8ccec37746e5d684439a11067d","timestamp":"2026-10-17T20:09:39.579Z"}
+PASS G7-已取代→422 => 422
+PASS G7-已取代码IMP-4005 => IMP-4005
+PASS G7-链条不分叉 => 2
+PASS G7-审计仍1条 => 1
+---------------------------------------------------------------
+G8 R84-h：reimport 后同文件 upload 的槽位语义
+G8-同文件upload=409 body={"code":"IMP-4004","message":"该文件已导入过，如需重新导入请使用强制重导","data":{"existing_batch_id":7,"existing_batch_no":"IMP-20261017-000007"},"requestId":"req_20f7a13bd6dffb1cf6188e404bc8995c","timestamp":"2026-10-17T20:09:45.487Z"}
+PASS G8-upload→409 => 409
+PASS G8-码IMP-4004 => IMP-4004
+PASS G8-指向新批 => 7
+G8-新批置 FAILED 并释放槽位
+G8-释放后upload=201 body={"code":"OK","message":"success","data":{"batch_id":12,"batch_no":"IMP-20261017-000011","biz_type":"SKU","file_name":"sku-master.csv","file_hash":"9838514b1df1c7a74523639978555177696e42715731dc5361784dca9dc90583","file_size":64,"status":"UPLOADED","created_at":"2026-10-17T20:09:50.363Z"},"requestId":"req_9b4df99a843c4a5c21ced21f332cb866","timestamp":"2026-10-17T20:09:50.388Z"}
+PASS G8-释放后→201 => 201
+PASS G8-新批次UPLOADED => UPLOADED
+PASS G8-新批次占槽位 => 9838514b1df1c7a74523639978555177696e42715731dc5361784dca9dc90583
+---------------------------------------------------------------
+G9 边界：R79 PARTIAL_SUCCESS 不回退（SALES_DAILY 写服务内部失败 → 行级 SAL-6003）
+PASS G9-上传201 => 201
+PASS G9-预览200 => 200
+PASS G9-映射200 => 200
+G9-validate=200 err=0
+PASS G9-校验0错误 => 0
+G9-漂移 SKU-B listed_date=2026-10-20 > sale_date=2026-10-10
+G9-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":13,"status":"PARTIAL_SUCCESS","total_rows":2,"success_rows":1,"failed_rows":1,"started_at":"2026-10-17T20:10:03.217Z","finished_at":"2026-10-17T20:10:03.318Z"},"requestId":"req_2eb919559a5cd6d52044276a6f5f6c34","timestamp":"2026-10-17T20:10:03.347Z"}
+PASS G9-终态PARTIAL_SUCCESS => PARTIAL_SUCCESS
+PASS G9-成功1行 => 1
+PASS G9-失败1行 => 1
+G9-行级错误=2|SAL-6003|ERROR
+PASS G9-行级码SAL-6003 => SAL-6003
+PASS G9-不是COM-0002 => SAL-6003（≠COM-0002）
+PASS G9-只落成功行 => 1
+PASS G9-失败行不落库 => 0
+---------------------------------------------------------------
+G10 对账：TEST_STRATEGY §7.3 余额可由流水推导 + 流水自身恒等式
+G10-对账明细=9004/9002:10.000 9004/9003:10.000 9004/9005:13.000 9006/9005:4.000 
+PASS G10-余额可由流水推导 => 0
+PASS G10-qty_after恒等式 => 0
+PASS G10-不变式success+failed=total => 0
+---------------------------------------------------------------
+数据全景 team7：balances=4 txn=5 sales=1 skus=5 batches=12
+B107_CHECK_TOTAL=115
+B107_FAIL_COUNT=0
+B107_RESULT=ALL PASS
+--- cleanup ---
