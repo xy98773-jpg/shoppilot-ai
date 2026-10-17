@@ -1,0 +1,204 @@
+JAR=shoppilot-app-0.1.0.jar
+JAR_SHA256=cb758ee1316a16ff6e645ad405488327072336a13ff993dfc91d2c51892307c7
+DATE=2026-10-17T18:18:35Z
+MYSQL_READY=1 (port 3339, container rb105-mysql)
+APP_PID=14486 (port 18119)
+APP_UP=1
+SEED_OK (seed-b95.sql：团队7/仓库9004/SKU-A=9002、SKU-B=9003、SKU-C=9005 各 10.000)
+FIXTURE_OK (仓库 9006=WH-B；SKU 9007=SKU-D 无余额行)
+PASS A0 owner/operator 可登录 => ok
+TMPD_WIN=D:/Desktop/ShopPilot-AI/backend-java/tools/rb-b105/tmp
+---------------------------------------------------------------
+=== 基线快照（seed 后） ===
+BASE balances=3 txn=2 sales=0
+BASE SKU-A=10.000 SKU-C=10.000
+---------------------------------------------------------------
+=== A INVENTORY_SNAPSHOT 首导（增量 + 幂等键字面 + 重放） ===
+A1 upload http=201 bizType=INVENTORY_SNAPSHOT body={"code":"OK","message":"success","data":{"batch_id":1,"batch_no":"IMP-20261017-000001","biz_type":"INVENTORY_SNAPSHOT","file_name":"snap-a.csv","file_hash":"997b09b7c58ca64334176795465637a3618cca8508e1832d61ab5d1918f43632","file_size":128,"
+A1 preview http=200 status=PARSED rows=2
+A1 mapping http=200 status=MAPPED
+A1 validate http=200 status=VALIDATED error_rows=0 warning_rows=2
+A1 confirm http=200 code=OK status=COMPLETED success=2 failed=0
+PASS A1 校验通过(VALIDATED) => VALIDATED
+PASS A1 无 ERROR 行 => 0
+PASS A1 两行均命中已有余额 → IMP-4006 WARNING=2 => 2
+PASS A1 IMP-4006 落库条数 => 2
+PASS A1 IMP-4006 级别为 WARNING => 2
+PASS A1 confirm http => 200
+PASS A1 终态 COMPLETED => COMPLETED
+PASS A1 success_rows=2 => 2
+PASS A1 余额 SKU-A 增量 10+120=130 => 130.000
+PASS A1 余额 SKU-B 增量 10+30=40 => 40.000
+PASS A1 INIT_IMPORT 流水 2 条 => 2
+PASS A1 流水 biz_type=IMPORT => 2
+PASS A1 幂等键字面 INIT_IMPORT:IMPORT:<bid>:9002 => 1
+PASS A1 qty_before 记录导入前余额 => 10.000
+PASS A1 last_txn_id 回填（经写服务，非直写） => 1
+PASS A1 二次 confirm http => 200
+PASS A1 二次 confirm 为重放（Idempotent-Replayed） => true
+PASS A1 重放后余额仍 130.000 => 130.000
+PASS A1 重放后该批次 INIT_IMPORT 仍 2 条 => 2
+---------------------------------------------------------------
+=== B ★ 同批同 SKU 跨仓（开发申报：第二行「按重放处理，不报错」） ===
+B0 前置：SKU-C@WH-MAIN=10.000 / SKU-C@WH-B 余额行=0
+B1 upload http=201 bizType=INVENTORY_SNAPSHOT body={"code":"OK","message":"success","data":{"batch_id":2,"batch_no":"IMP-20261017-000002","biz_type":"INVENTORY_SNAPSHOT","file_name":"snap-cross.csv","file_hash":"8ceb6b127b33d9ba46e2a085217a41e0d586396328696cc2c511a278ad2f6d15","file_size":1
+B1 preview http=200 status=PARSED rows=2
+B1 mapping http=200 status=MAPPED
+B1 validate http=200 status=VALIDATED error_rows=0 warning_rows=1
+B1 confirm http=200 code=OK status=FAILED success=0 failed=2
+PASS B1 校验通过(VALIDATED) => VALIDATED
+PASS B1 只有主仓那行命中已有余额 → WARNING=1 => 1
+PASS B1 confirm http => 200
+B1 ★ 实测终态=FAILED success=0 failed=2
+FAIL B1 两行均成功（合法业务行不得被判重放） expected=2:0 actual=0:2
+FAIL B1 主仓 SKU-C 10+5=15.000 expected=15.000 actual=10.000
+FAIL B1 副仓 SKU-C 应建行并=7.000 expected=7.000 actual=NO_ROW
+FAIL B1 该批次 INIT_IMPORT 流水应 2 条 expected=2 actual=0
+B1 行级错误码=COM-0002
+NOTE B1 【缺陷 R80】同批同 SKU 跨仓的第二行命中同一幂等键（终态=FAILED，行级码=COM-0002） => initImportIdempotencyKey 按 §5.10 字面 <txn_type>:<biz_type>:<biz_ref_id>:<sku_id> 不含仓库 → 第二行同键；replayIfIdempotent 的 sameContent 比 warehouse_id → 判「内容不一致」抛 INV-5003。SSOT §10.4 的键格式自带 [:<suffix>] 后缀位，追加 warehouse_id 即可
+NOTE B1 【缺陷 R79】该 INV-5003 未落成「行级失败 + PARTIAL_SUCCESS」，而炸成整批 FAILED + 全行 COM-0002 => 开发申报为「按重放处理、不重复累加、也不报错」，实测更糟：两行全失败、0 条流水、余额未变、批次 FAILED、错误码是 500 级的 COM-0002（未捕获的 UnexpectedRollbackException）。即便 R80 修好，任何由写服务内部抛出的行级业务异常仍会走同一路径（见 D4）
+PASS B1 副仓流水是否存在（与余额行一致） => 0
+B2 upload http=201 bizType=INVENTORY_SNAPSHOT body={"code":"OK","message":"success","data":{"batch_id":3,"batch_no":"IMP-20261017-000003","biz_type":"INVENTORY_SNAPSHOT","file_name":"snap-whb.csv","file_hash":"8c8ff431d5520ac3543d724a7ee3cd204522a4902c67368a2b769002b7f60b0d","file_size":87,
+B2 preview http=200 status=PARSED rows=1
+B2 mapping http=200 status=MAPPED
+B2 validate http=200 status=VALIDATED error_rows=0 warning_rows=0
+B2 confirm http=200 code=OK status=COMPLETED success=1 failed=0
+PASS B2 副仓单行 confirm http => 200
+PASS B2 副仓单行终态 COMPLETED（无碰撞即可成功） => COMPLETED
+PASS B2 副仓余额行被创建并=9.000 => 9.000
+NOTE B2 因果隔离 => 单独导入 WH-B 一行完全成功 ⇒ 唯一变量就是「同批次内同 SKU 第二行命中同键」，与仓库/框架无关
+---------------------------------------------------------------
+=== C ★ qty=0（有余额行 / 无余额行） ===
+C1 upload http=201 bizType=INVENTORY_SNAPSHOT body={"code":"OK","message":"success","data":{"batch_id":4,"batch_no":"IMP-20261017-000004","biz_type":"INVENTORY_SNAPSHOT","file_name":"snap-zero.csv","file_hash":"8b577635d3ad288b13f42f71bfd0956b72bc1afafed290d0aa4eb293d16a0751","file_size":90
+C1 preview http=200 status=PARSED rows=1
+C1 mapping http=200 status=MAPPED
+C1 validate http=200 status=VALIDATED error_rows=0 warning_rows=1
+C1 confirm http=200 code=OK status=COMPLETED success=1 failed=0
+PASS C1 qty=0 校验通过(VALIDATED) => VALIDATED
+PASS C1 qty=0 计入 IMP-4006（已有余额行） => 1
+PASS C1 confirm http => 200
+PASS C1 qty=0 计为成功行 => 1
+PASS C1 qty=0 不动余额 => 130.000
+PASS C1 qty=0 不写流水 => 0
+PASS C1 全局流水条数不变 => 5
+C2 upload http=201 bizType=INVENTORY_SNAPSHOT body={"code":"OK","message":"success","data":{"batch_id":5,"batch_no":"IMP-20261017-000005","biz_type":"INVENTORY_SNAPSHOT","file_name":"snap-zero-new.csv","file_hash":"6b551189603ca8e11fbf21ceb09fb8822d9a78d585ca46f7d354ff34508d0207","file_size
+C2 preview http=200 status=PARSED rows=1
+C2 mapping http=200 status=MAPPED
+C2 validate http=200 status=VALIDATED error_rows=0 warning_rows=0
+C2 confirm http=200 code=OK status=COMPLETED success=1 failed=0
+PASS C2 无余额 SKU 的 qty=0 也成功 => 1
+PASS C2 但未建余额行（0 快照不留痕） => 0
+NOTE C2 qty=0 口径 => SKU-D 无余额行 → 导入 0 后仍无行。后续出库将报 INV-5004（余额行不存在）而不是「余额 0 不足」；如需建 0 行须另立口径
+---------------------------------------------------------------
+=== D 引用错误（校验阶段拦截）与漂移（确认阶段行级失败） ===
+D1 upload http=201 bizType=INVENTORY_SNAPSHOT body={"code":"OK","message":"success","data":{"batch_id":6,"batch_no":"IMP-20261017-000006","biz_type":"INVENTORY_SNAPSHOT","file_name":"snap-badwh.csv","file_hash":"26af7076cb556102a579f7691bb15eb1575a910d72b86993e14bbb19647b8e88","file_size":1
+D1 preview http=200 status=PARSED rows=2
+D1 mapping http=200 status=MAPPED
+D1 validate http=200 status=VALIDATED error_rows=1 warning_rows=1
+D1 confirm http=422 code=IMP-4009 status=VALIDATED success= failed=
+PASS D1 未知仓库在校验阶段即被拦（error_rows=1） => 1
+PASS D1 错误码 CAT-3003 => CAT-3003
+PASS D1 有 ERROR 行 → confirm 被拒 422 IMP-4009 => 422:IMP-4009
+PASS D1 被拒后余额未变 => 130.000
+D2 upload http=201 bizType=INVENTORY_SNAPSHOT body={"code":"OK","message":"success","data":{"batch_id":7,"batch_no":"IMP-20261017-000007","biz_type":"INVENTORY_SNAPSHOT","file_name":"snap-crossteam.csv","file_hash":"fdd23c78a8ca60e21f46f5259281fdb2719a19093d2270e11170e2b619709a1f","file_siz
+D2 preview http=200 status=PARSED rows=1
+D2 mapping http=200 status=MAPPED
+D2 validate http=422 status=FAILED error_rows=1 warning_rows=0
+D2 confirm http=200 code=OK status=FAILED success=0 failed=0
+PASS D2 跨团队 SKU 在校验阶段即被拦 => 1
+PASS D2 校验阶段错误码（现网口径 CAT-3005） => CAT-3005
+PASS D2 全行失败 → 校验直接 422 FAILED（IMP-4010） => 422:FAILED
+PASS D2 对 FAILED 批次 confirm 走重放分支（200 + 仍是 FAILED） => 200:FAILED:0
+PASS D2 未污染团队 8 的余额 => 0
+NOTE D2 同一情形两种错误码 => 跨团队 SKU 在 validate 落 CAT-3005（ImportValidationService:509 既有分支，403「关联对象不属于同一团队」），在 confirm 漂移路径落 CAT-3001（B10.5 新增）。IMPORT_WORKFLOW §7.5/§7.6 只列 CAT-3001 —— 建议后续统一，语义两者都成立，不阻塞
+D3 upload http=201 bizType=INVENTORY_SNAPSHOT body={"code":"OK","message":"success","data":{"batch_id":8,"batch_no":"IMP-20261017-000008","biz_type":"INVENTORY_SNAPSHOT","file_name":"snap-drift.csv","file_hash":"a3ed7bc62f0ad411ab438fe92d2c238b9d3567d8e6650cfded8848eeeec13199","file_size":1
+D3 preview http=200 status=PARSED rows=2
+D3 mapping http=200 status=MAPPED
+D3 validate http=200 status=VALIDATED error_rows=0 warning_rows=1
+D3 校验后暂不确认（漂移实验）batch=8
+PASS D3 校验通过（两行 SKU 均存在） => VALIDATED
+PASS D3 校验无 ERROR => 0
+D3 漂移：已删除 SKU 9007（校验后、确认前）
+D3 confirm http=200 code=OK status=PARTIAL_SUCCESS success=1 failed=1
+PASS D3 漂移后 confirm 仍 200（行级失败不阻断整批） => 200
+PASS D3 终态 PARTIAL_SUCCESS => PARTIAL_SUCCESS
+PASS D3 成功/失败 = 1/1 => 1:1
+PASS D3 漂移行错误码 CAT-3001 => CAT-3001
+PASS D3 合法行已落库（+4.000） => 1
+D4 upload http=201 bizType=SALES_DAILY body={"code":"OK","message":"success","data":{"batch_id":9,"batch_no":"IMP-20261017-000009","biz_type":"SALES_DAILY","file_name":"sales-drift.csv","file_hash":"61058b19545c4ebb47d120f4f4d7634041eed9cb9e711168c3c77772162b7466","file_size":120,"st
+D4 preview http=200 status=PARSED rows=1
+D4 mapping http=200 status=MAPPED
+D4 validate http=200 status=VALIDATED error_rows=0 warning_rows=0
+D4 校验后暂不确认（漂移实验）batch=9
+PASS D4 校验通过（上架日尚未改） => VALIDATED
+D4 漂移：SKU-B 上架日改为 2026-10-20（晚于 sale_date 2026-10-09）→ batchUpsert 必抛 SAL-6003
+D4 confirm http=200 code=OK status=FAILED success=0 failed=1
+D4 行级错误码=COM-0002
+FAIL D4 写服务内部失败应落 PARTIAL_SUCCESS（裁定 C1 行级隔离） expected=PARTIAL_SUCCESS actual=FAILED
+FAIL D4 该行应记 SAL-6003（而非 COM-0002） expected=SAL-6003 actual=COM-0002
+NOTE D4 ★ 缺陷 R79：写服务内部 BizException 把外层事务标 rollback-only => applyInitialImport / SalesWriteService.batchUpsert 均为 @Transactional(REQUIRED)，被 importdata 外层 TransactionTemplate 包住时一旦抛 BizException，Spring 默认 globalRollbackOnParticipationFailure 会把共享事务标成 rollback-only → 提交时 UnexpectedRollbackException → C2 整批回滚 + 全行记 COM-0002。主数据 Pass 2 用的是 @Transactional(NESTED) 单行入口（CatalogWriteService:826），故不受影响
+---------------------------------------------------------------
+=== E SALES_DAILY（首导无 WARNING 的反向面 + 覆盖 + 文件内重复行） ===
+E1 upload http=201 bizType=SALES_DAILY body={"code":"OK","message":"success","data":{"batch_id":10,"batch_no":"IMP-20261017-000010","biz_type":"SALES_DAILY","file_name":"sales-a.csv","file_hash":"b62d27a0b4d3ab46563ebfdfa807ecf452e72b75016efb827224c35046dddd84","file_size":168,"statu
+E1 preview http=200 status=PARSED rows=2
+E1 mapping http=200 status=MAPPED
+E1 validate http=200 status=VALIDATED error_rows=0 warning_rows=0
+E1 confirm http=200 code=OK status=COMPLETED success=2 failed=0
+PASS E1 校验通过(VALIDATED) => VALIDATED
+PASS E1 首导不产生 IMP-4006（库内无同键） => 0
+PASS E1 confirm http => 200
+PASS E1 终态 COMPLETED => COMPLETED
+PASS E1 sales_daily 行数=2 => 2
+PASS E1 source=IMPORT => 2
+PASS E1 batch_id 回指该批次 => 2
+PASS E1 product_id 派生=9001 => 2
+PASS E1 qty 原值 12.000 => 12.000
+PASS E1 审计 SALES_DAILY_UPSERT 1 条（每批一次，不是每行） => 1
+E2 upload http=201 bizType=SALES_DAILY body={"code":"OK","message":"success","data":{"batch_id":11,"batch_no":"IMP-20261017-000011","biz_type":"SALES_DAILY","file_name":"sales-overwrite.csv","file_hash":"09f85ee2273310a1f6a47c52af4e0e564a0453dbe21a0fd4e987c27e1214c242","file_size":16
+E2 preview http=200 status=PARSED rows=2
+E2 mapping http=200 status=MAPPED
+E2 validate http=200 status=VALIDATED error_rows=0 warning_rows=2
+E2 confirm http=200 code=OK status=COMPLETED success=2 failed=0
+PASS E2 覆盖导入产生 IMP-4006 WARNING=2 => 2
+PASS E2 confirm http => 200
+PASS E2 行数仍 2（覆盖而非累加） => 2
+PASS E2 qty 被覆盖为 20.500（非 12+20.5） => 20.500
+PASS E2 batch_id 更新为新批次 => 11
+PASS E2 审计共 2 条 => 2
+PASS E2 第二条 change_summary 含「覆盖 2 行 / 共 2 行」 => 1
+E3 upload http=201 bizType=SALES_DAILY body={"code":"OK","message":"success","data":{"batch_id":12,"batch_no":"IMP-20261017-000012","biz_type":"SALES_DAILY","file_name":"sales-dup.csv","file_hash":"779311b75f3a1e0dac75368aaa4c3a5a981a727765966c2eae2f05a497e096cc","file_size":168,"sta
+E3 preview http=200 status=PARSED rows=2
+E3 mapping http=200 status=MAPPED
+E3 validate http=200 status=VALIDATED error_rows=1 warning_rows=0
+E3 confirm http=422 code=IMP-4009 status=VALIDATED success= failed=
+PASS E3 文件内重复业务键在校验阶段被拦（error_rows=1） => 1
+PASS E3 confirm 被拒 422 IMP-4009 => 422:IMP-4009
+PASS E3 被拒后未落任何该 SKU 销售行 => 0
+E3 重复行错误码=SAL-6004
+NOTE E3 文件内重复行的处理 => 同 SKU+仓库+日期 在文件内出现两次 → 校验阶段直接记 ERROR（不静默取后者），confirm 被 422 拦；比『后者覆盖』更安全，口径成立
+---------------------------------------------------------------
+=== F ★ 主数据四类未被数据类分支带坏（SKU 导入回归） ===
+F1 upload http=201 bizType=SKU body={"code":"OK","message":"success","data":{"batch_id":13,"batch_no":"IMP-20261017-000013","biz_type":"SKU","file_name":"sku-master.csv","file_hash":"a3ba6670d7ea96a83a07e343c11687aa578a203f60193c18ce7fa25a8845a3eb","file_size":61,"status":"UP
+F1 preview http=200 status=PARSED rows=1
+F1 mapping http=200 status=MAPPED
+F1 validate http=200 status=VALIDATED error_rows=0 warning_rows=0
+F1 confirm http=200 code=OK status=COMPLETED success=1 failed=0
+PASS F1 SKU 导入校验通过 => VALIDATED
+PASS F1 confirm http => 200
+PASS F1 终态 COMPLETED => COMPLETED
+PASS F1 skus 行数 +1 => 4
+PASS F1 新 SKU 落库 => 1
+PASS F1 模板仍为六类 => 6
+---------------------------------------------------------------
+=== G ★ 告警副产物 + 租户边界 ===
+PASS G1 WARNING 行不写 raw_data（raw_data 仅 ERROR 行） => 0
+PASS G2 全部写入行属团队 7 => 0
+PASS G3 团队 8 无任何 sales_daily（未被导入污染） => 0
+PASS G4 幂等键无重复（uk_invtxn_team_idem 生效） => 0
+G5 数据全景 team7：balances=4 txn=6 sales=2 batches=13
+G6 批次终态分布：COMPLETED:7,FAILED:3,PARTIAL_SUCCESS:1,VALIDATED:2
+---------------------------------------------------------------
+RB105_CHECK_TOTAL=89
+RB105_FAIL_COUNT=6
+RB105_RESULT=HAS_FAIL
+--- cleanup ---
