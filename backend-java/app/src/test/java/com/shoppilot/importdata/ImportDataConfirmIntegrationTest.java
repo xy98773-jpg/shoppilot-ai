@@ -1,6 +1,7 @@
 package com.shoppilot.importdata;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -63,6 +64,25 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * {@code confirm} 行级失败分支的路径：若在文件里直接写不存在的编码，
  * {@code validate} 阶段就会给出 {@code ERROR}，{@code confirm} 会被 {@code IMP-4009} 前置门拦下
  * （那是正确行为，不是本批要改的）。</p>
+ *
+ * <h2>★ M3-B10.6（R79 + R80）追加的第 11–15 项</h2>
+ * <ol start="11">
+ *   <li><b>R80-1</b> 同批同 SKU 跨两仓 → {@code COMPLETED}、两仓余额各自正确、
+ *       两条幂等键后缀分别是两个 {@code warehouse_id}（修复前：第二条被误判重复提交）；</li>
+ *   <li><b>R79-1</b> 同批同 SKU 同仓两行（数量不同）→ {@code PARTIAL_SUCCESS} + 行级
+ *       {@code INV-5003}（<b>不是</b> {@code COM-0002}）+ 成功行已落库（修复前：整批 0 行）；</li>
+ *   <li><b>R79-2</b> {@code SALES_DAILY} 写服务内部失败（校验后改 {@code listed_date}）→
+ *       {@code PARTIAL_SUCCESS} + 行级 {@code SAL-6003}；</li>
+ *   <li><b>R80-2</b> 跨仓批次二次确认 → {@code 200} + {@code Idempotent-Replayed: true}，
+ *       两仓余额与流水均不增；</li>
+ *   <li><b>R79-3/R79-4</b> 主数据 {@code PARTIAL_SUCCESS} 回归（{@code NESTED} 改动不得带坏主数据路径）
+ *       + {@code PARTIAL_SUCCESS} 场景审计条数（成功行恰好 1 条、失败行不入审计、批次完成审计 1 条）。</li>
+ * </ol>
+ *
+ * <p>★ 第 12/13 项（{@code R79}）的探针有效性已做<b>负向验证</b>：把两个写服务入口临时改回
+ * {@code REQUIRED} 后，两项均失败且现象与缺陷报告一致（{@code status=FAILED}、
+ * {@code success_rows=0}、{@code failed_rows=2}）；第 11 项（{@code R80}）同样在「键不含仓库」时
+ * 失败（{@code PARTIAL_SUCCESS} 而非 {@code COMPLETED}）。见 {@code tools/b10.6/}。</p>
  */
 @SpringBootTest(classes = ShopPilotApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -300,8 +320,8 @@ class ImportDataConfirmIntegrationTest {
         assertEquals("INIT_IMPORT", txn.get("txn_type"));
         assertEquals("IMPORT", txn.get("biz_type"));
         assertEquals(batchId, ((Number) txn.get("biz_ref_id")).longValue(), "biz_ref_id 必须是批次 ID");
-        assertEquals("INIT_IMPORT:IMPORT:" + batchId + ":9002", txn.get("idempotency_key"),
-                "幂等键须按 DATABASE_DESIGN §5.10 要点 4 的字面构造");
+        assertEquals("INIT_IMPORT:IMPORT:" + batchId + ":9002:9004", txn.get("idempotency_key"),
+                "幂等键须按 DATABASE_DESIGN §5.10 要点 4 构造（R80：追加 :<warehouse_id>）");
         assertEquals(0, new BigDecimal("120.000").compareTo((BigDecimal) txn.get("qty_delta")));
         assertEquals(0, new BigDecimal("10.000").compareTo((BigDecimal) txn.get("qty_before")));
         assertEquals(0, new BigDecimal("130.000").compareTo((BigDecimal) txn.get("qty_after")));
@@ -476,6 +496,217 @@ class ImportDataConfirmIntegrationTest {
                 "available_qty 是生成列（on_hand - committed），仅由写服务维护");
         assertNotNull(balance.get("last_txn_id"), "写服务应回填 last_txn_id");
         assertTrue(((Number) balance.get("version")).intValue() >= 1, "写服务应递增 version");
+    }
+
+    // =====================================================================
+    // 11) R80：同批同 SKU 跨两仓 → 合法输入（幂等键含仓库维度）
+    // =====================================================================
+
+    @Test
+    @DisplayName("R80-1 同批同 SKU 跨两仓：COMPLETED、两仓余额各自正确、幂等键后缀为各自 warehouse_id")
+    void sameSkuAcrossTwoWarehousesIsLegal() throws Exception {
+        insertSecondWarehouse();
+        byte[] csv = csv("sku_code,warehouse_code,qty\n"
+                + "SKU-A,WH-MAIN,5.000\n"
+                + "SKU-A,WH-B,7.000\n");
+        // 两行仓库不同 ⇒ 不构成文件内重复；库内无余额 ⇒ 0 告警
+        long batchId = validatedBatch("snapshot-cross-wh.csv", csv, "INVENTORY_SNAPSHOT", 0, 0);
+
+        ResponseEntity<String> resp = confirm(batchId, "key-r80-cross-wh", Map.of());
+        assertEquals(HttpStatus.OK, resp.getStatusCode(), resp.getBody());
+        JsonNode data = data(resp);
+        assertEquals("COMPLETED", data.get("status").asText(),
+                "R80：同一批次内同一 SKU 跨仓是合法输入，不得被判为「重复提交」：" + resp.getBody());
+        assertEquals(2, data.get("success_rows").asInt());
+        assertEquals(0, data.get("failed_rows").asInt());
+
+        assertEquals(0, new BigDecimal("5.000").compareTo(balanceOf(9004, 9002)), "WH-MAIN 余额");
+        assertEquals(0, new BigDecimal("7.000").compareTo(balanceOf(9005, 9002)), "WH-B 余额");
+
+        List<Map<String, Object>> txns = jdbc.queryForList("SELECT warehouse_id, idempotency_key, "
+                + "qty_delta FROM inventory_transactions WHERE team_id = ? ORDER BY warehouse_id", TEAM_ID);
+        assertEquals(2, txns.size(), "两条流水（不是第二条被当成重放而吞掉）");
+        assertEquals(9004L, ((Number) txns.get(0).get("warehouse_id")).longValue());
+        assertEquals(9005L, ((Number) txns.get(1).get("warehouse_id")).longValue());
+        assertEquals("INIT_IMPORT:IMPORT:" + batchId + ":9002:9004", txns.get(0).get("idempotency_key"),
+                "R80：幂等键必须追加 :<warehouse_id>");
+        assertEquals("INIT_IMPORT:IMPORT:" + batchId + ":9002:9005", txns.get(1).get("idempotency_key"));
+        assertEquals(0, new BigDecimal("5.000").compareTo((BigDecimal) txns.get(0).get("qty_delta")));
+        assertEquals(0, new BigDecimal("7.000").compareTo((BigDecimal) txns.get(1).get("qty_delta")));
+    }
+
+    // =====================================================================
+    // 12) R79：写服务内部抛 BizException → 行级隔离（不是整批 COM-0002）
+    // =====================================================================
+
+    @Test
+    @DisplayName("R79-1 同批同 SKU 同仓两行：PARTIAL_SUCCESS + 行级 INV-5003（不是 COM-0002）+ 成功行已落库")
+    void sameSkuSameWarehouseIsIsolatedAtRowLevel() throws Exception {
+        // 同一幂等键（同 batch / 同 SKU / 同仓库）+ 不同数量 ⇒ 第二行必被判「内容不一致」INV-5003
+        byte[] csv = csv("sku_code,warehouse_code,qty\n"
+                + "SKU-A,WH-MAIN,5.000\n"
+                + "SKU-A,WH-MAIN,7.000\n");
+        // INVENTORY_SNAPSHOT 不做文件内重复校验（§10.2 只对 SALES_DAILY 单列）⇒ 校验 0 错 0 警
+        long batchId = validatedBatch("snapshot-same-wh.csv", csv, "INVENTORY_SNAPSHOT", 0, 0);
+
+        ResponseEntity<String> resp = confirm(batchId, "key-r79-same-wh", Map.of());
+        assertEquals(HttpStatus.OK, resp.getStatusCode(), resp.getBody());
+        JsonNode data = data(resp);
+        assertEquals("PARTIAL_SUCCESS", data.get("status").asText(),
+                "R79：写服务内部抛 BizException 必须是行级失败，而不是整批 0 行 + COM-0002：" + resp.getBody());
+        assertEquals(1, data.get("success_rows").asInt());
+        assertEquals(1, data.get("failed_rows").asInt());
+        assertEquals(data.get("total_rows").asInt(),
+                data.get("success_rows").asInt() + data.get("failed_rows").asInt(), "不变式");
+
+        Map<String, Object> error = jdbc.queryForMap("SELECT row_no, error_code, error_level, raw_data "
+                + "FROM import_row_errors WHERE batch_id = ?", batchId);
+        assertEquals(2L, ((Number) error.get("row_no")).longValue());
+        assertEquals("INV-5003", error.get("error_code"), "行级业务码不得被替换成通用码");
+        assertNotEquals("COM-0002", error.get("error_code"), "R79 的缺陷形态正是这个替换");
+        assertEquals("ERROR", error.get("error_level"));
+        assertNotNull(error.get("raw_data"), "失败行须回带原始全列");
+
+        assertEquals(0, new BigDecimal("5.000").compareTo(balanceOf(9004, 9002)),
+                "成功行（第 1 行）必须已落库，不得被第二行连坐回滚");
+        assertEquals(1, count("inventory_transactions", TEAM_ID), "只成功 1 行 → 1 条流水");
+    }
+
+    @Test
+    @DisplayName("R79-2 SALES_DAILY 写服务内部失败（校验后改 listed_date）：PARTIAL_SUCCESS + 行级 SAL-6003")
+    void salesDailyWriteFailureIsRowLevel() throws Exception {
+        byte[] csv = csv("sku_code,warehouse_code,sale_date,qty\n"
+                + "SKU-A,WH-MAIN," + PAST_DATE + ",4.000\n"
+                + "SKU-B,WH-MAIN," + PAST_DATE + ",5.000\n");
+        long batchId = validatedBatch("sales-listed-drift.csv", csv, "SALES_DAILY", 0, 0);
+
+        // 导入校验只拦「晚于今天」，不查 listed_date ⇒ 校验后把上架日改晚于销售日，
+        // confirm 时 SalesWriteService#validate 必抛 SAL-6003（写服务内部失败）
+        jdbc.update("UPDATE skus SET listed_date = ? WHERE team_id = ? AND id = 9003",
+                java.sql.Date.valueOf("2026-10-10"), TEAM_ID);
+
+        ResponseEntity<String> resp = confirm(batchId, "key-r79-sales-listed", Map.of());
+        assertEquals(HttpStatus.OK, resp.getStatusCode(), resp.getBody());
+        JsonNode data = data(resp);
+        assertEquals("PARTIAL_SUCCESS", data.get("status").asText(), resp.getBody());
+        assertEquals(1, data.get("success_rows").asInt());
+        assertEquals(1, data.get("failed_rows").asInt());
+
+        Map<String, Object> error = jdbc.queryForMap("SELECT row_no, error_code FROM import_row_errors "
+                + "WHERE batch_id = ?", batchId);
+        assertEquals(2L, ((Number) error.get("row_no")).longValue());
+        assertEquals("SAL-6003", error.get("error_code"));
+        assertNotEquals("COM-0002", error.get("error_code"));
+
+        assertEquals(1, count("sales_daily", TEAM_ID), "成功行已落库");
+        assertEquals(9002L, jdbc.queryForObject("SELECT sku_id FROM sales_daily WHERE team_id = ?",
+                Long.class, TEAM_ID));
+    }
+
+    // =====================================================================
+    // 13) R80：跨仓批次二次确认 → 纯重放
+    // =====================================================================
+
+    @Test
+    @DisplayName("R80-2 跨仓批次二次确认：200 + Idempotent-Replayed，两仓余额与流水均不增")
+    void crossWarehouseBatchReplayIsPureReplay() throws Exception {
+        insertSecondWarehouse();
+        byte[] csv = csv("sku_code,warehouse_code,qty\n"
+                + "SKU-A,WH-MAIN,5.000\n"
+                + "SKU-A,WH-B,7.000\n");
+        long batchId = validatedBatch("snapshot-cross-wh-replay.csv", csv, "INVENTORY_SNAPSHOT", 0, 0);
+
+        ResponseEntity<String> first = confirm(batchId, "key-r80-cross-wh-2", Map.of());
+        assertEquals(HttpStatus.OK, first.getStatusCode(), first.getBody());
+        assertEquals(2, count("inventory_transactions", TEAM_ID));
+
+        ResponseEntity<String> second = confirm(batchId, "key-r80-cross-wh-2", Map.of());
+        assertEquals(HttpStatus.OK, second.getStatusCode(), second.getBody());
+        assertEquals("true", second.getHeaders().getFirst("Idempotent-Replayed"),
+                "重放须回 Idempotent-Replayed: true");
+        assertEquals(2, count("inventory_transactions", TEAM_ID), "重放不得新增流水");
+        assertEquals(0, new BigDecimal("5.000").compareTo(balanceOf(9004, 9002)), "重放不得重复累加");
+        assertEquals(0, new BigDecimal("7.000").compareTo(balanceOf(9005, 9002)));
+    }
+
+    // =====================================================================
+    // 14) 主数据 PARTIAL_SUCCESS 回归（NESTED 改动不得带坏主数据路径）
+    // =====================================================================
+
+    @Test
+    @DisplayName("R79-3 主数据 SKU PARTIAL_SUCCESS 回归：行级隔离与整批回滚语义不变")
+    void masterDataPartialSuccessUnaffected() throws Exception {
+        // 第二行引用「校验时存在、confirm 前被删」的商品 ⇒ confirm 阶段行级 CAT-3001
+        jdbc.update("INSERT INTO products (id, team_id, product_code, name, status) "
+                + "VALUES (9010, ?, 'P-TMP-001', 'tmp', 'ACTIVE')", TEAM_ID);
+        byte[] csv = csv("sku_code,product_code\n"
+                + "SKU-NEW-1,P-BAG-001\n"
+                + "SKU-NEW-2,P-TMP-001\n");
+        long batchId = validatedBatch("sku-partial.csv", csv, "SKU", 0, 0);
+
+        jdbc.update("DELETE FROM products WHERE team_id = ? AND id = 9010", TEAM_ID);
+
+        ResponseEntity<String> resp = confirm(batchId, "key-r79-master-data", Map.of());
+        assertEquals(HttpStatus.OK, resp.getStatusCode(), resp.getBody());
+        JsonNode data = data(resp);
+        assertEquals("PARTIAL_SUCCESS", data.get("status").asText(),
+                "主数据 PARTIAL_SUCCESS 是既有能力，不得被本批改动带坏：" + resp.getBody());
+        assertEquals(1, data.get("success_rows").asInt());
+        assertEquals(1, data.get("failed_rows").asInt());
+
+        assertEquals("CAT-3001", jdbc.queryForObject("SELECT error_code FROM import_row_errors "
+                + "WHERE batch_id = ?", String.class, batchId));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM skus WHERE team_id = ? "
+                + "AND sku_code = 'SKU-NEW-1'", Integer.class, TEAM_ID), "成功行已落库");
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM skus WHERE team_id = ? "
+                + "AND sku_code = 'SKU-NEW-2'", Integer.class, TEAM_ID), "失败行不得落库");
+    }
+
+    // =====================================================================
+    // 15) PARTIAL_SUCCESS 的审计条数：不重复、不丢
+    // =====================================================================
+
+    @Test
+    @DisplayName("R79-4 PARTIAL_SUCCESS 审计：成功行有且仅有 1 条，失败行不入审计，批次完成审计 1 条")
+    void partialSuccessAuditIsRecordedExactlyOnce() throws Exception {
+        byte[] csv = csv("sku_code,warehouse_code,sale_date,qty\n"
+                + "SKU-A,WH-MAIN," + PAST_DATE + ",4.000\n"
+                + "SKU-B,WH-MAIN," + PAST_DATE + ",5.000\n");
+        long batchId = validatedBatch("sales-audit-partial.csv", csv, "SALES_DAILY", 0, 0);
+        jdbc.update("UPDATE skus SET listed_date = ? WHERE team_id = ? AND id = 9003",
+                java.sql.Date.valueOf("2026-10-10"), TEAM_ID);
+
+        ResponseEntity<String> resp = confirm(batchId, "key-r79-audit-partial", Map.of());
+        assertEquals("PARTIAL_SUCCESS", data(resp).get("status").asText(), resp.getBody());
+
+        // Pass 1 的审计缓冲因整批回滚被丢弃，Pass 2 重放成功行时只写一次 ⇒ 恰好 1 条
+        List<String> salesAudits = jdbc.queryForList("SELECT change_summary FROM audit_logs "
+                + "WHERE action = 'SALES_DAILY_UPSERT'", String.class);
+        assertEquals(1, salesAudits.size(), "成功 1 行 → 恰好 1 条 SALES_DAILY_UPSERT（不重复、不丢）");
+        assertTrue(salesAudits.get(0).contains("覆盖 0 行"),
+                "失败行不得出现在审计摘要里：" + salesAudits.get(0));
+
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM audit_logs "
+                + "WHERE action = 'IMPORT_BATCH_COMPLETE' AND biz_id = ?", Integer.class, batchId),
+                "批次完成审计恰好 1 条");
+    }
+
+    // =====================================================================
+    // 辅助：数据断言
+    // =====================================================================
+
+    /** 追加第二个仓库（{@code WH-B}，id 9005），供「同批同 SKU 跨两仓」用例使用。 */
+    private void insertSecondWarehouse() {
+        jdbc.update("INSERT INTO warehouses (id, team_id, code, name, status) "
+                + "VALUES (9005, ?, 'WH-B', 'Warehouse B', 'ACTIVE')", TEAM_ID);
+    }
+
+    /** 指定仓库 + SKU 的 {@code on_hand_qty}；行不存在时返回 {@code null}。 */
+    private BigDecimal balanceOf(long warehouseId, long skuId) {
+        List<BigDecimal> rows = jdbc.queryForList("SELECT on_hand_qty FROM inventory_balances "
+                + "WHERE team_id = ? AND warehouse_id = ? AND sku_id = ?", BigDecimal.class,
+                TEAM_ID, warehouseId, skuId);
+        return rows.isEmpty() ? null : rows.get(0);
     }
 
     // =====================================================================

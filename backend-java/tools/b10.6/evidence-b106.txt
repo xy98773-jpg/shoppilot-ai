@@ -1,0 +1,110 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=dad71978c30c6f57518d012e3ef5d53b1efcde1cbb84ff1336d0e2374531d2b4
+DATE=2026-10-17T18:51:19Z
+MYSQL_READY=1 (port 3340, 独立容器 b106-mysql)
+APP_PID=19334 (port 18120, stdout -> evidence-b106-app.log)
+APP_UP=1
+SEED_OK (seed-b95.sql：团队 7，仓库 9004，SKU-A=9002 / SKU-B=9003 / SKU-C=9005 各 10.000)
+TOKEN op=eyJhbGci
+SETUP WH-B(id=9006) 已插入；仓库清单=WH-MAIN,WH-B
+---------------------------------------------------------------
+G1 R80：同批同 SKU 跨两仓（幂等键必须含 warehouse_id）
+G1-前置 SKU-A@WH-MAIN=10.000 SKU-A@WH-B=[<无行>] 流水=2
+G1-upload=201 batch=1
+PASS G1-上传201 => 201
+PASS G1-预览200 => 200
+PASS G1-解析2行 => 2
+PASS G1-映射200 => 200
+G1-validate=200 err=0 warn=1
+PASS G1-校验200 => 200
+PASS G1-校验0错误 => 0
+PASS G1-校验1行告警 => 1
+G1-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":1,"status":"COMPLETED","total_rows":2,"success_rows":2,"failed_rows":0,"started_at":"2026-10-17T18:52:05.067Z","finished_at":"2026-10-17T18:52:05.171Z"},"requestId":"req_f6e46400323f562578ef7ad7dfad45dc","timestamp":"2026-10-17T18:52:05.199Z"}
+PASS G1-确认200 => 200
+PASS G1-终态COMPLETED => COMPLETED
+PASS G1-成功2行 => 2
+PASS G1-失败0行 => 0
+G1-余额 SKU-A@WH-MAIN=15.000 SKU-A@WH-B=7.000 流水=4
+PASS G1-主仓余额10+5 => 15.000
+PASS G1-副仓余额0+7 => 7.000
+PASS G1-流水+2 => 4
+PASS G1-本批INIT_IMPORT两条 => 2
+PASS G1-幂等键含主仓 => 1
+PASS G1-幂等键含副仓 => 1
+PASS G1-旧格式键不存在 => 0
+PASS G1-主仓流水qty_delta => 5.000
+PASS G1-副仓流水qty_delta => 7.000
+---------------------------------------------------------------
+G1R R80：跨仓批次二次 confirm → 纯重放
+G1R-重试=200 header=[true] body={"code":"OK","message":"success","data":{"batch_id":1,"status":"COMPLETED","total_rows":2,"success_rows":2,"failed_rows":0,"started_at":"2026-10-17T18:52:05.067Z","finished_at":"2026-10-17T18:52:05.171Z"},"requestId":"req_460d53fcb14741ac077ec7e7a455a86d","timestamp":"2026-10-17T18:52:28.161Z"}
+PASS G1R-重试200 => 200
+PASS G1R-带重放头 => true
+PASS G1R-流水不增 => 4
+PASS G1R-主仓余额不变 => 15.000
+PASS G1R-副仓余额不变 => 7.000
+---------------------------------------------------------------
+G2 R79：同批同 SKU 同仓两行（键相同、数量不同）→ 行级 INV-5003，不是 COM-0002
+G2-前置 SKU-B@WH-MAIN=10.000 流水=4
+PASS G2-上传201 => 201
+PASS G2-预览200 => 200
+PASS G2-映射200 => 200
+G2-validate=200 err=0 warn=2
+PASS G2-校验200 => 200
+PASS G2-校验0错误 => 0
+G2-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":2,"status":"PARTIAL_SUCCESS","total_rows":2,"success_rows":1,"failed_rows":1,"started_at":"2026-10-17T18:52:44.425Z","finished_at":"2026-10-17T18:52:44.556Z"},"requestId":"req_b16127a53341b53e1dc30898b14d4724","timestamp":"2026-10-17T18:52:44.582Z"}
+PASS G2-确认200 => 200
+PASS G2-终态PARTIAL => PARTIAL_SUCCESS
+PASS G2-成功1行 => 1
+PASS G2-失败1行 => 1
+PASS G2-不变式 => 2
+G2-行级错误=2|INV-5003|ERROR
+PASS G2-失败行号2 => 2
+PASS G2-行级码INV-5003 => INV-5003
+PASS G2-不是COM-0002 => INV-5003（≠COM-0002）
+PASS G2-错误级别ERROR => ERROR
+PASS G2-WARNING行并存 => 2
+PASS G2-ERROR行仅1条 => 1
+G2-余额 SKU-B@WH-MAIN=15.000 流水=5
+PASS G2-成功行已落库 => 15.000
+PASS G2-只写1条流水 => 5
+PASS G2-本批流水1条 => 1
+---------------------------------------------------------------
+G3 R79：SALES_DAILY 写服务内部失败（校验后改 listed_date）→ 行级 SAL-6003
+PASS G3-上传201 => 201
+PASS G3-预览200 => 200
+PASS G3-映射200 => 200
+G3-validate=200 err=0 warn=0
+PASS G3-校验200 => 200
+PASS G3-校验0错误 => 0
+G3-漂移 listed_date=2026-10-20 > sale_date=2026-10-10
+G3-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":3,"status":"PARTIAL_SUCCESS","total_rows":2,"success_rows":1,"failed_rows":1,"started_at":"2026-10-17T18:53:11.991Z","finished_at":"2026-10-17T18:53:12.098Z"},"requestId":"req_b4d38451ab6f56a9219c8aac2716b93d","timestamp":"2026-10-17T18:53:12.127Z"}
+PASS G3-确认200 => 200
+PASS G3-终态PARTIAL => PARTIAL_SUCCESS
+PASS G3-成功1行 => 1
+PASS G3-失败1行 => 1
+G3-行级错误=2|SAL-6003|ERROR
+PASS G3-失败行号2 => 2
+PASS G3-行级码SAL-6003 => SAL-6003
+PASS G3-不是COM-0002 => SAL-6003（≠COM-0002）
+PASS G3-只落成功行 => 1
+PASS G3-落库SKU=9002 => 1
+PASS G3-失败行不落库 => 0
+---------------------------------------------------------------
+G4 主数据回归：SKU 导入 → COMPLETED（NESTED 改动不得带坏主数据路径）
+PASS G4-上传201 => 201
+PASS G4-预览200 => 200
+PASS G4-映射200 => 200
+G4-validate=200 err=0 warn=0
+PASS G4-校验200 => 200
+PASS G4-校验0错误 => 0
+G4-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":4,"status":"COMPLETED","total_rows":2,"success_rows":2,"failed_rows":0,"started_at":"2026-10-17T18:53:30.281Z","finished_at":"2026-10-17T18:53:30.347Z"},"requestId":"req_0af0eed725b93cb22a622d491b705ded","timestamp":"2026-10-17T18:53:30.370Z"}
+PASS G4-确认200 => 200
+PASS G4-终态COMPLETED => COMPLETED
+PASS G4-成功2行 => 2
+PASS G4-skUs新增2行 => 2
+---------------------------------------------------------------
+数据全景 team7：balances=4 txn=5 sales=1 skus=5 batches=4
+B106_CHECK_TOTAL=68
+B106_FAIL_COUNT=0
+B106_RESULT=ALL PASS
+--- cleanup ---
