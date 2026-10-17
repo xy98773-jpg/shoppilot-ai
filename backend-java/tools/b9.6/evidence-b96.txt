@@ -1,0 +1,56 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=1c7c11f027136cc0998c7774d50c78955e501ed200b71f813e455c328598c869
+DATE=2026-10-17T15:57:54Z
+MYSQL_READY=1 (port 3335, 独立容器 b96-mysql)
+APP_PID=1769 (port 18115, stdout -> evidence-b96-app.log)
+APP_UP=1
+SEED_OK (seed-b95.sql：团队 7，仓库 9004，SKU-A=9002 / SKU-B=9003 / SKU-C=9005 各 10.000)
+TOKENS op=eyJhbGci own=eyJhbGci
+---------------------------------------------------------------
+W1 R74 首次差额 0：SKU-A 目标 10.000 == 当前 10.000 → 201 + transaction_id null + 【无】重放头
+W1-前置 balance=10.000 txn=2 #12=0
+W1-http=201
+W1-body={"code":"OK","message":"success","data":{"transaction_id":null,"warehouse_id":9004,"sku_id":9002,"txn_type":"COUNT_ADJUST","qty_delta":"0.000","qty_before":"10.000","qty_after":"10.000","balance_version":0,"occurred_at":"2026-10-17T15:58:26.606Z"},"requestId":"req_edb23a30f761560efff2017401db2a5d","timestamp":"2026-10-17T15:58:26.612Z"}
+W1-replay_header=[]
+PASS W1-http => 201
+PASS W1-transaction_id为null => 
+PASS W1-无Idempotent-Replayed => 
+PASS W1-不写流水 => 2
+PASS W1-#12审计不增 => 0
+PASS W1-余额不变 => 10.000
+---------------------------------------------------------------
+W2 反向防线：SKU-B 10.000 → 6.000 首次无头；同键重放 201 + 同一 transaction_id + 头 true
+W2-首次http=201 txn=3 header=[]
+PASS W2-首次http => 201
+PASS W2-首次有流水id => 1
+PASS W2-首次无重放头 => 
+PASS W2-首次余额 => 6.000
+PASS W2-首次#12审计+1 => 1
+W2-重放http=201 txn=3 header=[true]
+PASS W2-重放http => 201
+PASS W2-同一流水id => 3
+PASS W2-重放头true => true
+PASS W2-余额不再变 => 6.000
+PASS W2-重放#12不增 => 1
+PASS W2-SKU-B只有1条流水 => 1
+---------------------------------------------------------------
+W3 R73 回归：冲销 seed-init-9005（SKU-C 10.000 → 0.000）首次 200 无头；同键重放 200 + 头 true
+W3-首次http=200 txn=4 header=[]
+PASS W3-首次http => 200
+PASS W3-首次无重放头 => 
+PASS W3-首次余额 => 0.000
+PASS W3-REVERSAL+1 => 1
+PASS W3-#13审计+1 => 1
+W3-重放http=200 txn=4 header=[true]
+PASS W3-重放http => 200
+PASS W3-同一流水id => 4
+PASS W3-重放头true => true
+PASS W3-REVERSAL仍1 => 1
+PASS W3-#13审计仍1条 => 1
+PASS W3-余额只回退一次 => 0.000
+---------------------------------------------------------------
+B96_CHECK_TOTAL=28
+B96_FAIL_COUNT=0
+B96_RESULT=ALL PASS
+审计全景 team7：COUNT_ADJUST=1 MANUAL_ADJUST=0 REVERSE=1
+--- cleanup ---

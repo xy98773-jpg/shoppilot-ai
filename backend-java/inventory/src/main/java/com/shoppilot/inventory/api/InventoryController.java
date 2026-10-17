@@ -107,6 +107,8 @@ public class InventoryController {
      * ADMIN+，否则 INV-5007。幂等键来自请求头 {@code Idempotency-Key}，<b>原样透传</b>给
      * {@link InventoryWriteService}，不自行构造（缺失/空白 → COM-0001；契约标注的 COM-0010 未固化，本批降级使用）。
      * <p>★ 幂等重放命中（同键同内容）→ 结果与首次一致并补 {@code Idempotent-Replayed: true}（{@code §6.3}）。
+     * <b>仅真重放</b>如此：盘点目标值等于当前余额（差额 0、不写流水，{@code §5.5} 步骤 G）属
+     * 「无变更成功」，{@code transaction_id} 为 {@code null} 且<b>不带</b>该头（{@code R74}，{@code M3-B9.6}）。
      */
     @PostMapping("/adjustments")
     @ResponseStatus(HttpStatus.CREATED)
@@ -201,9 +203,14 @@ public class InventoryController {
      *
      * <p>★ 只加 HTTP 头，<b>不动</b> {@link ApiResponse} 封装（公共响应结构是跨模块契约）。
      * 首次执行不带该头；重放时业务结果与首次一致，客户端凭此头区分「重放」与「新执行」。
+     *
+     * <p>★ {@code R74}（{@code M3-B9.6}）：判据必须用 {@link StockChangeResult#replayed()}，
+     * <b>不能</b>用 {@code idempotentHit()} —— 后者把「盘点差额为 0 的无变更成功」也算命中
+     * （{@code §5.5} 步骤 G，{@code txnId = null}），用它当判据会给一次正常的无差异盘点
+     * 误标 {@code Idempotent-Replayed: true}，前端据此提示「该操作已提交过」即为谎报。
      */
     private static void markReplayed(HttpServletResponse httpResponse, StockChangeResult result) {
-        if (result != null && result.idempotentHit()) {
+        if (result != null && result.replayed()) {
             httpResponse.setHeader("Idempotent-Replayed", "true");
         }
     }

@@ -1,5 +1,6 @@
 package com.shoppilot.inventory;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shoppilot.TestCredentials;
 import com.shoppilot.app.ShopPilotApplication;
@@ -25,6 +26,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * M3-B9.5（{@code R73}）—— <b>冲销的幂等重放必须排在「已被冲销」三态校验之前</b>
@@ -40,8 +42,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
  *   <li><b>不同键二次冲销</b> → 仍 {@code INV-5009}（重复冲销的拦截<b>未被</b>回修削弱）。</li>
  * </ol>
  *
- * <p>★ 第 4 例覆盖调整端点的重放响应头（{@code #11}/{@code #12} 与 {@code #13} 共用
- * {@code StockChangeResult.idempotentHit()} 判定，一并验证）。
+ * <p>★ 第 4 例覆盖调整端点的重放响应头；第 5 例是 {@code R74}（{@code M3-B9.6}）的<b>反向</b>防线：
+ * 响应头判据是 {@code StockChangeResult.replayed()}（真重放才带），{@code idempotentHit()} 不能直接用
+ * —— 它把「盘点差额为 0 的无变更成功」也算命中，会给一次正常的无差异盘点误标「已重放」。
  */
 @SpringBootTest(classes = ShopPilotApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -148,7 +151,7 @@ class InventoryReversalReplayTest {
                 body, token, "idem-r73-replay");
         assertEquals(HttpStatus.OK, first.getStatusCode(), first.getBody());
         long firstTxnId = objectMapper.readTree(first.getBody()).get("data").get("transaction_id").asLong();
-        assertNull(first.getHeaders().getFirst("Idempotent-Replayed"), "首次执行不应带重放头");
+        assertNull(first.getHeaders().getFirst("Idempotent-Replayed"), "首次【有变更】执行不带重放头");
 
         ResponseEntity<String> replay = post("/api/v1/inventory/transactions/" + original + "/reverse",
                 body, token, "idem-r73-replay");
@@ -223,7 +226,7 @@ class InventoryReversalReplayTest {
         ResponseEntity<String> first = post("/api/v1/inventory/adjustments", body, token, "idem-r73-adj");
         assertEquals(HttpStatus.CREATED, first.getStatusCode(), first.getBody());
         long firstTxnId = objectMapper.readTree(first.getBody()).get("data").get("transaction_id").asLong();
-        assertNull(first.getHeaders().getFirst("Idempotent-Replayed"), "首次执行不应带重放头");
+        assertNull(first.getHeaders().getFirst("Idempotent-Replayed"), "首次【有变更】执行不带重放头");
 
         ResponseEntity<String> replay = post("/api/v1/inventory/adjustments", body, token, "idem-r73-adj");
         assertEquals(HttpStatus.CREATED, replay.getStatusCode(), replay.getBody());
@@ -232,6 +235,32 @@ class InventoryReversalReplayTest {
         assertEquals("true", replay.getHeaders().getFirst("Idempotent-Replayed"));
         assertEquals("7.000", onHand(SKU_A), "重放不得再次调整余额");
         assertEquals(1, countAudit(ACTION_COUNT), "重放不写第二条审计");
+    }
+
+    // =====================================================================
+    // R74 无变更成功不得标成重放（M3-B9.6）
+    // =====================================================================
+
+    @Test
+    @DisplayName("R74 首次差额 0（目标 == 当前余额）→ 201 + transaction_id 为 null + 无 Idempotent-Replayed 头 + #12 审计不增")
+    void zeroDeltaCountAdjustIsNotReplay() throws Exception {
+        String token = operatorToken();
+        int txnBefore = txnCount();
+        int auditBefore = countAudit(ACTION_COUNT);
+
+        // 种子余额 10.000，盘点目标也是 10.000 ⇒ 差额 0，按 §5.5 步骤 G 不写流水直接成功
+        ResponseEntity<String> response = post("/api/v1/inventory/adjustments",
+                countAdjustBody(SKU_A, "10.000", "盘点无差异"), token, "idem-r74-zero");
+        assertEquals(HttpStatus.CREATED, response.getStatusCode(), response.getBody());
+
+        JsonNode data = objectMapper.readTree(response.getBody()).get("data");
+        assertTrue(data.get("transaction_id").isNull(),
+                "差额 0 不写流水 ⇒ transaction_id 必须为 null，实测：" + response.getBody());
+        assertNull(response.getHeaders().getFirst("Idempotent-Replayed"),
+                "★ R74：无变更成功既不是重放也不是新执行，不得带 Idempotent-Replayed 头");
+        assertEquals(txnBefore, txnCount(), "不得新增流水");
+        assertEquals(auditBefore, countAudit(ACTION_COUNT), "无变更不写 #12 审计（B9 裁定）");
+        assertEquals("10.000", onHand(SKU_A), "余额不得变动");
     }
 
     // =====================================================================
@@ -249,6 +278,11 @@ class InventoryReversalReplayTest {
                 "SELECT on_hand_qty FROM inventory_balances WHERE team_id = ? AND warehouse_id = ? AND sku_id = ?",
                 BigDecimal.class, TEAM_ID, WAREHOUSE_ID, skuId);
         return value == null ? null : value.toPlainString();
+    }
+
+    private int txnCount() {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM inventory_transactions WHERE team_id = ?",
+                Integer.class, TEAM_ID);
     }
 
     private int reversalCount() {

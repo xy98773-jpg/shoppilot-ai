@@ -374,6 +374,35 @@ class InventoryWriteServiceTest {
     }
 
     @Test
+    @DisplayName("T10b（R74）replayed() 只对真重放为 true —— 差额 0 的 idempotentHit=true 但 replayed()=false")
+    void replayedOnlyForRealReplay() {
+        writeService.applyInitialImport(SKU_A, WAREHOUSE_ID, new BigDecimal("10"), null, "init-A");
+
+        StockChangeResult zeroDelta = writeService.applyCountAdjust(SKU_A, WAREHOUSE_ID,
+                new BigDecimal("10"), "盘点无差异", null, "COUNT_ADJUST:COUNT:T10b-zero:9002");
+        assertTrue(zeroDelta.idempotentHit(),
+                "差额 0 仍是「无变更成功」，idempotentHit 语义保持不变（B9 审计跳过逻辑依赖它）");
+        assertNull(zeroDelta.txnId(), "差额 0 不写流水");
+        assertFalse(zeroDelta.replayed(),
+                "★ R74：无变更成功不是重放，不得让 HTTP 头标成 Idempotent-Replayed");
+
+        String key = "COUNT_ADJUST:COUNT:T10b-replay:9002";
+        StockChangeResult first = writeService.applyCountAdjust(SKU_A, WAREHOUSE_ID,
+                new BigDecimal("7"), "月度盘点差异", null, key);
+        assertNotNull(first.txnId());
+        assertFalse(first.idempotentHit(), "首次真正落账不是幂等命中");
+        assertFalse(first.replayed(), "首次真正落账不是重放");
+
+        StockChangeResult replay = writeService.applyCountAdjust(SKU_A, WAREHOUSE_ID,
+                new BigDecimal("7"), "月度盘点差异", null, key);
+        assertTrue(replay.idempotentHit());
+        assertNotNull(replay.txnId(), "真重放必定带回既有流水 id");
+        assertTrue(replay.replayed(),
+                "★ 反向防线：真重放必须 replayed()=true（修 R74 不得变成「重放也不带头」）");
+        assertEquals(first.txnId(), replay.txnId(), "重放须返回首次的流水 id");
+    }
+
+    @Test
     @DisplayName("T11 applyManualAdjust 正常 → MANUAL_ADJUST 流水（带符号增量）")
     void manualAdjustWritesTransaction() {
         writeService.applyInitialImport(SKU_A, WAREHOUSE_ID, new BigDecimal("10"), null, "init-A");
