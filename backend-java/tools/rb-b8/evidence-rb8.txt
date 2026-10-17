@@ -1,0 +1,75 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=7f58447043990a9a0d852aa414f37fe6fafcc910a8ba678d424384986b43cfb3
+156c357235311c9914fca022d7f8a8c4ff6ee52d98c8273602023fcea80ad1b1
+MYSQL_READY=1 (port 3329)
+APP_PID=854 (port 18109)
+APP_UP=1
+mysql: [Warning] Using a password on the command line interface can be insecure.
+SEED_OK
+TOKENS op=eyJhbGciOi own=eyJhbGciOi view=eyJhbGciOi other=eyJhbGciOi
+---------------------------------------------------------------
+R1 迁移链 9 条 + sales_daily 约束
+PASS R1-迁移条数 => 9
+PASS R1-最高版本 => 1.0.8
+PASS R1-唯一键数(排除PK) => 1
+PASS R1-声明索引数 => 4
+PASS R1-CHECK数 => 4
+PASS R1-无version列 => 0
+PASS R1-外键全RESTRICT => 2
+---------------------------------------------------------------
+R2 upsert 覆盖：SKU-A/WH1 2026-10-03 先 15 再 7
+PASS R2-首次http => 201
+PASS R2-二次http => 201
+PASS R2-行数仍1 => 1
+PASS R2-qty为新值 => 7.000
+---------------------------------------------------------------
+R3 groupBy 三聚合（纯种子态的 9002 已被 R2 污染 → 只验 warehouse/date 中未污染项）
+PASS R3-date-1001 => 45.000
+PASS R3-date-1002 => 20.000
+NOTE R3-wh-raw={"code":"OK","message":"success","data":{"list":[{"group_key":"9004","qty":"42.000","return_qty":"0.000","sales_amount":"350.00","order_count":6},{"group_key":"9007","qty":"30.000","return_qty":"0.000","sales_amount":"300.00","order_count":4}],"total":2,"page":1,"pageSize":20},"requestId":"req_487742924f7194e9e1708d4b4d728425","timestamp":"2026-10-17T12:42:59.856Z"}
+PASS R3-wh9007 => 30.000
+---------------------------------------------------------------
+R4 角色：VIEWER -> TEAM-2003；OPERATOR -> 201
+PASS R4-viewer-code => TEAM-2003
+PASS R4-viewer-http => 403
+PASS R4-viewer-未落库 => 0
+---------------------------------------------------------------
+R5 审计 SALES_DAILY_UPSERT
+PASS R5-审计条数>0 => 1
+NOTE R5-change_summary=upsert 日销售：覆盖 1 行 / 共 1 行（source=MANUAL）
+PASS R5-含覆盖字样 => 1
+---------------------------------------------------------------
+P1 ★ sale_date 晚于今天（2030-01-01）→ 期望 400 SAL-6003
+P1 code=OK http=201
+P1 未来日期落库行数=1
+P1 FINDING: REST 路径未拦未来日期（导入路径已拦）
+---------------------------------------------------------------
+P2 ★ sale_date 早于 skus.listed_date → 期望 400 SAL-6003
+P2 code=OK http=201
+P2 早于上架日落库行数=1
+P2 FINDING: 早于上架日可写入
+---------------------------------------------------------------
+P3 覆盖更新后 created_by/created_at 保持、updated_at 变化
+P3 before=1001|2026-10-17 12:42:52.825|2026-10-17 12:42:53.423
+P3 after =1001|2026-10-17 12:42:52.825|2026-10-17 12:43:20.818
+PASS P3-created_by保持 => 1001
+PASS P3-created_at保持 => 2026-10-17 12:42:52.825
+PASS P3-qty更新 => 9.000
+---------------------------------------------------------------
+P4 qty=0 允许（非负 CHECK 允许 0）
+PASS P4-http => 201
+PASS P4-qty => 0.000
+---------------------------------------------------------------
+P5 团队 8 读不到团队 7 的销售行
+PASS P5-other-total => 0
+---------------------------------------------------------------
+P6 pageSize=201 → COM-0007
+PASS P6-code => COM-0007
+PASS P6-http => 400
+---------------------------------------------------------------
+P7 sales_amount 可覆盖为 NULL
+PASS P7-NULL生效 => NULL
+---------------------------------------------------------------
+RB8_FAIL_COUNT=2
+=== RB8 EVIDENCE DONE ===
+--- cleanup ---
