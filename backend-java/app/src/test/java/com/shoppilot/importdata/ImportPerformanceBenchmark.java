@@ -55,6 +55,17 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * 而 {@code AuditLogWriter.insert} 为 {@code REQUIRES_NEW} ⇒ 10000 行产生 10000 次独立事务提交）。
  * 详见类内 {@code report} 与 {@code target/import-perf-result.txt}。
  *
+ * <h2>★ 轮 1 优化后（M3-B4-PERF，{@code ADR-004}）</h2>
+ * 三项改动（<b>审计条数一律不变</b>）：
+ * <ol>
+ *   <li><b>审计批级提交 + 提交后写入</b>（{@code ADR-004} D1/D2）：{@code AuditBufferScope} 缓冲 →
+ *       业务事务 {@code afterCommit} 一次性 {@code recordAll}（一个独立事务）；</li>
+ *   <li><b>审计多行 {@code INSERT}</b>（{@code ADR-004} D1 允许的两条路径之一）：500 行/语句；</li>
+ *   <li><b>去逐行 {@code SAVEPOINT}</b>（{@code ADR-004} D5 两遍式）+
+ *       <b>去写后重查视图</b>（导入路径用刚插入的实体映射，省一次 {@code selectById}）。</li>
+ * </ol>
+ * 结果见 {@code target/import-perf-result.txt}（{@code Com_commit} 由 10023 降至个位/十位数）。
+ *
  * <h2>测量口径</h2>
  * <ul>
  *   <li><b>运行方式</b>：{@code @SpringBootTest}(RANDOM_PORT) + {@code TestRestTemplate} 真实 HTTP，
@@ -198,7 +209,8 @@ class ImportPerformanceBenchmark {
                 + ", IMPORT_BATCH_COMPLETE=" + batchCompletionAudits + "\n"
                 + "products 行数 : " + products + "\n"
                 + "--- 归因取证（SHOW GLOBAL STATUS 增量，仅 confirm 区间）---\n"
-                + "Com_commit            : " + commits + "（业务分批事务 20 + 状态/终态 3 + 逐行审计 10000）\n"
+                + "Com_commit            : " + commits + "（业务分批 20 + 审计批量 20 + 状态/终态 3；"
+                + "旧实现为 10023——差 1 万次逐条审计提交）\n"
                 + "Com_begin             : " + begins + "\n"
                 + "Innodb_data_fsyncs    : " + fsyncs + "\n"
                 + "每行平均耗时          : " + String.format("%.2f", confirmMs / (double) ROWS) + " ms/行\n";
@@ -217,6 +229,72 @@ class ImportPerformanceBenchmark {
         assertEquals(1, batchCompletionAudits);
         assertTrue(confirmMs < MAX_SECONDS * 1000L,
                 "NFR-PERF-02 未达标：" + confirmMs + " ms ≥ " + (MAX_SECONDS * 1000L) + " ms");
+    }
+
+    // =====================================================================
+    // G4 / E2：1 万行【全更新】→ 审计恰 10000 条（R48）
+    // =====================================================================
+
+    @Test
+    @DisplayName("G4 1 万行全更新 → 审计恰 10000 条（R48 导入更新补审计），记录耗时")
+    void tenThousandUpdatesProduceTenThousandAudits() throws Exception {
+        // 预置 10000 行（裸 JDBC 批量，成本不计入 confirm）
+        java.util.List<Object[]> seed = new java.util.ArrayList<>(ROWS);
+        for (int i = 1; i <= ROWS; i++) {
+            seed.add(new Object[] {TEAM_ID, String.format("P-PERF-%05d", i), "旧名称"});
+        }
+        jdbc.batchUpdate("INSERT INTO products (team_id, product_code, name, status) VALUES (?, ?, ?, 'ACTIVE')",
+                seed);
+        assertEquals(ROWS, jdbc.queryForObject("SELECT COUNT(*) FROM products WHERE team_id = ?",
+                Integer.class, TEAM_ID));
+
+        StringBuilder sb = new StringBuilder("product_code,name\n");
+        for (int i = 1; i <= ROWS; i++) {
+            sb.append(String.format("P-PERF-%05d", i)).append(",更新后商品").append(i).append('\n');
+        }
+        byte[] csv = sb.toString().getBytes(StandardCharsets.UTF_8);
+
+        long batchId = uploadOk(csv);
+        String bearer = token();
+        preview(bearer, batchId);
+        mapping(bearer, batchId);
+        ResponseEntity<String> validation = validate(bearer, batchId);
+        assertEquals(HttpStatus.OK, validation.getStatusCode(), "校验应成功");
+        assertEquals(0, data(validation).get("error_rows").asInt());
+
+        long c0 = System.nanoTime();
+        long commits0 = globalStatus("Com_commit");
+        ResponseEntity<String> confirm = confirm(bearer, batchId, "perf-key-update");
+        long confirmMs = (System.nanoTime() - c0) / 1_000_000L;
+        long commits = globalStatus("Com_commit") - commits0;
+        assertEquals(HttpStatus.OK, confirm.getStatusCode(), confirm.getBody());
+
+        JsonNode d = data(confirm);
+        assertEquals("COMPLETED", d.get("status").asText());
+        assertEquals(ROWS, d.get("success_rows").asLong(), "全部命中既有编码 ⇒ 全走 update 分支");
+
+        int masterDataAudits = jdbc.queryForObject("SELECT COUNT(*) FROM audit_logs "
+                + "WHERE team_id = ? AND action = 'MASTER_DATA_STATUS_CHANGE' AND biz_type = 'PRODUCT'",
+                Integer.class, TEAM_ID);
+        int products = jdbc.queryForObject("SELECT COUNT(*) FROM products WHERE team_id = ?",
+                Integer.class, TEAM_ID);
+
+        String report = "M3-B4-PERF 全更新场景实测（R48 / G4）\n"
+                + "数据量        : " + ROWS + " 行 PRODUCT（编码全部已存在 → update 分支）\n"
+                + "confirm 耗时  : " + confirmMs + " ms（" + String.format("%.2f", confirmMs / (double) ROWS)
+                + " ms/行）\n"
+                + "Com_commit    : " + commits + "（业务分批 20 + 审计批量 20 + 状态/终态 3）\n"
+                + "审计行数      : MASTER_DATA_STATUS_CHANGE=" + masterDataAudits + "（应恰为 " + ROWS + "）\n"
+                + "products 行数 : " + products + "（更新不得新增）\n";
+        log.info("\n{}", report);
+        try {
+            Files.writeString(Path.of("target", "import-perf-update-result.txt"), report, StandardCharsets.UTF_8);
+        } catch (IOException ex) {
+            log.warn("无法写入全更新报告：{}", ex.getMessage());
+        }
+
+        assertEquals(ROWS, masterDataAudits, "R48：导入更新必须逐行产生审计，1 万行 = 1 万条");
+        assertEquals(ROWS, products, "全更新不得新增行");
     }
 
     // =====================================================================

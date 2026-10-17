@@ -218,8 +218,10 @@ class AuditChannelIntegrationTest {
 
         Set<String> declared = Arrays.stream(AuditLogMapper.class.getDeclaredMethods())
                 .map(Method::getName).collect(Collectors.toSet());
-        assertEquals(Set.of("insert", "selectRecentByBiz"), declared,
-                "Mapper 只应声明 insert（写）与 selectRecentByBiz（只读）");
+        // insertBatch：ADR-004 D1 的多行 INSERT（一条语句写 n 行，条数不变、仍属追加）。
+        // 本断言守的是「无 update*/delete*」这条不变量，故新增批量追加入口不削弱它。
+        assertEquals(Set.of("insert", "insertBatch", "selectRecentByBiz"), declared,
+                "Mapper 只应声明 insert / insertBatch（写）与 selectRecentByBiz（只读）");
 
         for (Method method : AuditLogMapper.class.getMethods()) {
             String name = method.getName();
