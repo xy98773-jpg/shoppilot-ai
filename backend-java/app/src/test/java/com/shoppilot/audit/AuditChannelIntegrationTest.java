@@ -119,17 +119,17 @@ class AuditChannelIntegrationTest {
     }
 
     // =====================================================================
-    // §6-1 Flyway 全链：V1.0.0 → V1.0.5 共 6 行 success
+    // §6-1 Flyway 全链：V1.0.0 → V1.0.6 共 7 行 success
     // =====================================================================
 
     @Test
-    @DisplayName("§6-1 Flyway 全链：V1.0.0→V1.0.5 共 6 行、全部 success=1")
-    void flywayChainAppliedThroughV104() {
+    @DisplayName("§6-1 Flyway 全链：V1.0.0→V1.0.6 共 7 行、全部 success=1")
+    void flywayChainAppliedThroughV106() {
         List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT version, success FROM flyway_schema_history ORDER BY installed_rank");
-        assertEquals(6, rows.size(),
-                "迁移链应为 6 条（baseline/identity/refresh_tokens/catalog/audit/importdata）");
-        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5"),
+        assertEquals(7, rows.size(),
+                "迁移链应为 7 条（baseline/identity/refresh_tokens/catalog/audit/importdata/inventory）");
+        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6"),
                 rows.stream().map(r -> String.valueOf(r.get("version"))).toList());
         for (Map<String, Object> row : rows) {
             Object success = row.get("success");

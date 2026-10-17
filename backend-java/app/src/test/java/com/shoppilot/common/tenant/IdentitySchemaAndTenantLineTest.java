@@ -145,9 +145,10 @@ class IdentitySchemaAndTenantLineTest {
 
         List<String> versions = queryStrings(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank");
-        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5"), versions,
-                "应应用 V1.0.0 / V1.0.1 / V1.0.2 / V1.0.3 / V1.0.4 / V1.0.5 六条迁移"
-                        + "（V1.0.3 为 M2-T08 catalog，V1.0.4 为 M2-T11 audit，V1.0.5 为 M3-T01 importdata）");
+        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6"), versions,
+                "应应用 V1.0.0 / V1.0.1 / V1.0.2 / V1.0.3 / V1.0.4 / V1.0.5 / V1.0.6 七条迁移"
+                        + "（V1.0.3 为 M2-T08 catalog，V1.0.4 为 M2-T11 audit，V1.0.5 为 M3-T01 importdata，"
+                        + "V1.0.6 为 M3-T08 inventory）");
 
         // CHECK 约束负向验证（MySQL 8.0.16+ 才生效，版本守卫已保证）
         try (Connection conn = dataSource.getConnection(); Statement st = conn.createStatement()) {

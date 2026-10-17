@@ -82,8 +82,8 @@ class ImportSchemaConstraintTest {
     // ---------------------------------------------------------------------
 
     @Test
-    @DisplayName("§1 Flyway 全链跑通：V1.0.0 → V1.0.5 六条迁移均 success=1")
-    void flywayChainAppliedSixVersions() throws Exception {
+    @DisplayName("§1 Flyway 全链跑通：V1.0.0 → V1.0.6 七条迁移均 success=1")
+    void flywayChainAppliedSevenVersions() throws Exception {
         List<String> tables = queryStrings(
                 "SELECT table_name FROM information_schema.tables "
                         + "WHERE table_schema = DATABASE() ORDER BY table_name");
@@ -93,9 +93,9 @@ class ImportSchemaConstraintTest {
 
         List<String> versions = queryStrings(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank");
-        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5"), versions,
-                "应应用 V1.0.0 / V1.0.1 / V1.0.2 / V1.0.3 / V1.0.4 / V1.0.5 六条迁移"
-                        + "（V1.0.5 为 M3-T01 importdata）");
+        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6"), versions,
+                "应应用 V1.0.0 / V1.0.1 / V1.0.2 / V1.0.3 / V1.0.4 / V1.0.5 / V1.0.6 七条迁移"
+                        + "（V1.0.5 为 M3-T01 importdata，V1.0.6 为 M3-T08 inventory）");
     }
 
     // ---------------------------------------------------------------------
