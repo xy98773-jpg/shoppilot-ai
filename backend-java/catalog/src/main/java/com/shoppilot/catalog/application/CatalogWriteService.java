@@ -1,5 +1,6 @@
 package com.shoppilot.catalog.application;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -29,8 +30,12 @@ import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -116,6 +121,26 @@ public class CatalogWriteService {
     }
 
     private WarehouseView createWarehouse(JsonNode body) {
+        return createWarehouse(body, true);
+    }
+
+    /**
+     * 新建仓库的<b>内核</b>（{@code B4-PERF}：把「写后重查视图」变为可选）。
+     *
+     * <h2>为什么 {@code withView=false} 能省一次往返</h2>
+     * 旧实现固定 {@code WarehouseView.of(warehouseMapper.selectById(id))}：INSERT 之后再发一条
+     * {@code SELECT} 仅仅为了拿到 DB 侧默认值（{@code created_at}）。而<b>导入落库</b>只用返回值的
+     * {@code id}/{@code status}（判断要不要 {@code changeStatus}），根本不需要这条重查——
+     * 实测单次 {@code selectById} 约 2.6 ms（{@code target/import-perf-profile.txt}），
+     * 1 万行就是 26 s。故导入路径传 {@code false}，用刚插入的实体直接映射；
+     * REST 路径（{@code upsertWarehouse}）保持 {@code true}，响应体字段<b>逐字节不变</b>。
+     *
+     * <p>⚠️ {@code withView=false} 时返回的视图里 {@code created_at} 为 {@code null}
+     * （该值由 DB 默认值生成）——调用方<b>不得</b>把它直接回给客户端。
+     *
+     * @param withView {@code true} = 写后重查（REST 语义完整）；{@code false} = 用插入实体映射（导入路径）
+     */
+    private WarehouseView createWarehouse(JsonNode body, boolean withView) {
         requireAllNonBlank(body, "code", "name");
         long teamId = currentTeamId();
         WarehouseEntity entity = new WarehouseEntity();
@@ -137,7 +162,7 @@ public class CatalogWriteService {
         warehouseMapper.insert(entity);
         log.info("仓库已创建 teamId={} id={} code={}", teamId, entity.getId(), entity.getCode());
         recordMasterData(BIZ_TYPE_WAREHOUSE, entity.getId(), entity.getCode(), "创建仓库");
-        return WarehouseView.of(warehouseMapper.selectById(entity.getId()));
+        return withView ? WarehouseView.of(warehouseMapper.selectById(entity.getId())) : WarehouseView.of(entity);
     }
 
     private WarehouseView updateWarehouse(Long id, JsonNode body) {
@@ -189,6 +214,11 @@ public class CatalogWriteService {
     }
 
     private SupplierView createSupplier(JsonNode body) {
+        return createSupplier(body, true);
+    }
+
+    /** 新建供应商内核；{@code withView=false} 省掉写后重查（语义见 {@link #createWarehouse(JsonNode, boolean)}）。 */
+    private SupplierView createSupplier(JsonNode body, boolean withView) {
         requireAllNonBlank(body, "code", "name");
         Integer leadTimeDays = CatalogJson.intVal(body, "lead_time_days");
         BigDecimal orderMultiple = CatalogJson.decimal(body, "order_multiple");
@@ -212,7 +242,7 @@ public class CatalogWriteService {
         supplierMapper.insert(entity);
         log.info("供应商已创建 teamId={} id={} code={}", entity.getTeamId(), entity.getId(), entity.getCode());
         recordMasterData(BIZ_TYPE_SUPPLIER, entity.getId(), entity.getCode(), "创建供应商");
-        return SupplierView.of(supplierMapper.selectById(entity.getId()));
+        return withView ? SupplierView.of(supplierMapper.selectById(entity.getId())) : SupplierView.of(entity);
     }
 
     private SupplierView updateSupplier(Long id, JsonNode body) {
@@ -266,6 +296,11 @@ public class CatalogWriteService {
     }
 
     private ProductView createProduct(JsonNode body) {
+        return createProduct(body, true);
+    }
+
+    /** 新建商品内核；{@code withView=false} 省掉写后重查（语义见 {@link #createWarehouse(JsonNode, boolean)}）。 */
+    private ProductView createProduct(JsonNode body, boolean withView) {
         requireAllNonBlank(body, "product_code", "name");
         Long supplierId = CatalogJson.longVal(body, "default_supplier_id");
         assertSupplierSameTeam(supplierId, "default_supplier_id");
@@ -286,11 +321,22 @@ public class CatalogWriteService {
         log.info("商品已创建 teamId={} id={} productCode={}", entity.getTeamId(), entity.getId(),
                 entity.getProductCode());
         recordMasterData(BIZ_TYPE_PRODUCT, entity.getId(), entity.getProductCode(), "创建商品");
-        return ProductView.of(productMapper.selectById(entity.getId()));
+        return withView ? ProductView.of(productMapper.selectById(entity.getId())) : ProductView.of(entity);
     }
 
     private ProductView updateProduct(Long id, JsonNode body) {
-        CatalogGuards.requireInTeam(productMapper.selectById(id),
+        return updateProduct(id, body, true);
+    }
+
+    /**
+     * 更新内核。
+     *
+     * @param withView {@code true}＝写后重查一次 {@code selectById} 取最新视图（REST 用）；
+     *                 {@code false}＝复用 guard 已取到的实体（导入用，省掉 1 万次写后重查 ≈ 24 s）
+     */
+    private ProductView updateProduct(Long id, JsonNode body, boolean withView) {
+        ProductEntity existing = productMapper.selectById(id);
+        CatalogGuards.requireInTeam(existing,
                 () -> productMapper.selectTeamIdById(id), ErrorCodes.CAT_3001, "商品不存在");
 
         requireNonBlankIfPresent(body, "product_code");
@@ -312,7 +358,7 @@ public class CatalogWriteService {
         w.set("updated_by", currentUserId());
         productMapper.update(null, w);
         log.info("商品已更新 id={}", id);
-        return ProductView.of(productMapper.selectById(id));
+        return withView ? ProductView.of(productMapper.selectById(id)) : ProductView.of(existing);
     }
 
     // =====================================================================
@@ -348,6 +394,11 @@ public class CatalogWriteService {
      * 两条路径的<b>其它</b>行为（团队注入、商品关联、供应商同团队、字段映射）完全一致。
      */
     private SkuView insertSku(Long productId, JsonNode body) {
+        return insertSku(productId, body, true);
+    }
+
+    /** SKU 插入内核；{@code withView=false} 省掉写后重查（语义见 {@link #createWarehouse(JsonNode, boolean)}）。 */
+    private SkuView insertSku(Long productId, JsonNode body, boolean withView) {
         // 关联写入：商品不存在或跨团队 → 422 CAT-3004（任务书 §3.3 / §7-6）
         assertProductAssociation(productId);
 
@@ -376,7 +427,7 @@ public class CatalogWriteService {
         log.info("SKU 已创建 teamId={} id={} productId={} skuCode={}", entity.getTeamId(), entity.getId(),
                 productId, entity.getSkuCode());
         recordMasterData(BIZ_TYPE_SKU, entity.getId(), entity.getSkuCode(), "创建 SKU");
-        return SkuView.of(skuMapper.selectById(entity.getId()));
+        return withView ? SkuView.of(skuMapper.selectById(entity.getId())) : SkuView.of(entity);
     }
 
     private SkuView updateSku(Long id, JsonNode body) {
@@ -432,32 +483,39 @@ public class CatalogWriteService {
     // =====================================================================
 
     /**
-     * <b>★ 传播级别为何是 {@code NESTED} 而不是 {@code REQUIRED}（M3-B4 偏差，已申报）</b>
+     * <b>★ 为何同一内核有两个传播级别的出口（{@code ADR-004} D5，{@code B4-PERF} 轮 1）</b>
      *
-     * <p>裁定 {@code G2} 写的是「被调用方用 {@code REQUIRED} 加入调用方事务」。本批实测发现它与
-     * 裁定 {@code C1}（「批内逐行：每行前设 {@code SAVEPOINT}；该行抛业务异常 →
-     * {@code ROLLBACK TO SAVEPOINT} + 继续处理批内其余行」）在 Spring 事务语义下<b>不可共存</b>：
+     * <table border="1">
+     *   <caption>两个出口的分工</caption>
+     *   <tr><th>出口</th><th>传播</th><th>谁用</th><th>为什么</th></tr>
+     *   <tr>
+     *     <td>{@code upsertXxxByCode(JsonNode)}</td>
+     *     <td>{@code NESTED}</td>
+     *     <td><b>Pass 2</b>（失败路径逐行重放）</td>
+     *     <td>需要 {@code SAVEPOINT} 做<b>行级隔离</b>：某行失败只回滚该行、同批其余行照常提交</td>
+     *   </tr>
+     *   <tr>
+     *     <td>{@code upsertXxxsByCode(List)}</td>
+     *     <td>{@code REQUIRED}</td>
+     *     <td><b>Pass 1</b>（正常路径）</td>
+     *     <td>整批一个事务、<b>零</b> {@code SAVEPOINT}（省掉每行两次往返）；失败直接上抛，
+     *         由调用方整批回滚后转 Pass 2</td>
+     *   </tr>
+     * </table>
      *
-     * <ol>
-     *   <li>{@code importdata} 的每个 500 行批次是一个由 {@code TransactionTemplate} 开启的新事务；</li>
-     *   <li>行内调用本类的 {@code upsertXxxByCode}。若其传播为 {@code REQUIRED}，Spring 会以
-     *       <b>参与方（{@code newTransaction=false}）</b>身份加入，异常时
-     *       {@code AbstractPlatformTransactionManager.processRollback} 走
-     *       {@code doSetRollbackOnly}——把<b>整个批次事务</b>置为 {@code rollbackOnly}；</li>
-     *   <li>随后即便调用方 {@code rollbackToSavepoint} 并继续处理，批次事务在提交时仍会抛
-     *       {@code UnexpectedRollbackException}，<b>整批 500 行全部丢失</b>，与 {@code §12}
-     *       「批内原子 + 行级错误不阻断其他行」直接矛盾。</li>
-     * </ol>
+     * <h2>为什么 Pass 1 的循环内不能 catch 行级异常后继续</h2>
+     * {@code REQUIRED} 以「参与方」身份加入调用方的批次事务。参与方抛出 {@code RuntimeException} 时
+     * {@code AbstractPlatformTransactionManager.processRollback} 会走 {@code doSetRollbackOnly}，
+     * 把<b>整个批次事务</b>置为 {@code rollbackOnly}；此时即便方法内部吞掉异常并继续，
+     * 批次事务在提交时也必抛 {@code UnexpectedRollbackException}——整批数据丢失，且异常类型脱离
+     * 调用方的行级/非行级分类。故 Pass 1 必须<b>让异常穿出去</b>。
      *
-     * <p>{@code NESTED} 是 Spring 对「可局部回滚的子事务」的标准表达，且行为对调用方<b>严格更优</b>：
-     * <ul>
-     *   <li><b>在调用方事务内</b>：建 {@code SAVEPOINT}，失败时 {@code rollbackToSavepoint}
-     *       （{@code processRollback} 的 {@code status.hasSavepoint()} 分支），<b>不会</b>把批次事务置
-     *       rollback-only ⇒ 恰好就是裁定 {@code C1} 要求的语义；</li>
-     *   <li><b>无调用方事务时</b>：行为等同 {@code REQUIRED}（新建事务），原子性不变。</li>
-     * </ul>
-     * 因此单对象「解析既有 id + 创建/更新」的原子性与 {@code rollbackFor = Exception.class} 均<b>保持不变</b>；
-     * 未使用 {@code REQUIRES_NEW}（裁定 {@code G2} 明令禁止），也未自行提交。
+     * <h2>为什么 Pass 2 仍用 {@code NESTED} 而不是 {@code REQUIRED}</h2>
+     * Pass 2 的目的正是「一行失败、其余行继续」：{@code NESTED} 在批次事务内建 {@code SAVEPOINT}，
+     * 失败时 {@code rollbackToSavepoint}（{@code processRollback} 的 {@code status.hasSavepoint()} 分支），
+     * <b>不会</b>把批次事务置 rollback-only；无外部事务时行为等同 {@code REQUIRED}（新建事务），
+     * 单对象原子性与 {@code rollbackFor = Exception.class} 均不变。未使用 {@code REQUIRES_NEW}
+     * （会自开事务、破坏批内一致性），也未自行提交。
      *
      * <p>（真实栈验证：{@code ImportConfirmIntegrationTest} 的「部分失败 → {@code PARTIAL_SUCCESS}」
      * 与「引用漂移 → 行级失败而批次继续」两个用例即依赖该语义。）
@@ -483,9 +541,99 @@ public class CatalogWriteService {
      */
     @Transactional(propagation = Propagation.NESTED, rollbackFor = Exception.class)
     public WarehouseView upsertWarehouseByCode(JsonNode body) {
+        return doUpsertWarehouseByCode(body);
+    }
+
+    /**
+     * 批量按编码 upsert 仓库（{@code ADR-004 D5} 的 <b>Pass 1</b> 入口；{@code B4-PERF}）。
+     *
+     * <h2>与 {@link #upsertWarehouseByCode} 的差别＝只有传播级别</h2>
+     * <ul>
+     *   <li>{@code REQUIRED}：<b>加入调用方的批次事务</b>，逐行<b>不建 {@code SAVEPOINT}</b>
+     *       （省掉每行 {@code SAVEPOINT}/{@code RELEASE} 两次往返）；</li>
+     *   <li>循环内<b>绝不</b> {@code catch} 行级异常后继续：本方法以「参与方」身份加入批次事务，
+     *       一旦吞掉异常并正常返回，Spring 早把批次事务标记成 {@code rollback-only}，
+     *       提交时抛 {@code UnexpectedRollbackException}，整批数据丢失且异常类型不可控。
+     *       故<b>直接上抛</b>，由 {@code ImportConfirmService} 回滚整批后走 Pass 2 逐行重放。</li>
+     * </ul>
+     * 两条路径共用同一私有内核 {@link #doUpsertWarehouseByCode}，因此 upsert 语义、
+     * {@code H2}「空值不覆盖」、审计条数完全一致，不存在「批量路径行为不同」的分叉。
+     *
+     * @param bodies 待落库行（顺序即文件顺序；空列表直接返回）
+     */
+    @Transactional(propagation = Propagation.REQUIRED, rollbackFor = Exception.class)
+    public void upsertWarehousesByCode(List<JsonNode> bodies) {
+        if (bodies == null || bodies.isEmpty()) {
+            return;
+        }
+        // 轮 2 定向优化：整批一次 IN 查询预取 code→id，替代逐行 selectIdByCode。
+        // 数据依据：import-perf-profile 测得 10000 次 selectIdByCode = 19.1 s（占业务新建 32%）。
+        // 语义不变：selectList 同样受租户线约束（自动追加 team_id），跨团队同编码天然查不到。
+        Map<String, Long> preloadedIds = preloadWarehouseIdsByCode(bodies);
+        for (JsonNode body : bodies) {
+            doUpsertWarehouseByCode(body, preloadedIds);
+        }
+    }
+
+    /**
+     * 仓库 by-code upsert 的<b>无事务注解内核</b>（{@code ❌} 不得在此方法上标 {@code @Transactional}：
+     * Spring 的代理只拦「从外部调用进来的 public 方法」，同类自调用不会经过代理，
+     * 标了也不生效，反而制造「看起来有事务边界」的错觉）。
+     */
+    /** 单行出口（REST 与 Pass 2 重放）：逐行解析既有 id；与批量出口语义一致。 */
+    private WarehouseView doUpsertWarehouseByCode(JsonNode body) {
+        return doUpsertWarehouseByCode(body, null);
+    }
+
+    /**
+     * 整批预取 {@code code → id}（轮 2 定向优化，依据 {@code import-perf-profile.txt}）。
+     *
+     * <p>一次 {@code IN} 查询代替逐行 {@code selectIdByCode}：后者实测 1.91 ms/次，
+     * 1 万行就是 19.1 s。此处<b>不改</b>既有 Mapper 方法，只复用 {@code BaseMapper.selectList}
+     * ——租户线照常追加 {@code team_id}，跨团队同编码仍查不到，与逐行解析<b>完全等价</b>。
+     *
+     * <p>缺失/空白的键直接跳过：交给下游 {@code requireText} 抛 {@code COM-0001}（行级失败），
+     * 预取阶段不改变错误语义。
+     */
+    private Map<String, Long> preloadWarehouseIdsByCode(List<JsonNode> bodies) {
+        Set<String> codes = new LinkedHashSet<>();
+        for (JsonNode body : bodies) {
+            String code = CatalogJson.text(body, "code");
+            if (code != null && !code.isBlank()) {
+                codes.add(code);
+            }
+        }
+        if (codes.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Long> ids = new HashMap<>(codes.size() * 2);
+        for (WarehouseEntity row : warehouseMapper.selectList(new LambdaQueryWrapper<WarehouseEntity>()
+                .select(WarehouseEntity::getId, WarehouseEntity::getCode)
+                .in(WarehouseEntity::getCode, codes))) {
+            ids.put(row.getCode(), row.getId());
+        }
+        return ids;
+    }
+
+    /**
+     * by-code upsert 的无事务内核。
+     *
+     * @param preloadedIds 整批预取的 {@code code → id}；{@code null} 表示「未预取，逐行解析」
+     */
+    private WarehouseView doUpsertWarehouseByCode(JsonNode body, Map<String, Long> preloadedIds) {
         String code = requireText(body, "code");
-        Long existingId = warehouseMapper.selectIdByCode(code);
-        WarehouseView view = existingId == null ? createWarehouse(body) : updateWarehouse(existingId, body);
+        Long existingId = preloadedIds == null
+                ? warehouseMapper.selectIdByCode(code)
+                : preloadedIds.get(code);
+        WarehouseView view;
+        if (existingId == null) {
+            view = createWarehouse(body, false);
+        } else {
+            view = updateWarehouse(existingId, body);
+            // R48（ADR-004 D4）：updateWarehouse 本身不写审计（REST PUT 由 @Audited 记），
+            // 导入路径不经 Controller ⇒ 必须在此补一条「导入更新」，否则更新无痕。
+            recordMasterData(BIZ_TYPE_WAREHOUSE, view.getId(), view.getCode(), "导入更新仓库");
+        }
         if (needsStatusChange(body, view.getStatus())) {
             view = (WarehouseView) changeStatus(CatalogResourceType.WAREHOUSE, view.getId(), statusOf(body));
         }
@@ -497,9 +645,78 @@ public class CatalogWriteService {
      */
     @Transactional(propagation = Propagation.NESTED, rollbackFor = Exception.class)
     public SupplierView upsertSupplierByCode(JsonNode body) {
+        return doUpsertSupplierByCode(body);
+    }
+
+    /** 批量按编码 upsert 供应商（{@code ADR-004 D5} Pass 1）。语义与限制同 {@link #upsertWarehousesByCode}。 */
+    @Transactional(propagation = Propagation.REQUIRED, rollbackFor = Exception.class)
+    public void upsertSuppliersByCode(List<JsonNode> bodies) {
+        if (bodies == null || bodies.isEmpty()) {
+            return;
+        }
+        // 轮 2 定向优化：整批一次 IN 查询预取 code→id，替代逐行 selectIdByCode。
+        // 数据依据：import-perf-profile 测得 10000 次 selectIdByCode = 19.1 s（占业务新建 32%）。
+        // 语义不变：selectList 同样受租户线约束（自动追加 team_id），跨团队同编码天然查不到。
+        Map<String, Long> preloadedIds = preloadSupplierIdsByCode(bodies);
+        for (JsonNode body : bodies) {
+            doUpsertSupplierByCode(body, preloadedIds);
+        }
+    }
+
+    /** 供应商 by-code upsert 的无事务内核（禁止标 {@code @Transactional}，理由见同名仓库方法）。 */
+    /** 单行出口（REST 与 Pass 2 重放）：逐行解析既有 id；与批量出口语义一致。 */
+    private SupplierView doUpsertSupplierByCode(JsonNode body) {
+        return doUpsertSupplierByCode(body, null);
+    }
+
+    /**
+     * 整批预取 {@code code → id}（轮 2 定向优化，依据 {@code import-perf-profile.txt}）。
+     *
+     * <p>一次 {@code IN} 查询代替逐行 {@code selectIdByCode}：后者实测 1.91 ms/次，
+     * 1 万行就是 19.1 s。此处<b>不改</b>既有 Mapper 方法，只复用 {@code BaseMapper.selectList}
+     * ——租户线照常追加 {@code team_id}，跨团队同编码仍查不到，与逐行解析<b>完全等价</b>。
+     *
+     * <p>缺失/空白的键直接跳过：交给下游 {@code requireText} 抛 {@code COM-0001}（行级失败），
+     * 预取阶段不改变错误语义。
+     */
+    private Map<String, Long> preloadSupplierIdsByCode(List<JsonNode> bodies) {
+        Set<String> codes = new LinkedHashSet<>();
+        for (JsonNode body : bodies) {
+            String code = CatalogJson.text(body, "code");
+            if (code != null && !code.isBlank()) {
+                codes.add(code);
+            }
+        }
+        if (codes.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Long> ids = new HashMap<>(codes.size() * 2);
+        for (SupplierEntity row : supplierMapper.selectList(new LambdaQueryWrapper<SupplierEntity>()
+                .select(SupplierEntity::getId, SupplierEntity::getCode)
+                .in(SupplierEntity::getCode, codes))) {
+            ids.put(row.getCode(), row.getId());
+        }
+        return ids;
+    }
+
+    /**
+     * by-code upsert 的无事务内核。
+     *
+     * @param preloadedIds 整批预取的 {@code code → id}；{@code null} 表示「未预取，逐行解析」
+     */
+    private SupplierView doUpsertSupplierByCode(JsonNode body, Map<String, Long> preloadedIds) {
         String code = requireText(body, "code");
-        Long existingId = supplierMapper.selectIdByCode(code);
-        SupplierView view = existingId == null ? createSupplier(body) : updateSupplier(existingId, body);
+        Long existingId = preloadedIds == null
+                ? supplierMapper.selectIdByCode(code)
+                : preloadedIds.get(code);
+        SupplierView view;
+        if (existingId == null) {
+            view = createSupplier(body, false);
+        } else {
+            view = updateSupplier(existingId, body);
+            // R48：导入更新补审计（见 doUpsertWarehouseByCode 同处注释）
+            recordMasterData(BIZ_TYPE_SUPPLIER, view.getId(), view.getCode(), "导入更新供应商");
+        }
         if (needsStatusChange(body, view.getStatus())) {
             view = (SupplierView) changeStatus(CatalogResourceType.SUPPLIER, view.getId(), statusOf(body));
         }
@@ -514,11 +731,80 @@ public class CatalogWriteService {
      */
     @Transactional(propagation = Propagation.NESTED, rollbackFor = Exception.class)
     public ProductView upsertProductByCode(JsonNode body) {
+        return doUpsertProductByCode(body);
+    }
+
+    /** 批量按编码 upsert 商品（{@code ADR-004 D5} Pass 1）。语义与限制同 {@link #upsertWarehousesByCode}。 */
+    @Transactional(propagation = Propagation.REQUIRED, rollbackFor = Exception.class)
+    public void upsertProductsByCode(List<JsonNode> bodies) {
+        if (bodies == null || bodies.isEmpty()) {
+            return;
+        }
+        // 轮 2 定向优化：整批一次 IN 查询预取 code→id，替代逐行 selectIdByCode。
+        // 数据依据：import-perf-profile 测得 10000 次 selectIdByCode = 19.1 s（占业务新建 32%）。
+        // 语义不变：selectList 同样受租户线约束（自动追加 team_id），跨团队同编码天然查不到。
+        Map<String, Long> preloadedIds = preloadProductIdsByCode(bodies);
+        for (JsonNode body : bodies) {
+            doUpsertProductByCode(body, preloadedIds);
+        }
+    }
+
+    /** 商品 by-code upsert 的无事务内核（禁止标 {@code @Transactional}，理由见同名仓库方法）。 */
+    /** 单行出口（REST 与 Pass 2 重放）：逐行解析既有 id；与批量出口语义一致。 */
+    private ProductView doUpsertProductByCode(JsonNode body) {
+        return doUpsertProductByCode(body, null);
+    }
+
+    /**
+     * 整批预取 {@code product_code → id}（轮 2 定向优化，依据 {@code import-perf-profile.txt}）。
+     *
+     * <p>一次 {@code IN} 查询代替逐行 {@code selectIdByCode}：后者实测 1.91 ms/次，
+     * 1 万行就是 19.1 s。此处<b>不改</b>既有 Mapper 方法，只复用 {@code BaseMapper.selectList}
+     * ——租户线照常追加 {@code team_id}，跨团队同编码仍查不到，与逐行解析<b>完全等价</b>。
+     *
+     * <p>缺失/空白的键直接跳过：交给下游 {@code requireText} 抛 {@code COM-0001}（行级失败），
+     * 预取阶段不改变错误语义。
+     */
+    private Map<String, Long> preloadProductIdsByCode(List<JsonNode> bodies) {
+        Set<String> codes = new LinkedHashSet<>();
+        for (JsonNode body : bodies) {
+            String code = CatalogJson.text(body, "product_code");
+            if (code != null && !code.isBlank()) {
+                codes.add(code);
+            }
+        }
+        if (codes.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Long> ids = new HashMap<>(codes.size() * 2);
+        for (ProductEntity row : productMapper.selectList(new LambdaQueryWrapper<ProductEntity>()
+                .select(ProductEntity::getId, ProductEntity::getProductCode)
+                .in(ProductEntity::getProductCode, codes))) {
+            ids.put(row.getProductCode(), row.getId());
+        }
+        return ids;
+    }
+
+    /**
+     * by-code upsert 的无事务内核。
+     *
+     * @param preloadedIds 整批预取的 {@code product_code → id}；{@code null} 表示「未预取，逐行解析」
+     */
+    private ProductView doUpsertProductByCode(JsonNode body, Map<String, Long> preloadedIds) {
         String productCode = requireText(body, "product_code");
         JsonNode normalized = withResolvedCode(body, "default_supplier_code", "default_supplier_id",
                 code -> supplierMapper.selectIdByCode(code), "引用的供应商不存在");
-        Long existingId = productMapper.selectIdByCode(productCode);
-        ProductView view = existingId == null ? createProduct(normalized) : updateProduct(existingId, normalized);
+        Long existingId = preloadedIds == null
+                ? productMapper.selectIdByCode(productCode)
+                : preloadedIds.get(productCode);
+        ProductView view;
+        if (existingId == null) {
+            view = createProduct(normalized, false);
+        } else {
+            view = updateProduct(existingId, normalized, false);
+            // R48：导入更新补审计（见 doUpsertWarehouseByCode 同处注释）
+            recordMasterData(BIZ_TYPE_PRODUCT, view.getId(), view.getProductCode(), "导入更新商品");
+        }
         if (needsStatusChange(normalized, view.getStatus())) {
             view = (ProductView) changeStatus(CatalogResourceType.PRODUCT, view.getId(),
                     statusOf(normalized));
@@ -539,6 +825,66 @@ public class CatalogWriteService {
      */
     @Transactional(propagation = Propagation.NESTED, rollbackFor = Exception.class)
     public SkuView upsertSkuByCode(JsonNode body) {
+        return doUpsertSkuByCode(body);
+    }
+
+    /** 批量按编码 upsert SKU（{@code ADR-004 D5} Pass 1）。语义与限制同 {@link #upsertWarehousesByCode}。 */
+    @Transactional(propagation = Propagation.REQUIRED, rollbackFor = Exception.class)
+    public void upsertSkusByCode(List<JsonNode> bodies) {
+        if (bodies == null || bodies.isEmpty()) {
+            return;
+        }
+        // 轮 2 定向优化：整批一次 IN 查询预取 code→id，替代逐行 selectIdByCode。
+        // 数据依据：import-perf-profile 测得 10000 次 selectIdByCode = 19.1 s（占业务新建 32%）。
+        // 语义不变：selectList 同样受租户线约束（自动追加 team_id），跨团队同编码天然查不到。
+        Map<String, Long> preloadedIds = preloadSkuIdsByCode(bodies);
+        for (JsonNode body : bodies) {
+            doUpsertSkuByCode(body, preloadedIds);
+        }
+    }
+
+    /** SKU by-code upsert 的无事务内核（禁止标 {@code @Transactional}，理由见同名仓库方法）。 */
+    /** 单行出口（REST 与 Pass 2 重放）：逐行解析既有 id；与批量出口语义一致。 */
+    private SkuView doUpsertSkuByCode(JsonNode body) {
+        return doUpsertSkuByCode(body, null);
+    }
+
+    /**
+     * 整批预取 {@code sku_code → id}（轮 2 定向优化，依据 {@code import-perf-profile.txt}）。
+     *
+     * <p>一次 {@code IN} 查询代替逐行 {@code selectIdByCode}：后者实测 1.91 ms/次，
+     * 1 万行就是 19.1 s。此处<b>不改</b>既有 Mapper 方法，只复用 {@code BaseMapper.selectList}
+     * ——租户线照常追加 {@code team_id}，跨团队同编码仍查不到，与逐行解析<b>完全等价</b>。
+     *
+     * <p>缺失/空白的键直接跳过：交给下游 {@code requireText} 抛 {@code COM-0001}（行级失败），
+     * 预取阶段不改变错误语义。
+     */
+    private Map<String, Long> preloadSkuIdsByCode(List<JsonNode> bodies) {
+        Set<String> codes = new LinkedHashSet<>();
+        for (JsonNode body : bodies) {
+            String code = CatalogJson.text(body, "sku_code");
+            if (code != null && !code.isBlank()) {
+                codes.add(code);
+            }
+        }
+        if (codes.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Long> ids = new HashMap<>(codes.size() * 2);
+        for (SkuEntity row : skuMapper.selectList(new LambdaQueryWrapper<SkuEntity>()
+                .select(SkuEntity::getId, SkuEntity::getSkuCode)
+                .in(SkuEntity::getSkuCode, codes))) {
+            ids.put(row.getSkuCode(), row.getId());
+        }
+        return ids;
+    }
+
+    /**
+     * by-code upsert 的无事务内核。
+     *
+     * @param preloadedIds 整批预取的 {@code sku_code → id}；{@code null} 表示「未预取，逐行解析」
+     */
+    private SkuView doUpsertSkuByCode(JsonNode body, Map<String, Long> preloadedIds) {
         String skuCode = requireText(body, "sku_code");
         String productCode = requireText(body, "product_code");
 
@@ -552,10 +898,12 @@ public class CatalogWriteService {
                 code -> supplierMapper.selectIdByCode(code), "引用的供应商不存在");
 
         // ② 再解析既有 SKU：未命中 → 创建；命中 → 校验 product_id 不可变后更新
-        Long existingId = skuMapper.selectIdByCode(skuCode);
+        Long existingId = preloadedIds == null
+                ? skuMapper.selectIdByCode(skuCode)
+                : preloadedIds.get(skuCode);
         SkuView view;
         if (existingId == null) {
-            view = insertSku(productId, normalized);
+            view = insertSku(productId, normalized, false);
         } else {
             SkuEntity existing = skuMapper.selectById(existingId);
             if (existing != null && !productId.equals(existing.getProductId())) {
@@ -564,6 +912,8 @@ public class CatalogWriteService {
                                 "SKU 编码 " + skuCode + " 已存在且隶属于其它商品（product_id 不可变）", skuCode)));
             }
             view = updateSku(existingId, normalized);
+            // R48：导入更新补审计（见 doUpsertWarehouseByCode 同处注释）
+            recordMasterData(BIZ_TYPE_SKU, view.getId(), view.getSkuCode(), "导入更新 SKU");
         }
         if (needsStatusChange(normalized, view.getStatus())) {
             view = (SkuView) changeStatus(CatalogResourceType.SKU, view.getId(), statusOf(normalized));
@@ -734,8 +1084,15 @@ public class CatalogWriteService {
      * （{@code code}/{@code product_code}/{@code sku_code}——对象可能已软停用，故记快照）；
      * 操作者与团队取当前上下文（角色为「当时角色」快照）。
      *
-     * <p>只由<b>创建</b>与<b>启停</b>路径调用；更新（PATCH）路径由 Controller 上的
-     * {@code @Audited} 切面记录（见类级 Javadoc「审计埋点」）。
+     * <p>调用点共三类：
+     * <ul>
+     *   <li><b>创建</b>（{@code createXxx}）→ {@code "创建<资源名>"}；</li>
+     *   <li><b>启停</b>（{@code changeXxxStatus}）→ {@code "停用/启用<资源名>"}；</li>
+     *   <li><b>导入更新</b>（{@code doUpsertXxxByCode} 的更新分支）→ {@code "导入更新<资源名>"}
+     *       ——{@code R48}（{@code ADR-004} D4）：导入不经 Controller，{@code @Audited} 切面覆盖不到，
+     *       故必须在应用服务层补。REST 的 {@code PUT} 走 {@code updateXxx}（本方法<b>不</b>在那里调用），
+     *       仍由 {@code @Audited} 记一条，<b>不会</b>重复。</li>
+     * </ul>
      */
     private void recordMasterData(String bizType, Long id, String bizNo, String changeSummary) {
         TeamContext.Snapshot snapshot = TeamContext.get();

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.shoppilot.audit.application.AuditBufferScope;
 import com.shoppilot.audit.application.AuditWriteService;
 import com.shoppilot.audit.domain.model.AuditAction;
 import com.shoppilot.audit.domain.model.AuditEvent;
@@ -34,6 +35,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -77,13 +79,17 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       + {@code failed_rows += 该批行数} + 继续下一批。</li>
  * </ul>
  *
- * <h2>★ 行级 SAVEPOINT 的实现方式（与裁定 B/C 的衔接）</h2>
- * 行级 {@code SAVEPOINT} 由 {@code CatalogWriteService.upsertXxxByCode} 的
- * {@code @Transactional(propagation = NESTED)} 承担（详见该处 javadoc 的偏差说明）：
- * 若被调用方是 {@code REQUIRED}，Spring 会以「参与方」身份把<b>整个批次事务</b>置
- * {@code rollbackOnly}，导致 {@code UnexpectedRollbackException}、整批 500 行丢失——与 §12
- * 「行级错误不阻断其他行」矛盾。{@code NESTED} 在建 {@code SAVEPOINT} 后异常时
- * {@code rollbackToSavepoint}，不污染批次事务，正是 C1 要求的语义。
+ * <h2>★ 两遍式落库（{@code ADR-004 D5}，{@code B4-PERF} 轮 1）：去逐行 {@code SAVEPOINT}</h2>
+ * 旧实现（M3-B4）批内逐行调用 {@code upsertXxxByCode}（{@code NESTED}），每行两次
+ * {@code SAVEPOINT}/{@code RELEASE} 往返，1 万行 = 2 万次额外往返。现改为：
+ * <ul>
+ *   <li><b>Pass 1</b>（正常路径）：整批一个事务、调 {@code catalog.upsertXxxsByCode}({@code REQUIRED})、
+ *       <b>零</b> {@code SAVEPOINT}、循环内<b>零</b> catch；</li>
+ *   <li><b>Pass 2</b>（仅当 Pass 1 抛<b>行级</b>异常时）：逐行重放，{@code NESTED} 提供行级
+ *       {@code SAVEPOINT}，失败行隔离、成功行照常提交；</li>
+ *   <li>非行级异常（{@code C2}）不进 Pass 2，沿用「整批回滚 + 整批行记失败」。</li>
+ * </ul>
+ * 详见 {@link #writeRowBatch}。不变式 {@code success_rows + failed_rows = total_rows} 不变。
  *
  * <h2>幂等（裁定 E1/E2/E3）</h2>
  * <ul>
@@ -105,9 +111,14 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       不会绕过</b>该上限（上传/校验入口的补齐已登记待办）。</li>
  * </ul>
  *
- * <h2>裁定 I4：逐行审计不抑制</h2>
- * {@code catalog} 的写服务对每个对象写一行 {@code MASTER_DATA_STATUS_CHANGE}，故上万行导入会产生
- * 上万行审计。本批<b>接受</b>，不为性能特判抑制；性能实测单独报告该部分耗时与审计行数。
+ * <h2>审计：条数不减、提交粒度降到「每批一次」、无孤儿（{@code ADR-004} D1/D2/D3）</h2>
+ * {@code catalog} 的写服务对每个对象写一行 {@code MASTER_DATA_STATUS_CHANGE}（新建与
+ * <b>导入更新</b>都写，{@code R48}），故上万行导入仍产生上万行审计——<b>条数不抑制</b>
+ * （{@code ADR-004 D3} 红线）。改变的只是<b>提交粒度</b>：每个批次事务外各开一个
+ * {@link AuditBufferScope}，审计先入线程缓冲，业务事务<b>提交后</b>由 {@code afterCommit}
+ * 一次性 {@code recordAll}（一个独立事务、一次提交）；整批回滚则缓冲丢弃（{@code R45} 孤儿审计消除）。
+ * 旧实现为「每行一次 {@code REQUIRES_NEW} 提交」（1 万行 = 1 万次提交，约 85 s，
+ * 见 {@code DESIGN_REVIEW §5.1}）。
  */
 @Service
 public class ImportConfirmService {
@@ -210,9 +221,11 @@ public class ImportConfirmService {
         int totalRows = batch.getTotalRows() == null ? 0 : batch.getTotalRows();
 
         // ---- E3：expected_total_rows ----
+        // 文案订正（DESIGN_REVIEW §5.2 L3-1）：E3 是「批次行数与期望不符」，与幂等键无关——
+        // 旧文案「幂等键已被使用且本次请求内容与原请求不一致」会把排障引向幂等冲突（E4 场景）。
         Integer expected = request == null ? null : request.getExpectedTotalRows();
         if (expected != null && expected != totalRows) {
-            throw BizException.withDetails(ErrorCodes.COM_0009, "幂等键已被使用且本次请求内容与原请求不一致",
+            throw BizException.withDetails(ErrorCodes.COM_0009, "批次总行数与期望不一致",
                     List.of(new ApiErrorDetail("expected_total_rows",
                             "当前批次 total_rows 为 " + totalRows, expected)));
         }
@@ -280,49 +293,127 @@ public class ImportConfirmService {
     // =====================================================================
 
     /**
-     * 落库一个批次区间 {@code [from, to)}（一个事务，批间独立提交）。
+     * 落库一个批次区间 {@code [from, to)}（一个事务，批间独立提交）——<b>两遍式</b>（{@code ADR-004 D5}）。
      *
-     * <p>批内逐行：命中行级失败（{@link BizException} / {@link DuplicateKeyException}）→ 记
-     * {@code import_row_errors} 并继续；命中非业务异常 → 抛出以触发整批回滚，再由
-     * {@link #recordWholeBatchFailure} 在新的独立事务中把该批全部行记为失败。
+     * <h2>Pass 1（正常路径）：整批一个事务、零 {@code SAVEPOINT}、零行级 {@code catch}</h2>
+     * 批内一次性把全部行交给 {@code catalog} 的批量入口 {@code upsertXxxsByCode}({@code REQUIRED})：
+     * <ul>
+     *   <li>省掉每行 {@code SAVEPOINT}/{@code RELEASE} 两次往返（{@code DESIGN_REVIEW §5.1} 归因中
+     *       业务侧残差的主要成分之一）；</li>
+     *   <li>循环内<b>不</b> catch：任一行抛 {@code BizException}/{@code DuplicateKeyException} →
+     *       异常穿出 → 批次事务整体回滚 → 转 Pass 2。<b>不得</b>在此吞异常后继续
+     *       （参与方吞异常会让 {@code rollback-only} 在提交时炸成 {@code UnexpectedRollbackException}）。</li>
+     * </ul>
+     *
+     * <h2>Pass 2（失败路径）：逐行重放、行级 {@code NESTED} 隔离</h2>
+     * 仅当 Pass 1 的异常属<b>行级失败</b>（{@link #isRowLevelFailure}）时进入，逐行调用
+     * {@code upsertXxxByCode}（{@code NESTED} = 行级 {@code SAVEPOINT}）：失败行写
+     * {@code import_row_errors} 并继续，成功行照常提交。语义与单遍逐行实现<b>完全一致</b>
+     * （裁定 {@code C1}/{@code C1b}），只是把它降级成「只在出问题时才走」的慢路径。
+     *
+     * <p>非行级异常（裁定 {@code C2}）<b>不进入</b> Pass 2：整批回滚 + 该批全部行记 {@code ERROR}
+     * （见 {@link #recordWholeBatchFailure}）。
+     *
+     * <h2>审计（{@code ADR-004} D2 / {@code R45}）</h2>
+     * 每个批次事务（Pass 1 与 Pass 2 各一次）都用 {@link AuditBufferScope} 包住：
+     * <ul>
+     *   <li><b>提交成功</b> → {@code afterCommit} 一次性 {@code recordAll}（每批<b>一次</b>提交，
+     *       审计条数不变）；</li>
+     *   <li><b>整批回滚</b> → 缓冲随事务一起丢弃 ⇒ 该批审计 <b>0 条</b>（{@code R45} 孤儿审计消除）；</li>
+     *   <li>Pass 1 的缓冲随回滚丢弃、Pass 2 重新收集 ⇒ <b>不会</b>重复写审计。</li>
+     * </ul>
      */
     private void writeRowBatch(ImportBatchEntity batch, long teamId, ImportBizType bizType,
                                List<String> header, List<List<String>> rows,
                                Map<String, Integer> targetCol, int from, int to,
                                TeamContext.Snapshot snapshot) {
+        // ---------- Pass 1：整批一个事务，无 SAVEPOINT ----------
         try {
-            txTemplate.executeWithoutResult(tx -> {
-                int success = 0;
-                int failed = 0;
-                for (int i = from; i < to; i++) {
-                    int rowNo = i + 1;
-                    try {
-                        JsonNode body = buildRowBody(bizType, targetCol, rows.get(i));
-                        writeRow(bizType, body);
-                        success++;
-                    } catch (RuntimeException ex) {
-                        if (!isRowLevelFailure(ex)) {
-                            throw ex; // C2：非业务异常 → 交外层整批回滚
-                        }
-                        recordRowFailure(batch, teamId, rowNo, ex, header, rows.get(i), snapshot);
-                        failed++;
+            try (AuditBufferScope auditScope = new AuditBufferScope(auditWriteService)) {
+                txTemplate.executeWithoutResult(tx -> {
+                    List<JsonNode> bodies = new ArrayList<>(to - from);
+                    for (int i = from; i < to; i++) {
+                        bodies.add(buildRowBody(bizType, targetCol, rows.get(i)));
                     }
-                }
-                if (success + failed > 0) {
-                    // 计数与数据在同一批事务内累加（裁定 B-2）
-                    batchMapper.update(null, new LambdaUpdateWrapper<ImportBatchEntity>()
-                            .eq(ImportBatchEntity::getId, batch.getId())
-                            .eq(ImportBatchEntity::getTeamId, teamId)
-                            .setSql("success_rows = success_rows + " + success)
-                            .setSql("failed_rows = failed_rows + " + failed));
-                }
-            });
+                    upsertRowsByCode(bizType, bodies);
+                    accumulateRows(batch, teamId, bodies.size(), 0);
+                });
+            }
+            return; // Pass 1 全部成功
         } catch (RuntimeException | Error ex) {
-            // ---- C2：非业务异常 → 整批回滚（批内原子）+ 该批全部行记 ERROR + 继续下一批 ----
-            log.error("批次 {} 行区间 [{}, {}) 发生非业务异常，整批回滚", batch.getId(), from, to, ex);
+            boolean rowLevel = ex instanceof RuntimeException runtime && isRowLevelFailure(runtime);
+            if (!rowLevel) {
+                // ---- C2：非业务异常 → 整批回滚（缓冲同时丢弃）+ 该批全部行记 ERROR + 继续下一批 ----
+                log.error("批次 {} 行区间 [{}, {}) 发生非业务异常，整批回滚", batch.getId(), from, to, ex);
+                txTemplate.executeWithoutResult(tx -> recordWholeBatchFailure(batch, teamId, header, rows,
+                        from, to, snapshot));
+                return;
+            }
+            log.info("批次 {} 行区间 [{}, {}) 的 Pass 1 命中行级失败（{}），改走 Pass 2 逐行重放",
+                    batch.getId(), from, to, ex.toString());
+        }
+
+        // ---------- Pass 2：逐行重放，行级 NESTED 隔离 ----------
+        try {
+            try (AuditBufferScope auditScope = new AuditBufferScope(auditWriteService)) {
+                txTemplate.executeWithoutResult(tx -> {
+                    int success = 0;
+                    int failed = 0;
+                    for (int i = from; i < to; i++) {
+                        int rowNo = i + 1;
+                        try {
+                            JsonNode body = buildRowBody(bizType, targetCol, rows.get(i));
+                            writeRow(bizType, body);
+                            success++;
+                        } catch (RuntimeException ex) {
+                            if (!isRowLevelFailure(ex)) {
+                                throw ex; // C2：非业务异常 → 交外层整批回滚
+                            }
+                            recordRowFailure(batch, teamId, rowNo, ex, header, rows.get(i), snapshot);
+                            failed++;
+                        }
+                    }
+                    accumulateRows(batch, teamId, success, failed);
+                });
+            }
+        } catch (RuntimeException | Error ex) {
+            log.error("批次 {} 行区间 [{}, {}) 的 Pass 2 发生非业务异常，整批回滚", batch.getId(), from, to, ex);
             txTemplate.executeWithoutResult(tx -> recordWholeBatchFailure(batch, teamId, header, rows,
                     from, to, snapshot));
         }
+    }
+
+    /**
+     * 把一批 body 交给 {@code catalog} 的批量入口（{@code ADR-004 D5} Pass 1）。
+     *
+     * <p>{@code MODULE_BOUNDARIES §2.4}/{@code §2.3}：经 catalog 的 application 服务，
+     * <b>不</b>注入其 Mapper。<b>不得</b>在此 catch 任何异常。
+     */
+    private void upsertRowsByCode(ImportBizType bizType, List<JsonNode> bodies) {
+        switch (bizType) {
+            case PRODUCT -> catalogWriteService.upsertProductsByCode(bodies);
+            case SKU -> catalogWriteService.upsertSkusByCode(bodies);
+            case SUPPLIER -> catalogWriteService.upsertSuppliersByCode(bodies);
+            case WAREHOUSE -> catalogWriteService.upsertWarehousesByCode(bodies);
+            default -> throw new BizException(ErrorCodes.COM_0001, "该业务类型落库尚未支持（依赖表未建）");
+        }
+    }
+
+    /**
+     * 批次计数累加（与数据同一事务，裁定 B-2）。
+     *
+     * <p>用 {@code setSql("col = col + n")} 做<b>数据库侧自增</b>而非「读-改-写」：
+     * 批间并发时不会互相覆盖（各批只加自己的增量）。
+     */
+    private void accumulateRows(ImportBatchEntity batch, long teamId, int success, int failed) {
+        if (success + failed == 0) {
+            return;
+        }
+        batchMapper.update(null, new LambdaUpdateWrapper<ImportBatchEntity>()
+                .eq(ImportBatchEntity::getId, batch.getId())
+                .eq(ImportBatchEntity::getTeamId, teamId)
+                .setSql("success_rows = success_rows + " + success)
+                .setSql("failed_rows = failed_rows + " + failed));
     }
 
     /**
