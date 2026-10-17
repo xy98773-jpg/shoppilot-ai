@@ -24,9 +24,16 @@
             <groupId>com.shoppilot</groupId>
             <artifactId>shoppilot-common</artifactId>
         </dependency>
+        <!-- M3-T17（B9）：审计埋点。依据 MODULE_BOUNDARIES §2.10 / F-40——audit 是叶子模块，
+             任何业务模块均可依赖（catalog → audit、sales → audit 已有先例），inventory → audit 不成环。
+             B6 时本模块刻意不依赖 audit（「审计归 B9」），本批按任务书正式引入。
+             版本由父 pom 的 dependencyManagement 管理，此处不写 <version>。 -->
+        <dependency>
+            <groupId>com.shoppilot</groupId>
+            <artifactId>shoppilot-audit</artifactId>
+        </dependency>
         <!-- M3-T09（B6）：实体/DTO 的 getter/setter 与构造。与其它业务模块一致用 provided 作用域
-             （编译期注解处理，不进运行时依赖）。★ 本模块【不】依赖 audit：库存调整/冲销的审计埋点
-             属 M3-T17（B9），本批不得提前引入审计通道（B6 任务书 W12）。 -->
+             （编译期注解处理，不进运行时依赖）。 -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

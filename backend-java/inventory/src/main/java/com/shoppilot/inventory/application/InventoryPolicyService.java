@@ -3,6 +3,10 @@ package com.shoppilot.inventory.application;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.shoppilot.audit.application.AuditWriteService;
+import com.shoppilot.audit.domain.model.AuditAction;
+import com.shoppilot.audit.domain.model.AuditEvent;
+import com.shoppilot.audit.domain.model.AuditResult;
 import com.shoppilot.catalog.application.SkuQueryService;
 import com.shoppilot.catalog.application.WarehouseQueryService;
 import com.shoppilot.catalog.infrastructure.persistence.entity.SkuEntity;
@@ -19,8 +23,10 @@ import com.shoppilot.inventory.infrastructure.persistence.entity.ReplenishmentPo
 import com.shoppilot.inventory.infrastructure.persistence.mapper.ReplenishmentPolicyMapper;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.dao.DuplicateKeyException;
@@ -39,7 +45,11 @@ import org.springframework.transaction.annotation.Transactional;
      *   <li>校验：{@code sku_id}/{@code warehouse_id} 必填（{@code COM-0001}）、二者须同团队
      *       （{@code CAT-3004}）、参数不得为负（{@code COM-0001}；注：{@code CAT-3010} 未固化，本批降级使用）；</li>
  *   <li>团队间资源隔离由租户线自动追加 {@code team_id} 保证，跨团队行查不到；</li>
- *   <li><b>不</b>在此做审计埋点（归 B9，inventory 不得引入 audit 依赖）。</li>
+ *   <li><b>审计（M3-T17 / B9）</b>：upsert 与 disable <b>同用</b> {@code #7 REPLENISHMENT_POLICY_UPSERT}
+ *       （{@code §6-J.1 #7}「补货策略变更」覆盖创建/更新/停用），{@code biz_type=REPLENISHMENT_POLICY}、
+ *       {@code biz_id=} 策略行 id；一次 upsert <b>只写一条</b>（不在内部再调 disable，避免双写）；
+ *       写点在 {@code @Transactional} 方法体内、业务写库之后（{@code AuditWriteService} 走独立事务，
+ *       失败只记 ERROR 不抛，故无需 try/catch）；无 {@code TeamContext} 团队上下文时不写。</li>
  * </ul>
  */
 @Service
@@ -52,13 +62,16 @@ public class InventoryPolicyService {
     private final ReplenishmentPolicyMapper policyMapper;
     private final SkuQueryService skuQueryService;
     private final WarehouseQueryService warehouseQueryService;
+    private final AuditWriteService auditWriteService;
 
     public InventoryPolicyService(ReplenishmentPolicyMapper policyMapper,
                                   SkuQueryService skuQueryService,
-                                  WarehouseQueryService warehouseQueryService) {
+                                  WarehouseQueryService warehouseQueryService,
+                                  AuditWriteService auditWriteService) {
         this.policyMapper = policyMapper;
         this.skuQueryService = skuQueryService;
         this.warehouseQueryService = warehouseQueryService;
+        this.auditWriteService = auditWriteService;
     }
 
     // =====================================================================
@@ -143,14 +156,30 @@ public class InventoryPolicyService {
                 if (race == null) {
                     throw dke;
                 }
-                copyFields(req, race, operatorId);
-                policyMapper.updateById(race);
-                return toView(race);
+                return applyExisting(req, race, operatorId);
             }
+            // #7：创建也走「策略变更」（§6-J.1 #7 覆盖创建/更新/停用/启用），biz_id = 策略行 id；
+            // before 传 null ⇒ 新建的字段在摘要里显示为「无 → 值」，即 §6-J.3 的前后值口径
+            PolicyChange created = policyChange(entity.getId(), entity.getSkuId(), entity.getWarehouseId(),
+                    null, req);
+            recordPolicyAudit(new PolicyAudit(entity.getId(), created.summary(),
+                    created.before(), created.after()));
             return toView(entity);
         }
+        return applyExisting(req, existing, operatorId);
+    }
+
+    /**
+     * 更新既有策略（含并发竞态兜底路径）：<b>先</b>在 before 快照上算差异 → 覆盖字段 → 写库 → 写审计。
+     *
+     * <p>顺序不可颠倒：{@link #copyFields} 会把 before 快照就地改掉，之后再算差异永远是「无变化」。
+     */
+    private PolicyView applyExisting(PolicyRequest req, ReplenishmentPolicyEntity existing, Long operatorId) {
+        PolicyChange change = policyChange(existing.getId(), existing.getSkuId(), existing.getWarehouseId(),
+                existing, req);
         copyFields(req, existing, operatorId);
         policyMapper.updateById(existing);
+        recordPolicyAudit(new PolicyAudit(existing.getId(), change.summary(), change.before(), change.after()));
         return toView(existing);
     }
 
@@ -164,10 +193,129 @@ public class InventoryPolicyService {
         if (entity == null) {
             throw new BizException(ErrorCodes.CAT_3001, "补货策略不存在");
         }
+        Integer beforeEnabled = entity.getIsEnabled();
         entity.setIsEnabled(0);
         entity.setUpdatedBy(currentOperatorId());
         policyMapper.updateById(entity);
+        recordPolicyAudit(new PolicyAudit(id, "停用策略 " + id,
+                Map.of("is_enabled", beforeEnabled == null ? 0 : beforeEnabled),
+                Map.of("is_enabled", 0)));
         return toView(entity);
+    }
+
+    // =====================================================================
+    // 审计（M3-T17 / B9，§6-J.1 #7）
+    // =====================================================================
+
+    /**
+     * 算「策略变更」的前后差异（<b>必须在 {@link #copyFields} 之前调用</b>）。
+     *
+     * <p>只记<b>实际变化</b>的字段（{@code §6-J.3} 前后值口径）：{@code null → 值} 记 {@code 无 → 值}，
+     * {@code 值 → null} 记 {@code 值 → 无}（{@code copyFields} 是<b>全量替换</b>，未传的字段会被清空，
+     * 属真实变更，不能漏记）。
+     */
+    private PolicyChange policyChange(Long policyId, Long skuId, Long warehouseId,
+                                      ReplenishmentPolicyEntity before, PolicyRequest req) {
+        List<String> changes = new ArrayList<>();
+        Map<String, Object> beforeFields = new LinkedHashMap<>();
+        Map<String, Object> afterFields = new LinkedHashMap<>();
+
+        diff(changes, beforeFields, afterFields, "安全库存", "safety_stock_qty",
+                before == null ? null : before.getSafetyStockQty(), req.getSafetyStockQty());
+        diff(changes, beforeFields, afterFields, "提前期天数", "lead_time_days",
+                before == null ? null : before.getLeadTimeDays(), req.getLeadTimeDays());
+        diff(changes, beforeFields, afterFields, "补货周期天数", "coverage_days",
+                before == null ? null : before.getCoverageDays(), req.getCoverageDays());
+        diff(changes, beforeFields, afterFields, "安全系数", "safety_ratio",
+                before == null ? null : before.getSafetyRatio(), req.getSafetyRatio());
+        diff(changes, beforeFields, afterFields, "最小起订量", "moq",
+                before == null ? null : before.getMoq(), req.getMoq());
+        diff(changes, beforeFields, afterFields, "订购倍数", "order_multiple",
+                before == null ? null : before.getOrderMultiple(), req.getOrderMultiple());
+        diff(changes, beforeFields, afterFields, "数量步长", "qty_step",
+                before == null ? null : before.getQtyStep(), req.getQtyStep());
+        diff(changes, beforeFields, afterFields, "需求窗口天数", "window_days",
+                before == null ? null : before.getWindowDays(), req.getWindowDays());
+        diff(changes, beforeFields, afterFields, "最小覆盖天数", "min_days",
+                before == null ? null : before.getMinDays(), req.getMinDays());
+        diff(changes, beforeFields, afterFields, "高波动阈值", "cv_high",
+                before == null ? null : before.getCvHigh(), req.getCvHigh());
+        diff(changes, beforeFields, afterFields, "滞销判定天数", "slow_moving_days",
+                before == null ? null : before.getSlowMovingDays(), req.getSlowMovingDays());
+        diff(changes, beforeFields, afterFields, "超储判定天数", "overstock_days",
+                before == null ? null : before.getOverstockDays(), req.getOverstockDays());
+        // is_enabled：实体是 Integer，请求是 Boolean（null 与 copyFields 同口径视为 0）
+        diff(changes, beforeFields, afterFields, "启用状态", "is_enabled",
+                before == null ? null : before.getIsEnabled(),
+                req.getIsEnabled() != null && req.getIsEnabled() ? 1 : 0);
+        diff(changes, beforeFields, afterFields, "备注", "remark",
+                before == null ? null : before.getRemark(), req.getRemark());
+
+        String summary = "策略 " + policyId + " 变更：sku=" + skuId + " 仓库=" + warehouseId
+                + (changes.isEmpty() ? "（无字段变化）" : " " + String.join(" / ", changes));
+        return new PolicyChange(summary, beforeFields, afterFields);
+    }
+
+    private static void diff(List<String> changes, Map<String, Object> beforeFields,
+                             Map<String, Object> afterFields, String label, String column,
+                             Object oldValue, Object newValue) {
+        if (sameValue(oldValue, newValue)) {
+            return;
+        }
+        changes.add(label + " " + valueText(oldValue) + " → " + valueText(newValue));
+        beforeFields.put(column, oldValue);
+        afterFields.put(column, newValue);
+    }
+
+    /** 数值按 {@code compareTo} 判等（{@code 8.0} 与 {@code 8.000} 是同一值，不能记成变更）。 */
+    private static boolean sameValue(Object oldValue, Object newValue) {
+        if (oldValue instanceof BigDecimal a && newValue instanceof BigDecimal b) {
+            return a.compareTo(b) == 0;
+        }
+        return Objects.equals(oldValue, newValue);
+    }
+
+    private static String valueText(Object value) {
+        if (value == null) {
+            return "无";
+        }
+        return value instanceof BigDecimal decimal ? decimal.toPlainString() : String.valueOf(value);
+    }
+
+    /**
+     * 写策略审计（{@code #7}）：{@code biz_id} = 策略行 id，{@code biz_type=REPLENISHMENT_POLICY}。
+     *
+     * <p>{@code AuditWriteService.record} 自带失败兜底（只记 ERROR 不抛），故不 try/catch；
+     * 缺团队上下文即跳过，禁止造无主审计行。
+     */
+    private void recordPolicyAudit(PolicyAudit audit) {
+        TeamContext.Snapshot snap = TeamContext.get();
+        if (snap == null || snap.teamId() == null) {
+            return;
+        }
+        auditWriteService.record(AuditEvent.builder()
+                .teamId(snap.teamId())
+                .action(AuditAction.REPLENISHMENT_POLICY_UPSERT)
+                .bizType("REPLENISHMENT_POLICY")
+                .bizId(audit.bizId())
+                .operatorId(snap.userId())
+                .operatorName(snap.username())
+                .operatorRole(snap.roles().isEmpty() ? null : snap.roles().get(0))
+                .result(AuditResult.SUCCESS)
+                .changeSummary(audit.summary())
+                .before(audit.beforeFields().isEmpty() ? null : audit.beforeFields())
+                .after(audit.afterFields().isEmpty() ? null : audit.afterFields())
+                .build());
+    }
+
+    /** 一条策略审计的载荷（摘要 + 前后字段；记录类型避免可变状态外泄）。 */
+    private record PolicyAudit(Long bizId, String summary, Map<String, Object> beforeFields,
+                               Map<String, Object> afterFields) {
+    }
+
+    /** {@link #policyChange} 的产物。 */
+    private record PolicyChange(String summary, Map<String, Object> before,
+                                Map<String, Object> after) {
     }
 
     // =====================================================================

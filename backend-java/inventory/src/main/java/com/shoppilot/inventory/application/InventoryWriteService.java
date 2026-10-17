@@ -1,6 +1,10 @@
 package com.shoppilot.inventory.application;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.shoppilot.audit.application.AuditWriteService;
+import com.shoppilot.audit.domain.model.AuditAction;
+import com.shoppilot.audit.domain.model.AuditEvent;
+import com.shoppilot.audit.domain.model.AuditResult;
 import com.shoppilot.common.context.TeamContext;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.util.QtyUtils;
@@ -20,6 +24,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Supplier;
@@ -75,13 +80,29 @@ import org.springframework.transaction.support.TransactionTemplate;
  *   <li>{@code INV-5002}（409）/ {@code INV-5003}（409）—— 乐观锁重试耗尽 / 幂等键内容冲突。</li>
  * </ul>
  *
+ * <h2>审计埋点（{@code M3-T17} / {@code B9}，{@code DESIGN_BASIS §9.17} / {@code DATABASE_DESIGN §6-J.1}）</h2>
+ * <ul>
+ *   <li><b>覆盖三条</b>：{@code #11 INVENTORY_MANUAL_ADJUST}（{@code biz_type=INVENTORY_BALANCE}）、
+ *       {@code #12 INVENTORY_COUNT_ADJUST}（{@code INVENTORY_BALANCE}）、
+ *       {@code #13 INVENTORY_REVERSE}（{@code INVENTORY_TRANSACTION}）。</li>
+ *   <li><b>只写成功</b>：审计写在 {@link #runWithRetry} <b>之外</b>的最终成功点——写进重试单元会
+ *       「重试重复写」或「随 {@code SAVEPOINT} 回滚丢失」。失败路径（{@code INV-5003/5005/5006/…}）
+ *       直接抛异常，不产生审计行。</li>
+ *   <li><b>不写「无变更」</b>：幂等重放（{@code idempotentHit=true}，含并发首次 upsert 的竞态重判）
+ *       与盘点差额为 0（{@code §5.5} 步骤 G 不写流水）一律<b>不写审计</b>——重放的语义是「上次已记过」，
+ *       再写一条会把同一次变更计成两次，且 {@code occurred_at}/{@code 前后值} 都不是本次事实。</li>
+ *   <li><b>{@code biz_id} 口径</b>：调整 → 本次新增流水 id（余额行 id 未在 {@code StockChangeResult}
+ *       暴露，流水 id 是唯一可追溯键）；冲销 → <b>被冲销的原流水 id</b>，新流水 id 写进
+ *       {@code change_summary}。</li>
+ *   <li><b>无团队上下文不写</b>：{@code team_id} / 操作人一律取 {@link TeamContext}，
+ *       缺团队即跳过，<b>不造无主审计行</b>。</li>
+ * </ul>
+ *
  * <h2>本批<b>刻意不做</b>的事（边界，勿在本类补）</h2>
  * <ul>
  *   <li><b>不做角色校验</b>：{@code INV-5007}（{@code MANUAL_ADJUST} 需 {@code ADMIN}+）属 API 层
  *       {@code M3-T11}（{@code INVENTORY_WORKFLOW §5.5}「角色校验」步骤）；服务层读角色会与
  *       {@code @RequireRole} 切面重复且难以在跨模块调用时判定。</li>
- *   <li><b>不做审计埋点</b>：{@code INVENTORY_COUNT_ADJUST} / {@code INVENTORY_MANUAL_ADJUST} /
- *       {@code INVENTORY_REVERSE} 归 {@code M3-T17}（{@code B9}）；本模块 pom 亦<b>未</b>依赖 {@code audit}。</li>
  *   <li><b>不构造幂等键</b>：{@code idempotency_key} 由调用方按 {@code §8.3}
  *       {@code <txn_type>:<biz_type>:<biz_ref_id>:<sku_id>[:<suffix>]} 构造后传入，本类只校验
  *       「非空 + 长度 ≤ 128」。</li>
@@ -107,15 +128,18 @@ public class InventoryWriteService {
     private final InventoryBalanceMapper balanceMapper;
     private final InventoryTransactionMapper transactionMapper;
     private final InventoryBalanceUpdater balanceUpdater;
+    private final AuditWriteService auditWriteService;
     private final TransactionTemplate attemptTemplate;
 
     public InventoryWriteService(InventoryBalanceMapper balanceMapper,
                                  InventoryTransactionMapper transactionMapper,
                                  InventoryBalanceUpdater balanceUpdater,
+                                 AuditWriteService auditWriteService,
                                  PlatformTransactionManager transactionManager) {
         this.balanceMapper = balanceMapper;
         this.transactionMapper = transactionMapper;
         this.balanceUpdater = balanceUpdater;
+        this.auditWriteService = auditWriteService;
         this.attemptTemplate = new TransactionTemplate(transactionManager);
         // ★ 重试单元 = SAVEPOINT（见类注释）；无外层事务时 Spring 退化为 REQUIRED。
         this.attemptTemplate.setPropagationBehavior(TransactionTemplate.PROPAGATION_NESTED);
@@ -206,14 +230,20 @@ public class InventoryWriteService {
         requireAdjustQuantity(targetQty, "target_qty");
         requireReason(reason);
         String key = requireIdempotencyKey(idempotencyKey);
-        return runWithRetry(() -> attemptCountAdjust(skuId, warehouseId, targetQty, reason, bizRefId, key));
+        // ★ 审计必须在 runWithRetry 之外（见类注释「审计埋点」第 2 条）
+        StockChangeResult result = runWithRetry(
+                () -> attemptCountAdjust(skuId, warehouseId, targetQty, reason, bizRefId, key));
+        recordAdjustAudit(AuditAction.INVENTORY_COUNT_ADJUST, InventoryTxnType.COUNT_ADJUST.name(),
+                skuId, warehouseId, reason, result);
+        return result;
     }
 
     /**
      * 手工调整（{@code §5.5}）：直接写带符号增量。
      *
      * <p>{@code qtyDelta = 0} → {@code INV-5005}（400，请求不合法）；调整后为负 → {@code INV-5006}（409）。
-     * 角色校验（{@code INV-5007}）与审计不在此层，见类注释「本批刻意不做的事」。
+     * 角色校验（{@code INV-5007}）在 API 层（{@code InventoryController}）；审计在本方法
+     * {@code runWithRetry} <b>之外</b>的最终成功点写入（{@code #11}，{@code B9}）。
      *
      * @throws BizException {@code INV-5004} / {@code INV-5005} / {@code INV-5006} / {@code INV-5011}
      */
@@ -227,7 +257,11 @@ public class InventoryWriteService {
         }
         requireReason(reason);
         String key = requireIdempotencyKey(idempotencyKey);
-        return runWithRetry(() -> attemptManualAdjust(skuId, warehouseId, qtyDelta, reason, key));
+        StockChangeResult result = runWithRetry(
+                () -> attemptManualAdjust(skuId, warehouseId, qtyDelta, reason, key));
+        recordAdjustAudit(AuditAction.INVENTORY_MANUAL_ADJUST, InventoryTxnType.MANUAL_ADJUST.name(),
+                skuId, warehouseId, reason, result);
+        return result;
     }
 
     /**
@@ -245,7 +279,10 @@ public class InventoryWriteService {
             rollbackFor = Exception.class)
     public StockChangeResult applyReversal(long txnId, String reason, String idempotencyKey) {
         String key = requireIdempotencyKey(idempotencyKey);
-        return runWithRetry(() -> attemptReversal(txnId, reason, key));
+        // 冲销需要原流水的 sku/warehouse 才能拼出可追溯摘要，故让尝试单元带回上下文（不改对外返回类型）
+        ReversalOutcome outcome = runWithRetry(() -> attemptReversal(txnId, reason, key));
+        recordReversalAudit(txnId, reason, outcome);
+        return outcome.result();
     }
 
     // =====================================================================
@@ -376,7 +413,7 @@ public class InventoryWriteService {
     }
 
     /** 冲销：三态校验（不存在 / 本身是 REVERSAL / 已被冲销）后再写反向流水。 */
-    private StockChangeResult attemptReversal(long originalTxnId, String reason, String key) {
+    private ReversalOutcome attemptReversal(long originalTxnId, String reason, String key) {
         long teamId = currentTeamId();
         Long operatorId = currentOperatorId();
         // 租户线自动追加 team_id：异团队流水查不到 → 按「不存在」处理（§5.6 步骤 C，INV-5008）
@@ -395,10 +432,12 @@ public class InventoryWriteService {
         StockChangeResult replay = replayIfIdempotent(InventoryTxnType.REVERSAL, InventoryBizType.REVERSAL,
                 originalTxnId, original.getSkuId(), original.getWarehouseId(), delta, false, key, balance);
         if (replay != null) {
-            return replay;
+            return new ReversalOutcome(replay, original.getSkuId(), original.getWarehouseId());
         }
-        return writeChange(teamId, balance, InventoryTxnType.REVERSAL, InventoryBizType.REVERSAL, delta,
-                originalTxnId, originalTxnId, reason, key, operatorId, ErrorCodes.INV_5006);
+        StockChangeResult result = writeChange(teamId, balance, InventoryTxnType.REVERSAL,
+                InventoryBizType.REVERSAL, delta, originalTxnId, originalTxnId, reason, key, operatorId,
+                ErrorCodes.INV_5006);
+        return new ReversalOutcome(result, original.getSkuId(), original.getWarehouseId());
     }
 
     /**
@@ -510,8 +549,11 @@ public class InventoryWriteService {
      *
      * <p>只对 {@link OptimisticConflict} 重试；其余异常（含业务异常、数据库约束错误）立即上抛，
      * 由外层事务整体回滚——<b>不把「参数错」「库存不足」这类确定性失败当冲突重试</b>。
+     *
+     * <p>返回类型泛型化仅为让冲销的尝试单元带回 {@code sku/warehouse}（拼审计摘要用），
+     * 语义与重试骨架无关；其余调用方仍是 {@code StockChangeResult}。
      */
-    private StockChangeResult runWithRetry(Supplier<StockChangeResult> attempt) {
+    private <T> T runWithRetry(Supplier<T> attempt) {
         for (int attemptNo = 1; attemptNo <= MAX_ATTEMPTS; attemptNo++) {
             try {
                 return attemptTemplate.execute(status -> attempt.get());
@@ -535,6 +577,80 @@ public class InventoryWriteService {
             Thread.currentThread().interrupt();
             throw new BizException(ErrorCodes.COM_0002, "库存写入重试被中断", ex);
         }
+    }
+
+    // =====================================================================
+    // 审计埋点（M3-T17 / B9）
+    // =====================================================================
+
+    /**
+     * 调整类审计（{@code #11 MANUAL_ADJUST} / {@code #12 COUNT_ADJUST}）：{@code biz_id} = 本次新增流水 id。
+     *
+     * <p>两类「无变更」的成功一律不写：幂等重放（{@code idempotentHit}）与盘点差额为 0
+     * （{@code txnId == null}，{@code §5.5} 步骤 G 不写流水）——详见类注释「审计埋点」第 3 条。
+     */
+    private void recordAdjustAudit(AuditAction action, String txnTypeLabel, long skuId, long warehouseId,
+                                   String reason, StockChangeResult result) {
+        if (result == null || result.idempotentHit() || result.txnId() == null) {
+            return;
+        }
+        String before = qtyText(result.qtyBefore());
+        String after = qtyText(result.qtyAfter());
+        String summary = "数量调整 sku=" + skuId + " 仓库=" + warehouseId + " " + before + " → " + after
+                + "（" + txnTypeLabel + "，原因：" + reason + "，流水 " + result.txnId() + "）";
+        recordAudit(action, "INVENTORY_BALANCE", result.txnId(), summary, before, after);
+    }
+
+    /**
+     * 冲销审计（{@code #13 INVENTORY_REVERSE}）：{@code biz_id} = <b>被冲销的原流水 id</b>
+     * （{@code DATABASE_DESIGN §6-J.1 #13} 的可追溯键），新生成的 {@code REVERSAL} 流水 id 写进摘要。
+     */
+    private void recordReversalAudit(long originalTxnId, String reason, ReversalOutcome outcome) {
+        if (outcome == null || outcome.result() == null || outcome.result().idempotentHit()) {
+            return;
+        }
+        StockChangeResult result = outcome.result();
+        String before = qtyText(result.qtyBefore());
+        String after = qtyText(result.qtyAfter());
+        String summary = "冲销流水 " + originalTxnId + " → 新流水 " + result.txnId()
+                + "，sku=" + outcome.skuId() + " 仓库=" + outcome.warehouseId()
+                + " " + before + " → " + after + "（原因：" + reason + "）";
+        recordAudit(AuditAction.INVENTORY_REVERSE, "INVENTORY_TRANSACTION", originalTxnId, summary, before, after);
+    }
+
+    /**
+     * 统一写审计。
+     *
+     * <p>★ 不包 {@code AuditBufferScope}、不 try/catch：{@code AuditWriteService.record} 自带
+     * 「失败只记 ERROR、不抛」兜底（{@code AuditWriteService:90-104}）；{@code AuditBufferScope}
+     * 是导入批量场景的优化（{@code ADR-004}），本批是请求级单条。
+     *
+     * <p>{@code team_id} / 操作人一律取自 {@link TeamContext}，缺团队即跳过（<b>禁止造无主审计行</b>）。
+     */
+    private void recordAudit(AuditAction action, String bizType, Long bizId, String summary,
+                             String before, String after) {
+        TeamContext.Snapshot snap = TeamContext.get();
+        if (snap == null || snap.teamId() == null) {
+            // 无团队上下文（理论上 REST 路径不会发生）则不写审计，避免造无主审计行
+            return;
+        }
+        auditWriteService.record(AuditEvent.builder()
+                .teamId(snap.teamId())
+                .action(action)
+                .bizType(bizType)
+                .bizId(bizId)
+                .operatorId(snap.userId())
+                .operatorName(snap.username())
+                .operatorRole(snap.roles().isEmpty() ? null : snap.roles().get(0))
+                .result(AuditResult.SUCCESS)
+                .changeSummary(summary)
+                .before(before == null ? null : Map.of("on_hand_qty", before))
+                .after(after == null ? null : Map.of("on_hand_qty", after))
+                .build());
+    }
+
+    private static String qtyText(BigDecimal value) {
+        return value == null ? "-" : value.toPlainString();
     }
 
     // =====================================================================
@@ -629,6 +745,15 @@ public class InventoryWriteService {
 
     /** 余额行的只读快照（{@code version} 是乐观锁比较基准）。 */
     private record BalanceRow(long id, long warehouseId, long skuId, BigDecimal onHandQty, int version) {
+    }
+
+    /**
+     * 冲销尝试单元的结果 + 原流水的 {@code sku/warehouse}（仅供审计摘要拼接，不对外暴露）。
+     *
+     * <p>不带出来就得在审计阶段再查一次原流水；{@code StockChangeResult} 又是跨模块契约
+     * （{@code MODULE_BOUNDARIES §2.5}），不因审计需求扩字段（{@code R64} 同理）。
+     */
+    private record ReversalOutcome(StockChangeResult result, Long skuId, Long warehouseId) {
     }
 
     /**
