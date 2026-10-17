@@ -1,6 +1,7 @@
 package com.shoppilot.importdata.application;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.shoppilot.audit.application.AuditWriteService;
 import com.shoppilot.audit.domain.model.AuditAction;
 import com.shoppilot.audit.domain.model.AuditEvent;
@@ -17,14 +18,21 @@ import com.shoppilot.importdata.infrastructure.storage.LocalImportFileStorage;
 import com.shoppilot.importdata.infrastructure.storage.LocalImportFileStorage.StoredFile;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
@@ -61,8 +69,26 @@ public class ImportUploadService {
     /** 扩展名白名单（小写比较；{@code IMPORT_WORKFLOW §8.1}）。 */
     private static final Set<String> ALLOWED_EXTENSIONS = Set.of("csv", "xlsx", "xls");
 
+    /**
+     * 可强制重导的批次状态（<b>终态</b>）。
+     *
+     * <p>反向定义更安全：{@code UPLOADED}/{@code PARSED}/{@code MAPPED}/{@code VALIDATED}/
+     * {@code IMPORTING} 五个<b>非终态</b>一律拒（{@code IMP-4005}）——批次还在流程中时重导，
+     * 会产生两条并行推进、共用同一份原始文件的批次，终态写回时互相覆盖。
+     *
+     * <p>{@code CANCELLED} 一并允许：它已释放槽位（{@code §6-E.4}），重导等价于「重新开始」，
+     * 与 {@code FAILED} 同构。
+     */
+    private static final Set<ImportBatchStatus> REIMPORTABLE_STATUSES = Set.of(
+            ImportBatchStatus.COMPLETED, ImportBatchStatus.PARTIAL_SUCCESS,
+            ImportBatchStatus.FAILED, ImportBatchStatus.CANCELLED,
+            ImportBatchStatus.DUPLICATE_REJECTED);
+
     /** 契约原文的 IMP-4001 提示语。 */
     private static final String IMP_4001_MESSAGE = "仅支持 CSV 或 Excel 文件，且不超过 20MB";
+
+    /** {@code IMP-4011} 的契约原文提示语（{@code ERROR_CODES §2.5}）。 */
+    private static final String IMP_4011_MESSAGE = "原始文件已不可用，请重新上传";
 
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyyMMdd");
 
@@ -70,12 +96,24 @@ public class ImportUploadService {
     private final LocalImportFileStorage fileStorage;
     private final AuditWriteService auditWriteService;
 
+    /**
+     * 强制重导的显式事务模板。
+     *
+     * <p>为什么<b>不</b>用 {@code @Transactional}：审计必须在<b>业务事务提交之后</b>才写。
+     * {@code AuditWriteService#record} 走 {@code REQUIRES_NEW}，若在事务内调用而业务随后回滚，
+     * 会留下一条「说成功了但没成功」的孤儿审计（{@code R45} 同类问题）。用 {@link TransactionTemplate}
+     * 把「三步槽位操作」收在一个事务里、提交后再埋点，顺序显式可见。
+     */
+    private final TransactionTemplate txTemplate;
+
     public ImportUploadService(ImportBatchMapper importBatchMapper,
                                LocalImportFileStorage fileStorage,
-                               AuditWriteService auditWriteService) {
+                               AuditWriteService auditWriteService,
+                               PlatformTransactionManager transactionManager) {
         this.importBatchMapper = importBatchMapper;
         this.fileStorage = fileStorage;
         this.auditWriteService = auditWriteService;
+        this.txTemplate = new TransactionTemplate(transactionManager);
     }
 
     /**
@@ -130,6 +168,212 @@ public class ImportUploadService {
         ImportBatchEntity saved = importBatchMapper.selectById(entity.getId());
         recordAudit(snapshot, teamId, saved == null ? entity : saved, bizType);
         return UploadOutcome.created(saved == null ? entity : saved);
+    }
+
+    // =====================================================================
+    // 强制重导（FORCE_REIMPORT，R84 / M3-B10.7）
+    // =====================================================================
+
+    /**
+     * 强制重导（{@code POST /api/v1/import/batches/{id}/reimport}）。
+     *
+     * <h2>为什么需要它（{@code R84}）</h2>
+     * 文件级幂等的依据是 {@code (team_id, file_hash, biz_type)}（{@code §9.3}/{@code §8.9}），
+     * 而「改名绕不过哈希」（{@code §8.9} 要点 3）——同一份文件一旦导入成功，若没有本端点，
+     * 用户<b>永远</b>无法重导（除非改内容，那正是幂等要防的绕过方式），导错数据后只能等运维改库。
+     *
+     * <h2>★ 三步槽位操作（{@code DATABASE_DESIGN §6-E.4} / {@code IMPORT_WORKFLOW §8.10}）</h2>
+     * <ol>
+     *   <li><b>先插入</b>新批次：{@code dedupe_hash = NULL}（暂不占槽位）、{@code status = UPLOADED}、
+     *       {@code attempt_no = 原 + 1}，取得 {@code new_id}；</li>
+     *   <li><b>释放旧槽位</b>：{@code UPDATE ... SET dedupe_hash = NULL,
+     *       superseded_by_batch_id = :new_id WHERE id = :old_id}；</li>
+     *   <li><b>占用新槽位</b>：{@code UPDATE ... SET dedupe_hash = :file_hash WHERE id = :new_id}。</li>
+     * </ol>
+     * 三步在<b>同一事务</b>内。顺序不能颠倒：若先让新批次占槽位，会直接撞
+     * {@code uk_imp_team_hash_biz}（旧批次此刻仍占着同一个 {@code (team, hash, biz)}）。
+     * 中间态（旧已释放、新未占位）只存在于本事务内，不会被外部查询看到（{@code §6-E.4}
+     * 要求的「避免中间态被并发判定为可用槽位」）。
+     *
+     * <h2>副本字段</h2>
+     * 复制 {@code storage_path} / {@code file_hash} / {@code file_size} / {@code file_name} /
+     * {@code biz_type} / {@code template_version}；<b>不</b>复制 {@code field_mapping_json} /
+     * {@code parse_options_json}（新批次从 {@code UPLOADED} 重新走流程，映射由用户当次确认）。
+     * {@code duplicate_of_batch_id} 保持 {@code NULL}——它不是「被拒」，是用户主动重导。
+     *
+     * <h2>错误出口</h2>
+     * <ul>
+     *   <li>批次不存在 / 跨团队 → {@code 404 IMP-4007}（<b>不</b>用 {@code IMP-4004}：
+     *       那是「文件重复」，会误导用户去改文件）；</li>
+     *   <li>原批未终结（{@code UPLOADED}–{@code IMPORTING}）→ {@code 422 IMP-4005}；</li>
+     *   <li>原批已被取代（{@code superseded_by_batch_id} 非空）→ {@code 422 IMP-4005}，避免链条分叉；</li>
+     *   <li>原始文件丢失/不可读 → {@code 410 IMP-4011}；</li>
+     *   <li>并发重导同一原批（守卫更新影响 0 行）或新槽位被占（唯一键冲突）→ {@code 409 IMP-4004}。
+     *       两种情况下整个事务回滚，<b>不会</b>留下两个都占槽位的新批次。</li>
+     * </ul>
+     *
+     * @param originBatchId 原批次 ID
+     * @return 新建的批次（{@code status = UPLOADED}，与 upload 的 201 同一视图）
+     */
+    public ImportBatchEntity reimport(long originBatchId) {
+        TeamContext.Snapshot snapshot = TeamContext.require();
+        long teamId = snapshot.teamId();
+
+        ImportBatchEntity created = txTemplate.execute(status -> doReimport(originBatchId, snapshot, teamId));
+        if (created == null) {
+            // 不可达（execute 有返回值）；仅为空安全，不吞任何异常
+            throw new IllegalStateException("强制重导未返回批次");
+        }
+        // ★ 提交之后才埋点：审计随之生效，业务回滚则一条不留（不留「假成功」的审计）
+        recordReimportAudit(snapshot, teamId, created, originBatchId);
+        return created;
+    }
+
+    /** 三步槽位操作的具体实现（全程在同一事务内，由 {@link #reimport} 的模板包裹）。 */
+    private ImportBatchEntity doReimport(long originBatchId, TeamContext.Snapshot snapshot, long teamId) {
+        ImportBatchEntity origin = importBatchMapper.selectOne(new LambdaQueryWrapper<ImportBatchEntity>()
+                .eq(ImportBatchEntity::getId, originBatchId)
+                .eq(ImportBatchEntity::getTeamId, teamId));
+        if (origin == null) {
+            throw new BizException(ErrorCodes.IMP_4007, "导入批次不存在");
+        }
+
+        ImportBatchStatus status = parseStatus(origin.getStatus());
+        if (status == null || !REIMPORTABLE_STATUSES.contains(status)) {
+            throw BizException.withDetails(ErrorCodes.IMP_4005, "当前批次状态不允许强制重导",
+                    List.of(new ApiErrorDetail("status",
+                            "仅终态批次可强制重导（COMPLETED / PARTIAL_SUCCESS / FAILED / CANCELLED / "
+                                    + "DUPLICATE_REJECTED），当前状态 " + origin.getStatus(),
+                            origin.getStatus())));
+        }
+        if (origin.getSupersededByBatchId() != null) {
+            throw BizException.withDetails(ErrorCodes.IMP_4005, "当前批次状态不允许强制重导",
+                    List.of(new ApiErrorDetail("superseded_by_batch_id",
+                            "该批次已被批次 " + origin.getSupersededByBatchId()
+                                    + " 取代，不允许再次重导（避免重导链条分叉）",
+                            String.valueOf(origin.getSupersededByBatchId()))));
+        }
+        assertOriginalFileReadable(origin);
+
+        // ① 插入新批次（dedupe_hash = NULL，先不占槽位）
+        ImportBatchEntity created = copyForReimport(origin, snapshot, teamId, nextBatchNo(teamId));
+        importBatchMapper.insert(created);
+
+        // ② 释放旧槽位（守卫：只有「尚未被取代」时才释放——这是并发重导的串行化点）
+        int released = importBatchMapper.update(null, new LambdaUpdateWrapper<ImportBatchEntity>()
+                .eq(ImportBatchEntity::getId, originBatchId)
+                .eq(ImportBatchEntity::getTeamId, teamId)
+                .isNull(ImportBatchEntity::getSupersededByBatchId)
+                .set(ImportBatchEntity::getSupersededByBatchId, created.getId())
+                .set(ImportBatchEntity::getDedupeHash, null)
+                .set(ImportBatchEntity::getUpdatedBy, snapshot.userId()));
+        if (released == 0) {
+            // 并发的另一方已完成重导（其事务先提交）⇒ 本事务整体回滚，不留下占槽位的孤儿批次
+            throw new BizException(ErrorCodes.IMP_4004, "该批次已被并发重导，请刷新后查看最新批次");
+        }
+
+        // ③ 占用新槽位
+        try {
+            importBatchMapper.update(null, new LambdaUpdateWrapper<ImportBatchEntity>()
+                    .eq(ImportBatchEntity::getId, created.getId())
+                    .eq(ImportBatchEntity::getTeamId, teamId)
+                    .set(ImportBatchEntity::getDedupeHash, origin.getFileHash())
+                    .set(ImportBatchEntity::getUpdatedBy, snapshot.userId()));
+        } catch (DuplicateKeyException ex) {
+            // 同一 (team, hash, biz) 已有别的批次占着槽位（例如并发上传）⇒ 409，不是 500
+            throw new BizException(ErrorCodes.IMP_4004, "该文件已有占用中的导入批次，请刷新后查看");
+        }
+
+        ImportBatchEntity saved = importBatchMapper.selectById(created.getId());
+        return saved == null ? created : saved;
+    }
+
+    /**
+     * 组装重导产生的新批次（{@code status = UPLOADED}、{@code dedupe_hash = NULL}）。
+     *
+     * <p>其余计数列一律归零：新批次尚未解析/落库，{@code total_rows/success_rows/failed_rows}
+     * 必须从 0 开始（复制原批计数会让「不变式 {@code success + failed = total}」在解析前就失真）。
+     */
+    private ImportBatchEntity copyForReimport(ImportBatchEntity origin, TeamContext.Snapshot snapshot,
+                                              long teamId, String batchNo) {
+        ImportBatchEntity e = new ImportBatchEntity();
+        e.setTeamId(teamId);
+        e.setBatchNo(batchNo);
+        e.setBizType(origin.getBizType());
+        e.setFileName(origin.getFileName());
+        e.setFileHash(origin.getFileHash());
+        e.setFileSize(origin.getFileSize());
+        e.setStoragePath(origin.getStoragePath());
+        e.setTemplateVersion(origin.getTemplateVersion());
+        e.setStatus(ImportBatchStatus.UPLOADED.name());
+        e.setDedupeHash(null);
+        e.setDuplicateOfBatchId(null);
+        e.setAttemptNo(origin.getAttemptNo() == null ? 2 : origin.getAttemptNo() + 1);
+        e.setTotalRows(0);
+        e.setSuccessRows(0);
+        e.setFailedRows(0);
+        Long uid = snapshot.userId();
+        e.setCreatedBy(uid);
+        e.setUpdatedBy(uid);
+        return e;
+    }
+
+    /** 原文件必须仍可读（{@code IMPORT_WORKFLOW §8.9} / {@code IMP-4011}：文件是全量原文的唯一真相）。 */
+    private void assertOriginalFileReadable(ImportBatchEntity origin) {
+        String storagePath = origin.getStoragePath();
+        if (storagePath == null || storagePath.isBlank()) {
+            throw new BizException(ErrorCodes.IMP_4011, IMP_4011_MESSAGE);
+        }
+        try {
+            Path file = Path.of(storagePath);
+            if (!Files.isRegularFile(file) || !Files.isReadable(file)) {
+                throw new BizException(ErrorCodes.IMP_4011, IMP_4011_MESSAGE);
+            }
+        } catch (InvalidPathException ex) {
+            // 路径非法与「文件丢了」对用户是同一件事（都无法重导），不暴露技术细节
+            throw new BizException(ErrorCodes.IMP_4011, IMP_4011_MESSAGE);
+        }
+    }
+
+    /** 状态文本 → 枚举；非法值返回 {@code null}（DB 有 CHECK，理论上不可达）。 */
+    private static ImportBatchStatus parseStatus(String status) {
+        if (status == null) {
+            return null;
+        }
+        for (ImportBatchStatus candidate : ImportBatchStatus.values()) {
+            if (candidate.name().equals(status)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 审计 #10 {@code IMPORT_BATCH_FORCE_REIMPORT}（{@code DESIGN_BASIS §9.17} / {@code DATABASE_DESIGN §6-J.1}；
+     * 枚举早已存在，本批<b>首次使用</b>，❌ 不新增动作码）。
+     *
+     * <p>{@code biz_type = IMPORT_BATCH}、{@code biz_id = 新批次 id}；原批次 id 记在
+     * {@code change_summary}（人读）与 {@code after_json}（机读）两处——「哪一批被哪一批取代」
+     * 事后无法从业务数据反推，只能靠这条留痕。
+     */
+    private void recordReimportAudit(TeamContext.Snapshot snapshot, long teamId,
+                                     ImportBatchEntity created, long originBatchId) {
+        auditWriteService.record(AuditEvent.builder()
+                .teamId(teamId)
+                .action(AuditAction.IMPORT_BATCH_FORCE_REIMPORT)
+                .bizType("IMPORT_BATCH")
+                .bizId(created.getId())
+                .bizNo(created.getBatchNo())
+                .operatorId(snapshot.userId())
+                .operatorName(snapshot.username())
+                .operatorRole(snapshot.roles().isEmpty() ? null : snapshot.roles().get(0))
+                .result(AuditResult.SUCCESS)
+                .changeSummary("强制重导：原批次 id=" + originBatchId + "，新批次 " + created.getBatchNo()
+                        + "（第 " + created.getAttemptNo() + " 次尝试）")
+                .after(Map.of("original_batch_id", originBatchId,
+                        "new_batch_id", created.getId(),
+                        "attempt_no", created.getAttemptNo()))
+                .build());
     }
 
     // =====================================================================

@@ -84,6 +84,11 @@ import org.springframework.web.multipart.MultipartFile;
  *   <li>全部数据行校验失败 → {@code 422 IMP-4010} + data。</li>
  * </ul>
  *
+ * <h2>★ M3-B10.7（R84）补齐 {@code POST /{id}/reimport}</h2>
+ * 强制重导（{@code FORCE_REIMPORT}，一个<b>动作</b>而非状态）：{@code 201} + 与 upload 同一视图类；
+ * 不存在/跨团队 {@code 404 IMP-4007}、原批未终结或已被取代 {@code 422 IMP-4005}、
+ * 原文件丢失 {@code 410 IMP-4011}、并发重导 {@code 409 IMP-4004}。
+ *
  * <p><b>M3-T02 范围</b>：仅上传端点；列表/详情/映射/校验/确认/重导属 M3-T03 起（本批一并补齐）。</p>
  */
 @RestController
@@ -299,6 +304,25 @@ public class ImportBatchController {
             builder.header("Idempotent-Replayed", "true");
         }
         return builder.<ApiResponse<?>>body(ApiResponse.success(outcome.view()));
+    }
+
+    /**
+     * 强制重导（{@code FORCE_REIMPORT}，{@code API_CONTRACT §9.3} / {@code IMPORT_WORKFLOW §8.10}，
+     * <b>M3-B10.7 / R84 补齐</b>）→ {@code 201}，响应体与上传的 {@code 201} <b>同一视图类</b>。
+     *
+     * <p>语义：复制原批的文件信息（同一 {@code storage_path}/{@code file_hash}）建一条
+     * {@code status = UPLOADED} 的新批次，原批回填 {@code superseded_by_batch_id} 并释放槽位；
+     * 三步槽位操作在同一事务内（见 {@code ImportUploadService#reimport}）。
+     *
+     * <p>错误出口：不存在/跨团队 {@code 404 IMP-4007}；原批未终结或已被取代 {@code 422 IMP-4005}；
+     * 原文件丢失 {@code 410 IMP-4011}；并发重导 {@code 409 IMP-4004}。
+     */
+    @PostMapping("/{id}/reimport")
+    @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
+    public ResponseEntity<ApiResponse<?>> reimport(@PathVariable("id") Long id) {
+        ImportBatchEntity created = importUploadService.reimport(id);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .<ApiResponse<?>>body(ApiResponse.success(ImportBatchUploadView.of(created)));
     }
 
     /**

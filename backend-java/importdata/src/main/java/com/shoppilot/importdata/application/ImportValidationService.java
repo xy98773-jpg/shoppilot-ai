@@ -95,6 +95,14 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p><b>仍未实现</b>：{@code SALES_DAILY} 的「日期缺口 >30% → {@code IMP-4014}（{@code WARNING}）」
  * ——任务书未列入本批范围（仅要求 {@code IMP-4006}），继续登记待办。
+ *
+ * <h2>★ R83 已实现（M3-B10.7）：{@code INVENTORY_SNAPSHOT} 的「文件内重复」</h2>
+ * 此前该类型<b>没有任何</b>文件内去重（{@code §10.2} 只对 {@code SALES_DAILY} 单列、{@code applyBusinessUnique}
+ * 只覆盖四类主数据），同批同仓同 SKU 的重复行会被写服务的幂等键判成「同内容重放」而<b>静默只累加一次</b>
+ * （数量不同则 {@code INV-5003}，文案「请勿重复提交」误导）。现按 {@code IMPORT_WORKFLOW §8.6}/{@code §10.2}
+ * 的口径在<b>校验阶段</b>前置拦截：同一 {@code (warehouse_code, sku_code)} 的<b>后行</b>记
+ * {@code ERROR COM-0001}，不聚合、不自动相加、不降级成 {@code WARNING}
+ * （见 {@link #duplicateSnapshotKey}）。
  */
 @Service
 public class ImportValidationService {
@@ -212,6 +220,8 @@ public class ImportValidationService {
         SeenKeys seen = new SeenKeys(new HashSet<>(), new HashSet<>(), new HashSet<>(), new HashSet<>());
         // SALES_DAILY 文件内唯一键 (warehouse_code|sku_code|sale_date)
         Set<String> salesDailyKeys = new HashSet<>();
+        // INVENTORY_SNAPSHOT 文件内唯一键 (warehouse_code|sku_code)（★ R83 / B10.7）
+        Set<String> snapshotKeys = new HashSet<>();
 
         for (List<String> cells : rows) {
             for (Map.Entry<String, Integer> entry : targetCol.entrySet()) {
@@ -250,6 +260,9 @@ public class ImportValidationService {
             // §10.2 各业务类型特有：文件内唯一
             // ★ R38：库内命中一律 upsert 更新、不报 ERROR（原「库内已存在」判定已删除）
             applyBusinessUnique(bizType, targetCol, cells, seen, issues);
+            if (bizType == ImportBizType.INVENTORY_SNAPSHOT) {
+                duplicateSnapshotKey(targetCol, cells, snapshotKeys, issues);
+            }
             if (bizType == ImportBizType.SALES_DAILY) {
                 String wh = valueOf(targetCol, cells, "warehouse_code");
                 String sk = valueOf(targetCol, cells, "sku_code");
@@ -364,10 +377,14 @@ public class ImportValidationService {
      *       如需覆盖请使用盘点调整」（{@code §7.5}，本类型<b>不</b>覆盖）；</li>
      *   <li>{@code SALES_DAILY}：命中 {@code uk_sales_team_wh_sku_date} → 提示「将覆盖」。
      *       文案与 {@code API_CONTRACT §10.6} 的响应样例逐字一致；</li>
-     *   <li><b>已有 {@code ERROR} 的行不再叠加 WARNING</b>：该行不会被导入，提示「将覆盖」只会误导
-     *       （且 {@code warning_rows} 的计数口径本就是「有 WARNING 且无 ERROR 的行」）；</li>
-     *   <li>引用解析不到（{@code sku_code}/{@code warehouse_code} 查不到 id）的行同样跳过：
-     *       它已有 {@code CAT-3001}/{@code CAT-3003} 的 {@code ERROR}。</li>
+     *   <li><b>{@code WARNING} 与 {@code ERROR} 允许并存</b>（{@code R83} 要求 5）：本方法<b>不</b>因该行
+     *       已有 {@code ERROR} 就丢弃 {@code IMP-4006}——两者语义不同（{@code ERROR} = 「这行不会被导入」，
+     *       {@code WARNING} = 「若它被导入，库里这一行会被累加/覆盖」），且审计与错误报告都按
+     *       「行 × 级别」独立留痕，合并会把两种信息压成一种。计数口径不受影响：
+     *       {@code warning_rows} 本来就是「有 {@code WARNING} <b>且无</b> {@code ERROR} 的行」，
+     *       有 {@code ERROR} 的行只计 {@code error_rows}；</li>
+     *   <li>引用解析不到（{@code sku_code}/{@code warehouse_code} 查不到 id）的行跳过：无从判定
+     *       目标行是否存在，且该行已有 {@code CAT-3001}/{@code CAT-3003} 的 {@code ERROR}。</li>
      * </ul>
      *
      * <h2>性能</h2>
@@ -409,8 +426,8 @@ public class ImportValidationService {
                 List<String> cells = rows.get(r);
                 Long skuId = skuIds.get(valueOf(targetCol, cells, "sku_code").trim());
                 Long whId = warehouseIds.get(valueOf(targetCol, cells, "warehouse_code").trim());
-                if (skuId == null || whId == null || hasError(issuesByRow.get(r + 1))) {
-                    continue;
+                if (skuId == null || whId == null) {
+                    continue; // 引用不存在的行已有 CAT-3001/CAT-3003 的 ERROR，无从判定目标行
                 }
                 keyByRow.put(r + 1, BalanceKey.of(skuId, whId));
             }
@@ -432,8 +449,8 @@ public class ImportValidationService {
             List<String> cells = rows.get(r);
             Long skuId = skuIds.get(valueOf(targetCol, cells, "sku_code").trim());
             Long whId = warehouseIds.get(valueOf(targetCol, cells, "warehouse_code").trim());
-            if (skuId == null || whId == null || hasError(issuesByRow.get(r + 1))) {
-                continue;
+            if (skuId == null || whId == null) {
+                continue; // 同上：引用不存在的行由 CAT-3001/CAT-3003 负责
             }
             LocalDate saleDate;
             try {
@@ -455,16 +472,14 @@ public class ImportValidationService {
         }
     }
 
-    /** 该行是否已存在 {@code ERROR} 级问题（只有 {@code WARNING} 或无问题 → false）。 */
-    private static boolean hasError(List<Issue> issues) {
-        return issues != null && issues.stream().anyMatch(i -> "ERROR".equals(i.level));
-    }
-
     /**
      * 追加一条 {@code WARNING}（{@code IMP-4006}）。
      *
      * <p>去重：同一行若已因同一错误码告警过则不重复追加（本方法目前只被 {@code IMP-4006} 调用，
      * 保留判断是为了防止后续接入 {@code IMP-4014} 时同一行被重复计数）。
+     *
+     * <p>★ 只按「同级别 + 同错误码」去重，<b>不</b>因该行已有 {@code ERROR} 而放弃追加
+     * （{@code R83} 要求 5：WARNING 与 ERROR 允许并存，见 {@link #applyOverwriteWarnings} 的口径说明）。
      */
     private static void addWarning(Map<Integer, List<Issue>> issuesByRow, int rowNo,
                                    String field, String message) {
@@ -650,7 +665,9 @@ public class ImportValidationService {
             case SUPPLIER -> duplicateCode(targetCol, cells, "code", "供应商编码", seen.supplier(), issues);
             case WAREHOUSE -> duplicateCode(targetCol, cells, "code", "仓库编码", seen.warehouse(), issues);
             default -> {
-                // 其余类型（INVENTORY_SNAPSHOT / SALES_DAILY）的重复检查在调用处单列
+                // 其余类型（SALES_DAILY / INVENTORY_SNAPSHOT）的重复检查在调用处单列：
+                // SALES_DAILY 是三元组 (wh, sku, date) → SAL-6004；INVENTORY_SNAPSHOT 是二元组
+                // (wh, sku) → COM-0001（★ R83，M3-B10.7）。
             }
         }
     }
@@ -668,6 +685,44 @@ public class ImportValidationService {
         if (!seen.add(code)) {
             issues.add(new Issue("ERROR", ErrorCodes.CAT_3002, codeColumn,
                     label + " " + code + " 在当前文件内重复"));
+        }
+    }
+
+    /**
+     * {@code INVENTORY_SNAPSHOT} 的「文件内重复」检查（<b>{@code R83}</b>，{@code M3-B10.7}）。
+     *
+     * <h2>为什么必须是 ERROR 而不能沿用「写服务幂等重放」</h2>
+     * 落库走 {@code InventoryWriteService#applyInitialImport}，其幂等键（{@code R80} 之后）为
+     * {@code INIT_IMPORT:IMPORT:<batchId>:<skuId>:<warehouseId>}——同批同仓同 SKU 的<b>两行天然同键</b>：
+     * <ul>
+     *   <li>数量相同 ⇒ {@code replayIfIdempotent} 判「同内容重放」⇒ <b>只累加一次且不报任何错</b>，
+     *       而接口仍回 {@code success_rows = 2}（用户看到「2 行成功」、实际只入库 1 行）；</li>
+     *   <li>数量不同 ⇒ {@code INV-5003}，文案「该库存操作已提交，请勿重复提交」——把「文件里有重复行」
+     *       说成「重复提交」，误导用户去核对请求而不是去重文件。</li>
+     * </ul>
+     * 两种形态都不是「正确导入」，而<b>自动相加会静默改数</b>（用户以为两行独立，实际被合并），
+     * 故口径为<b>后行 {@code ERROR}</b>、不聚合、不降级成 {@code WARNING}
+     * （{@code IMPORT_WORKFLOW §8.6}/{@code §10.2}，{@code R83} 裁定）。
+     *
+     * <h2>业务键与标准化</h2>
+     * 键 = {@code (warehouse_code, sku_code)}，比较前 {@code trim()}（与字段级校验的空值语义一致），
+     * <b>不做大小写折叠</b>（{@code §8.6} 口径：编码大小写属业务约定，折叠会掩盖真实差异）。
+     * 任一字段为空 ⇒ <b>不参与判定</b>：该行已由必填校验给出 {@code COM-0001}，
+     * 同一行不重复报错（{@code R83} 要求 4）。
+     *
+     * <p>错误码用 {@code COM-0001} 而非新增专用码：专用码需 {@code ADR-002} 级新增，
+     * 按 {@code R60} 先例先复用（{@code DESIGN_REVIEW R83} 裁定）。
+     */
+    private void duplicateSnapshotKey(Map<String, Integer> targetCol, List<String> cells,
+                                      Set<String> seen, List<Issue> issues) {
+        String warehouseCode = valueOf(targetCol, cells, "warehouse_code").trim();
+        String skuCode = valueOf(targetCol, cells, "sku_code").trim();
+        if (warehouseCode.isEmpty() || skuCode.isEmpty()) {
+            return;
+        }
+        if (!seen.add(warehouseCode + "|" + skuCode)) {
+            issues.add(new Issue("ERROR", ErrorCodes.COM_0001, "sku_code",
+                    "同一仓库、同一 SKU 在文件内重复"));
         }
     }
 
