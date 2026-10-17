@@ -1,11 +1,12 @@
 JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
-JAR_SHA256=d8b38c2c866aa52a2ac5bcf2da11894ec591bdda54b57391622b323c973599ba
-DATE=2026-10-17T12:19:16Z
+JAR_SHA256=a9c9e50c64bd2c61aa5985c72a678f49b7017d3c74396f9643d784d48553a272
+DATE=2026-10-17T13:23:55Z
 MYSQL_READY=1 (port 3328, 独立容器 b8-mysql)
-APP_PID=1385 (port 18108, stdout -> evidence-b8-app.log)
+APP_PID=425 (port 18108, stdout -> evidence-b8-app.log)
 APP_UP=1
 SEED_OK (seed-b8.sql)
 TOKENS own=eyJhbGci adm=eyJhbGci op=eyJhbGci view=eyJhbGci other=eyJhbGci
+TODAY=2026-10-17 TOMORROW=2026-10-18（应用侧 LocalDate.now() 与宿主同区）
 ---------------------------------------------------------------
 S1 迁移链与 sales_daily 结构/约束
 PASS S1-迁移条数 => 9
@@ -48,15 +49,15 @@ S4d groupBy 非法维度 → COM-0007
 PASS S4d-code => COM-0007
 PASS S4d-http => 400
 ---------------------------------------------------------------
-S4e 日期升序（getSeries 依赖的 ORDER BY sale_date ASC；用 2026-11-xx 避开 S3 断言）
-S4e-插入序(id序)=2026-11-06,2026-11-04,2026-11-05
-PASS S4e-升序结果 => 2026-11-04,2026-11-05,2026-11-06
+S4e 日期升序（getSeries 依赖的 ORDER BY sale_date ASC；用 2026-09-xx 避开 S3 断言与 R68 未来日期拦截）
+S4e-插入序(id序)=2026-09-06,2026-09-04,2026-09-05
+PASS S4e-升序结果 => 2026-09-04,2026-09-05,2026-09-06
 NOTE S4e 说明：getSeries 本批无 HTTP 端点（供 analysis 内部调用），此处取证其发出的
      ORDER BY sale_date ASC 语义；Java 层完整断言见 SalesQueryServiceTest（同为真 MySQL + 真 Spring Bean）。
 ---------------------------------------------------------------
 S2 POST 手工写入 + 同业务键再写不同 qty → 行数仍 1
 PASS S2-首次http => 201
-S2-首次body={"code":"OK","message":"success","data":{"id":8,"warehouse_id":9004,"sku_id":9002,"sku_code":"SKU-A","product_id":9001,"sale_date":"2026-10-03","qty":"15.000","return_qty":"0.000","sales_amount":"150.00","order_count":null,"source":"MANUAL","batch_id":null,"created_at":"2026-10-17T12:20:53.483Z","updated_at":"2026-10-17T12:20:53.483Z"},"requestId":"req_7405ae88809f602f6b098435c778bd93","timestamp":"2026-10-17T12:20:53.526Z"}
+S2-首次body={"code":"OK","message":"success","data":{"id":8,"warehouse_id":9004,"sku_id":9002,"sku_code":"SKU-A","product_id":9001,"sale_date":"2026-10-03","qty":"15.000","return_qty":"0.000","sales_amount":"150.00","order_count":null,"source":"MANUAL","batch_id":null,"created_at":"2026-10-17T13:25:09.634Z","updated_at":"2026-10-17T13:25:09.634Z"},"requestId":"req_13df25a432e75596a05e0f18f59cde06","timestamp":"2026-10-17T13:25:09.674Z"}
 PASS S2-首行qty => 15.000
 PASS S2-首行source => MANUAL
 PASS S2-二次http => 201
@@ -123,7 +124,29 @@ P8 total: team7=12 team8=0
 PASS P8-团队8为空 => 0
 PASS P8-团队7非空 => 1
 ---------------------------------------------------------------
-B8_CHECK_TOTAL=73
+W1 sale_date 晚于今天（2026-10-18）→ 400 SAL-6003 且零落库（R68(a)）
+PASS W1-code => SAL-6003
+PASS W1-http => 400
+PASS W1-零落库 => 0
+W1-body={"code":"SAL-6003","message":"sale_date 不合法","data":null,"details":[{"field":"sale_date","message":"sale_date 不能晚于今天","rejectedValue":"2026-10-18"}],"requestId":"req_7daac98c7b469ff224b238030ba4e9e0","timestamp":"2026-10-17T13:26:02.350Z"}
+---------------------------------------------------------------
+W2 sale_date 早于 listed_date（2026-09-30 < 2026-10-01）→ 400 SAL-6003 且零落库（R68(b)）
+PASS W2-前置listed_date => 2026-10-01
+PASS W2-code => SAL-6003
+PASS W2-http => 400
+PASS W2-零落库 => 0
+W2-body={"code":"SAL-6003","message":"sale_date 不合法","data":null,"details":[{"field":"sale_date","message":"sale_date 不能早于上架日","rejectedValue":"2026-09-30"}],"requestId":"req_d82f56bf974fb36480b5f054f4f9fb6c","timestamp":"2026-10-17T13:26:07.032Z"}
+---------------------------------------------------------------
+W3 正常日期（今天 2026-10-17，且 >= listed_date）→ 201，不得误杀
+PASS W3-前置(今天>=上架日) => 1
+PASS W3-http => 201
+PASS W3-已落库 => 1
+PASS W3-值正确 => 2.000
+W3-body={"code":"OK","message":"success","data":{"id":13,"warehouse_id":9004,"sku_id":9008,"sku_code":"SKU-E","product_id":9001,"sale_date":"2026-10-17","qty":"2.000","return_qty":"0.000","sales_amount":null,"order_count":null,"source":"MANUAL","batch_id":null,"created_at":"2026-10-17T13:26:10.946Z","updated_at":"2026-10-17T13:26:10.946Z"},"requestId":"req_e3d02dcbb47109fd64ae447d688283c0","timestamp":"2026-10-17T13:26:11.006Z"}
+PASS W3b-边界日(2026-10-01)放行 => 201
+PASS W3b-边界日已落库 => 1
+---------------------------------------------------------------
+B8_CHECK_TOTAL=86
 B8_FAIL_COUNT=0
 === B8 EVIDENCE DONE ===
 --- cleanup ---

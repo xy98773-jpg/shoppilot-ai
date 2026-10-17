@@ -44,6 +44,14 @@ import org.springframework.transaction.annotation.Transactional;
  * MyBatis-Plus 默认 {@code NOT_NULL} 策略会<b>跳过</b> {@code null} 字段，导致「用 null 覆盖旧值」失效
  * （与 U-6 覆盖语义冲突）。
  *
+ * <h2>日期范围校验（{@code ERROR_CODES §2.7}，{@code R68}）</h2>
+ * <p>{@code SAL-6003} 的完整语义是「{@code sale_date} <b>晚于今天</b> <b>或</b> <b>早于上架日</b>」。
+ * 两条分支都在本服务的 {@code validate} 内落地（取到 {@code sku} 之后）：
+ * ① {@code saleDate > LocalDate.now()} → {@code SAL-6003}；
+ * ② {@code skus.listed_date != null && saleDate < listed_date} → {@code SAL-6003}（上架日可空，为空跳过）。
+ * <b>不放 Controller</b>：{@code batchUpsert} 供 {@code importdata} 复用，服务层才对两条写入路径同时生效。
+ * 与 {@code ImportValidationService:451} 的「晚于今天」同口径（同为 {@code LocalDate.now()}）。
+ *
  * <h2>团队隔离（{@code §5.11}）</h2>
  * <p>落库前经 {@link SkuQueryService#getSku} / {@link WarehouseQueryService#requireInTeam}（均<b>受租户线约束</b>）
  * 校验 SKU / 仓库属于当前团队，跨团队 / 不存在 → {@code SAL-6005}（{@code 422}）；
@@ -240,6 +248,25 @@ public class SalesWriteService {
             throw BizException.withDetails(ErrorCodes.SAL_6005, "SKU 不属于当前团队",
                     List.of(new ApiErrorDetail("sku_id", "SKU 不存在或不属于当前团队", row.skuId())));
         }
+
+        // ★ R68：sale_date 范围校验（ERROR_CODES §2.7：SAL-6003 = 晚于今天 **或** 早于上架日）。
+        //   必须落在**服务层**而非 Controller：batchUpsert 供 importdata 复用，
+        //   放这里才对「REST 手工写入」与「导入落库」两条路径同时生效（导入侧 validate 阶段已有
+        //   「晚于今天」拦截，属双保险，语义一致、不冲突）。
+        //   时区口径沿用 LocalDate.now()，与 ImportValidationService:451 保持一致；
+        //   团队时区改造属 §14.1 独立议题，不在本批范围。
+        //   危害背景：未来日期会污染 analysis 的 D 28 天窗口（窗口内行数虚增 ⇒ 日均销量稀释
+        //   ⇒ Q_suggest 偏低 ⇒ 缺货），且落库后无纠正机制。
+        if (row.saleDate().isAfter(LocalDate.now())) {
+            throw BizException.withDetails(ErrorCodes.SAL_6003, "sale_date 不合法",
+                    List.of(new ApiErrorDetail("sale_date", "sale_date 不能晚于今天", row.saleDate())));
+        }
+        // skus.listed_date 可空（NULL 表示未设置上架日）⇒ 为空时不校验，只做「晚于今天」这一半。
+        if (sku.getListedDate() != null && row.saleDate().isBefore(sku.getListedDate())) {
+            throw BizException.withDetails(ErrorCodes.SAL_6003, "sale_date 不合法",
+                    List.of(new ApiErrorDetail("sale_date", "sale_date 不能早于上架日", row.saleDate())));
+        }
+
         try {
             warehouseQueryService.requireInTeam(row.warehouseId());
         } catch (BizException be) {

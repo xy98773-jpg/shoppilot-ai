@@ -259,6 +259,43 @@ class SalesWriteServiceTest {
     }
 
     // =====================================================================
+    // ⑨ R68(a) sale_date 晚于今天 → SAL-6003
+    // =====================================================================
+
+    @Test
+    @DisplayName("⑨ sale_date 晚于今天 → SAL-6003（R68(a)），零落库")
+    void futureSaleDateRejected() {
+        LocalDate tomorrow = LocalDate.now().plusDays(1);
+        BizException ex = assertThrows(BizException.class, () -> writeService.upsertDaily(
+                SKU_A, WAREHOUSE_ID, tomorrow, BigDecimal.ONE, null, "k-future"));
+        assertEquals(ErrorCodes.SAL_6003, ex.getErrorCode(), "未来日期必须是 SAL-6003（ERROR_CODES §2.7）");
+        assertEquals(0L, countRows(), "未来日期被拒绝后不得落库（否则会污染 D 的 28 天窗口）");
+    }
+
+    // =====================================================================
+    // ⑩ R68(b) sale_date 早于上架日 → SAL-6003
+    // =====================================================================
+
+    @Test
+    @DisplayName("⑩ sale_date 早于 skus.listed_date → SAL-6003（R68(b)），零落库；上架日当天不得误杀")
+    void saleDateBeforeListedDateRejected() {
+        // 种子里的 SKU 未设 listed_date（NULL ⇒ 只校验「晚于今天」）；本用例显式设一个过去的上架日
+        LocalDate listedDate = LocalDate.now().minusDays(10);
+        jdbc.update("UPDATE skus SET listed_date = ? WHERE id = ?", listedDate, SKU_A);
+
+        BizException ex = assertThrows(BizException.class, () -> writeService.upsertDaily(
+                SKU_A, WAREHOUSE_ID, listedDate.minusDays(1), BigDecimal.ONE, null, "k-early"));
+        assertEquals(ErrorCodes.SAL_6003, ex.getErrorCode(), "早于上架日必须是 SAL-6003（ERROR_CODES §2.7）");
+        assertEquals(0L, countRows(), "早于上架日被拒绝后不得落库");
+
+        // 正例对照：恰在上架日（未早于 listed_date，也未晚于今天）必须放行——证明不是误杀
+        SalesDailyResponse ok = writeService.upsertDaily(
+                SKU_A, WAREHOUSE_ID, listedDate, BigDecimal.ONE, null, "k-listed");
+        assertEquals(listedDate, ok.getSaleDate(), "边界日（= listed_date）应被接受");
+        assertEquals(1L, countRows());
+    }
+
+    // =====================================================================
     // 工具
     // =====================================================================
 

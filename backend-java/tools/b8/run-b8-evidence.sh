@@ -27,6 +27,11 @@
 #   P7  GET 零副作用（行数不变）
 #   P8  读隔离：团队 8 的 owner8 看不到团队 7 的销售数据
 #
+# W 组（B8-hotfix / R68 · sale_date 范围校验）：
+#   W1  未来日期 → 400 SAL-6003 且零落库
+#   W2  早于 skus.listed_date → 400 SAL-6003 且零落库
+#   W3  正常日期（今天 / listed_date 当天）→ 201（不得误杀；含边界对照 W3b）
+#
 # 用法：bash backend-java/tools/b8/run-b8-evidence.sh
 # 产物：backend-java/tools/b8/evidence-b8.txt        ← 断言日志（入库）
 #       backend-java/tools/b8/evidence-b8-app.log    ← 应用 stdout（*.log 已 gitignore）
@@ -116,7 +121,10 @@ gq(){ # body groupKey -> qty 字符串
 }
 
 OWN=$(token owner01); ADM=$(token admin01); OP=$(token operator01); VIEW=$(token viewer01); OTH=$(token owner8)
+TODAY=$(date +%F)
+TOMORROW=$(date -d '+1 day' +%F)
 log "TOKENS own=${OWN:0:8} adm=${ADM:0:8} op=${OP:0:8} view=${VIEW:0:8} other=${OTH:0:8}"
+log "TODAY=$TODAY TOMORROW=$TOMORROW（应用侧 LocalDate.now() 与宿主同区）"
 [ -n "$OP" ] || { log "FATAL operator01 login failed"; exit 5; }
 
 # =============================================================== S1 迁移 + 约束
@@ -179,13 +187,13 @@ G=$(getq "/api/v1/sales/daily?groupBy=product" "$OWN")
 chk "S4d-code" "COM-0007" "$(code "${G%|*}")"
 chk "S4d-http" "400" "${G##*|}"
 
-sep; log "S4e 日期升序（getSeries 依赖的 ORDER BY sale_date ASC；用 2026-11-xx 避开 S3 断言）"
+sep; log "S4e 日期升序（getSeries 依赖的 ORDER BY sale_date ASC；用 2026-09-xx 避开 S3 断言与 R68 未来日期拦截）"
 for d in 06 04 05; do
-  post "$OP" "{\"sku_id\":9003,\"warehouse_id\":9004,\"sale_date\":\"2026-11-$d\",\"qty\":\"1\"}" > /dev/null
+  post "$OP" "{\"sku_id\":9003,\"warehouse_id\":9004,\"sale_date\":\"2026-09-$d\",\"qty\":\"1\"}" > /dev/null
 done
-log "S4e-插入序(id序)=$(sql "SELECT GROUP_CONCAT(sale_date ORDER BY id) FROM sales_daily WHERE team_id=7 AND warehouse_id=9004 AND sku_id=9003 AND sale_date>='2026-11-01'")"
-chk "S4e-升序结果" "2026-11-04,2026-11-05,2026-11-06" \
-  "$(sql "SELECT GROUP_CONCAT(sale_date ORDER BY sale_date ASC) FROM sales_daily WHERE team_id=7 AND warehouse_id=9004 AND sku_id=9003 AND sale_date>='2026-11-01'")"
+log "S4e-插入序(id序)=$(sql "SELECT GROUP_CONCAT(sale_date ORDER BY id) FROM sales_daily WHERE team_id=7 AND warehouse_id=9004 AND sku_id=9003 AND sale_date BETWEEN '2026-09-01' AND '2026-09-30'")"
+chk "S4e-升序结果" "2026-09-04,2026-09-05,2026-09-06" \
+  "$(sql "SELECT GROUP_CONCAT(sale_date ORDER BY sale_date ASC) FROM sales_daily WHERE team_id=7 AND warehouse_id=9004 AND sku_id=9003 AND sale_date BETWEEN '2026-09-01' AND '2026-09-30'")"
 log "NOTE S4e 说明：getSeries 本批无 HTTP 端点（供 analysis 内部调用），此处取证其发出的"
 log "     ORDER BY sale_date ASC 语义；Java 层完整断言见 SalesQueryServiceTest（同为真 MySQL + 真 Spring Bean）。"
 
@@ -293,6 +301,36 @@ T8N=$(echo "${T8%|*}" | grep -o '"total":[0-9]*' | head -1 | sed 's/"total"://')
 log "P8 total: team7=$T7N team8=$T8N"
 chk "P8-团队8为空" "0" "$T8N"
 chk "P8-团队7非空" "1" "$([ "${T7N:-0}" -gt 0 ] && echo 1 || echo 0)"
+
+# ============================================== W 组：R68 日期范围校验（B8-hotfix）
+# SKU-E（9008）在 seed-b8.sql 里显式设 listed_date=2026-10-01，其余 SKU 为 NULL。
+# 该 SKU 在 W 组之前没有任何 sales_daily 行 ⇒「零落库」断言不受其他组干扰。
+sep; log "W1 sale_date 晚于今天（$TOMORROW）→ 400 SAL-6003 且零落库（R68(a)）"
+R=$(post "$OP" "{\"sku_id\":9008,\"warehouse_id\":9004,\"sale_date\":\"$TOMORROW\",\"qty\":\"1\"}")
+chk "W1-code" "SAL-6003" "$(code "${R%|*}")"
+chk "W1-http" "400" "${R##*|}"
+chk "W1-零落库" "0" "$(sql "SELECT COUNT(*) FROM sales_daily WHERE sku_id=9008 AND sale_date='$TOMORROW'")"
+log "W1-body=${R%|*}"
+
+sep; log "W2 sale_date 早于 listed_date（2026-09-30 < 2026-10-01）→ 400 SAL-6003 且零落库（R68(b)）"
+chk "W2-前置listed_date" "2026-10-01" "$(sql "SELECT listed_date FROM skus WHERE id=9008")"
+R=$(post "$OP" '{"sku_id":9008,"warehouse_id":9004,"sale_date":"2026-09-30","qty":"1"}')
+chk "W2-code" "SAL-6003" "$(code "${R%|*}")"
+chk "W2-http" "400" "${R##*|}"
+chk "W2-零落库" "0" "$(sql "SELECT COUNT(*) FROM sales_daily WHERE sku_id=9008 AND sale_date='2026-09-30'")"
+log "W2-body=${R%|*}"
+
+sep; log "W3 正常日期（今天 $TODAY，且 >= listed_date）→ 201，不得误杀"
+chk "W3-前置(今天>=上架日)" "1" "$([[ "$TODAY" > "2026-09-30" ]] && echo 1 || echo 0)"
+R=$(post "$OP" "{\"sku_id\":9008,\"warehouse_id\":9004,\"sale_date\":\"$TODAY\",\"qty\":\"2\"}")
+chk "W3-http" "201" "${R##*|}"
+chk "W3-已落库" "1" "$(sql "SELECT COUNT(*) FROM sales_daily WHERE sku_id=9008 AND sale_date='$TODAY'")"
+chk "W3-值正确" "2.000" "$(sql "SELECT qty FROM sales_daily WHERE sku_id=9008 AND sale_date='$TODAY'")"
+log "W3-body=${R%|*}"
+# 边界对照：listed_date 当天（= 2026-10-01，未早于上架日）也必须放行，证明比较符是 < 而非 <=
+R=$(post "$OP" '{"sku_id":9008,"warehouse_id":9004,"sale_date":"2026-10-01","qty":"1"}')
+chk "W3b-边界日(2026-10-01)放行" "201" "${R##*|}"
+chk "W3b-边界日已落库" "1" "$(sql "SELECT COUNT(*) FROM sales_daily WHERE sku_id=9008 AND sale_date='2026-10-01'")"
 
 sep
 TOTAL=$(grep -c "^PASS \|^FAIL " "$LOG")

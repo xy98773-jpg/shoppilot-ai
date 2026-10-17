@@ -59,6 +59,12 @@ INSERT INTO skus (id, team_id, product_id, sku_code, name, status) VALUES
   (9005, 7, 9001, 'SKU-C',     'SKU-C',     'ACTIVE'),
   (9102, 8, 9101, 'SKU-OTHER', 'SKU-OTHER', 'ACTIVE');
 
+-- R68(b) 探针专用：SKU-E 显式设上架日 2026-10-01，用来验证「sale_date 早于上架日 → SAL-6003」。
+-- 其余 SKU 的 listed_date 保持 NULL（NULL 表示未设置，只校验「晚于今天」这一半）。
+-- 该 SKU 不参与任何既有种子断言，W 组之前无 sales_daily 行。
+INSERT INTO skus (id, team_id, product_id, sku_code, name, status, listed_date) VALUES
+  (9008, 7, 9001, 'SKU-E',     'SKU-E',     'ACTIVE', '2026-10-01');
+
 INSERT INTO warehouses (id, team_id, code, name, status) VALUES
   (9004, 7, 'WH-1',     '一号仓', 'ACTIVE'),
   (9007, 7, 'WH-2',     '二号仓', 'ACTIVE'),

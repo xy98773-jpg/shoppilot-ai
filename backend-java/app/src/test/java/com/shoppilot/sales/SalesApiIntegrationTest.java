@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shoppilot.TestCredentials;
 import com.shoppilot.app.ShopPilotApplication;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -210,6 +211,43 @@ class SalesApiIntegrationTest {
                         + ",\"sale_date\":\"2026-13-40\",\"qty\":\"1\"}");
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
         assertEquals("SAL-6003", errorCode(resp));
+    }
+
+    @Test
+    @DisplayName("POST sale_date 晚于今天 → 400 SAL-6003，零落库（R68(a)）")
+    void postFutureSaleDateRejected() throws Exception {
+        LocalDate tomorrow = LocalDate.now().plusDays(1);
+        ResponseEntity<String> resp = postDaily(operatorToken(),
+                "{\"sku_id\":" + SKU_A + ",\"warehouse_id\":" + WAREHOUSE_1
+                        + ",\"sale_date\":\"" + tomorrow + "\",\"qty\":\"1\"}");
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode(), resp.getBody());
+        assertEquals("SAL-6003", errorCode(resp));
+        assertEquals(0L, jdbc.queryForObject(
+                        "SELECT COUNT(*) FROM sales_daily WHERE team_id=? AND warehouse_id=? AND sku_id=? AND sale_date=?",
+                        Long.class, TEAM_ID, WAREHOUSE_1, SKU_A, tomorrow),
+                "未来日期不得落库（否则污染 D 的 28 天窗口 ⇒ 日均销量稀释 ⇒ Q_suggest 偏低）");
+        assertEquals(4L, jdbc.queryForObject("SELECT COUNT(*) FROM sales_daily", Long.class),
+                "总行数应仍为 4 行种子（未被写入）");
+    }
+
+    @Test
+    @DisplayName("POST sale_date 早于 skus.listed_date → 400 SAL-6003，零落库（R68(b)）")
+    void postSaleDateBeforeListedDateRejected() throws Exception {
+        LocalDate listedDate = LocalDate.now().minusDays(10);
+        LocalDate tooEarly = listedDate.minusDays(1);
+        jdbc.update("UPDATE skus SET listed_date = ? WHERE id = ?", listedDate, SKU_A);
+
+        ResponseEntity<String> resp = postDaily(operatorToken(),
+                "{\"sku_id\":" + SKU_A + ",\"warehouse_id\":" + WAREHOUSE_1
+                        + ",\"sale_date\":\"" + tooEarly + "\",\"qty\":\"1\"}");
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode(), resp.getBody());
+        assertEquals("SAL-6003", errorCode(resp));
+        assertEquals(0L, jdbc.queryForObject(
+                        "SELECT COUNT(*) FROM sales_daily WHERE team_id=? AND warehouse_id=? AND sku_id=? AND sale_date=?",
+                        Long.class, TEAM_ID, WAREHOUSE_1, SKU_A, tooEarly),
+                "早于上架日不得落库");
+        assertEquals(4L, jdbc.queryForObject("SELECT COUNT(*) FROM sales_daily", Long.class),
+                "总行数应仍为 4 行种子（未被写入）");
     }
 
     @Test
