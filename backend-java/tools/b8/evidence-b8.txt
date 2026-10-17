@@ -1,0 +1,129 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=d8b38c2c866aa52a2ac5bcf2da11894ec591bdda54b57391622b323c973599ba
+DATE=2026-10-17T12:19:16Z
+MYSQL_READY=1 (port 3328, 独立容器 b8-mysql)
+APP_PID=1385 (port 18108, stdout -> evidence-b8-app.log)
+APP_UP=1
+SEED_OK (seed-b8.sql)
+TOKENS own=eyJhbGci adm=eyJhbGci op=eyJhbGci view=eyJhbGci other=eyJhbGci
+---------------------------------------------------------------
+S1 迁移链与 sales_daily 结构/约束
+PASS S1-迁移条数 => 9
+PASS S1-最高版本 => 1.0.8
+S1-迁移清单=1.0.0(OK),1.0.1(OK),1.0.2(OK),1.0.3(OK),1.0.4(OK),1.0.5(OK),1.0.6(OK),1.0.7(OK),1.0.8(OK)
+PASS S1-表存在 => 1
+PASS S1-唯一键数(DISTINCT) => 1
+PASS S1-唯一键名 => uk_sales_team_wh_sku_date
+PASS S1-唯一键列序 => team_id,warehouse_id,sku_id,sale_date
+PASS S1-声明二级索引数(DISTINCT) => 4
+PASS S1-声明二级索引集 => idx_sales_team_batch,idx_sales_team_date,idx_sales_team_product_date,idx_sales_team_sku_date
+PASS S1-四索引均team_id最左 => 4
+PASS S1-外键自动支撑索引 => 2
+PASS S1-外键数 => 2
+PASS S1-外键全RESTRICT => 2
+PASS S1-外键引用表 => skus,warehouses
+PASS S1-CHECK数 => 4
+S1-CHECK清单=ck_sales_amount_non_negative,ck_sales_qty_non_negative,ck_sales_return_non_negative,ck_sales_source
+PASS S1-无version列 => 0
+PASS S1-审计字段集合A => created_at,created_by,updated_at,updated_by
+PASS S1-数量精度 => decimal(18,3)
+PASS S1-金额精度 => decimal(18,2)
+PASS S1-sale_date类型 => date
+---------------------------------------------------------------
+S4a groupBy=sku 聚合（纯种子态，期望 9002=30、9003=5、9005=30）
+PASS S4a-http => 200
+PASS S4a-sku9002(qty) => 30.000
+PASS S4a-sku9003(qty) => 5.000
+PASS S4a-sku9005(qty) => 30.000
+---------------------------------------------------------------
+S4b groupBy=warehouse 聚合（期望 9004=35、9007=30）
+PASS S4b-wh9004(qty) => 35.000
+PASS S4b-wh9007(qty) => 30.000
+---------------------------------------------------------------
+S4c groupBy=date 聚合（期望 2026-10-01=45、2026-10-02=20）
+PASS S4c-date2026-10-01(qty) => 45.000
+PASS S4c-date2026-10-02(qty) => 20.000
+---------------------------------------------------------------
+S4d groupBy 非法维度 → COM-0007
+PASS S4d-code => COM-0007
+PASS S4d-http => 400
+---------------------------------------------------------------
+S4e 日期升序（getSeries 依赖的 ORDER BY sale_date ASC；用 2026-11-xx 避开 S3 断言）
+S4e-插入序(id序)=2026-11-06,2026-11-04,2026-11-05
+PASS S4e-升序结果 => 2026-11-04,2026-11-05,2026-11-06
+NOTE S4e 说明：getSeries 本批无 HTTP 端点（供 analysis 内部调用），此处取证其发出的
+     ORDER BY sale_date ASC 语义；Java 层完整断言见 SalesQueryServiceTest（同为真 MySQL + 真 Spring Bean）。
+---------------------------------------------------------------
+S2 POST 手工写入 + 同业务键再写不同 qty → 行数仍 1
+PASS S2-首次http => 201
+S2-首次body={"code":"OK","message":"success","data":{"id":8,"warehouse_id":9004,"sku_id":9002,"sku_code":"SKU-A","product_id":9001,"sale_date":"2026-10-03","qty":"15.000","return_qty":"0.000","sales_amount":"150.00","order_count":null,"source":"MANUAL","batch_id":null,"created_at":"2026-10-17T12:20:53.483Z","updated_at":"2026-10-17T12:20:53.483Z"},"requestId":"req_7405ae88809f602f6b098435c778bd93","timestamp":"2026-10-17T12:20:53.526Z"}
+PASS S2-首行qty => 15.000
+PASS S2-首行source => MANUAL
+PASS S2-二次http => 201
+PASS S2-同行数仍1 => 1
+PASS S2-同主键 => 8
+PASS S2-qty被覆盖为7 => 7.000
+PASS S2-无累加行 => 0
+---------------------------------------------------------------
+S3 跨团队 / qty 负 / sale_date 非法
+PASS S3a-跨团队SKU-code => SAL-6005
+PASS S3a-跨团队SKU-http => 422
+PASS S3b-跨团队仓库-code => SAL-6005
+PASS S3b-跨团队仓库-http => 422
+PASS S3c-qty负-code => SAL-6002
+PASS S3c-qty负-http => 400
+PASS S3d-日期非法-code => SAL-6003
+PASS S3d-日期非法-http => 400
+PASS S3e-缺sku-code => COM-0001
+PASS S3e-缺sku-http => 400
+PASS S3-负向用例零落库 => 0
+---------------------------------------------------------------
+S5 角色与控制：VIEWER POST / OPERATOR POST / 审计条数
+PASS S5a-VIEWER-code => TEAM-2003
+PASS S5a-VIEWER-http => 403
+PASS S5a-VIEWER未落库 => 0
+PASS S5b-OPERATOR-http => 201
+PASS S5c-审计+1 => 6
+PASS S5d-ADMIN-http => 201
+PASS S5e-VIEWER可读 => 200
+PASS S5f-无令牌401 => 401
+---------------------------------------------------------------
+P1 upsert 可将 sales_amount 覆盖为 NULL
+PASS P1-amount为NULL => 1
+---------------------------------------------------------------
+P2 pageSize=201 → COM-0007（不静默夹取）
+PASS P2-code => COM-0007
+PASS P2-http => 400
+---------------------------------------------------------------
+P3 分页响应字段名 list（非 items）
+PASS P3-has-list => 1
+PASS P3-has-total => 1
+PASS P3-no-items => 0
+---------------------------------------------------------------
+P4 product_id 冗余列 == sku.product_id
+PASS P4-不一致行数 => 0
+PASS P4-样例值 => 9001
+---------------------------------------------------------------
+P5 审计 change_summary 记被覆盖行数（受控两连写：新键→覆盖 0 行；同键再写→覆盖 1 行）
+P5-首次摘要=[upsert 日销售：覆盖 0 行 / 共 1 行（source=MANUAL）]
+P5-覆盖摘要=[upsert 日销售：覆盖 1 行 / 共 1 行（source=MANUAL）]
+PASS P5a-新键覆盖0行 => 1
+PASS P5b-同键覆盖1行 => 1
+PASS P5c-摘要格式全合规 => 0
+---------------------------------------------------------------
+P6 team_id 由租户线自动补齐（调用方不传 team_id）
+PASS P6-落库team_id => 7
+PASS P6-越界team_id => 0
+---------------------------------------------------------------
+P7 GET 零副作用
+PASS P7-行数不变 => 12
+---------------------------------------------------------------
+P8 读隔离：团队 8 的 owner8 看不到团队 7 数据
+P8 total: team7=12 team8=0
+PASS P8-团队8为空 => 0
+PASS P8-团队7非空 => 1
+---------------------------------------------------------------
+B8_CHECK_TOTAL=73
+B8_FAIL_COUNT=0
+=== B8 EVIDENCE DONE ===
+--- cleanup ---
