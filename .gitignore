@@ -18,6 +18,10 @@ target/
 *.class
 .mvn/timing.properties
 
+# ===== 后端运行时产物 =====
+# 导入文件落盘默认目录（IMPORT_STORAGE_DIR 缺省值 ./data/import，见 application.yml）
+data/
+
 # ===== Node / 前端 =====
 node_modules/
 dist/

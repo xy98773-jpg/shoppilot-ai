@@ -1123,7 +1123,7 @@ HAVING diff <> 0;
 **理由**：销售日报是**"某一天的权威值"**（快照语义），不是**增量事件流**。覆盖语义与"日粒度唯一性"完全自洽；累加语义必须依赖"每次导入都是增量"这一无法验证的假设。
 
 **实现**：`INSERT ... ON DUPLICATE KEY UPDATE qty = VALUES(qty), return_qty = ..., sales_amount = ..., order_count = ..., source = ..., batch_id = ...`。
-**代价与缓解**：覆盖会丢失"被覆盖的旧值"。缓解：① 导入前若命中已存在数据，在 `VALIDATED` 阶段生成 **WARNING 级 `import_row_errors`**（`error_code = 'IMP-4006'`，⚠️ 该码**尚未在 `DESIGN_BASIS §12.3` 定义，建议新增**，登记 `D-12`），让用户确认"将覆盖 N 行"；② 覆盖操作写 `audit_logs`（`action = 'SALES_DAILY_UPSERT'`，`change_summary` 记录被覆盖行数）。
+**代价与缓解**：覆盖会丢失"被覆盖的旧值"。缓解：① 导入前若命中已存在数据，在 `VALIDATED` 阶段生成 **WARNING 级 `import_row_errors`**（`error_code = 'IMP-4006'`，✅ 该码**已固化于 `DESIGN_BASIS §12.3`**，见 `ERROR_CODES.md §2`；`D-12` 已闭环），让用户确认"将覆盖 N 行"；② 覆盖操作写 `audit_logs`（`action = 'SALES_DAILY_UPSERT'`，`change_summary` 记录被覆盖行数）。
 
 #### D.3 如何避免重复统计
 

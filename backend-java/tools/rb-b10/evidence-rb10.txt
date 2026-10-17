@@ -1,0 +1,81 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=0b6fd3222004d2be1e20cad4e298d211008a3244ef4590cc9f8c242ce2269318
+DATE=2026-10-17T17:08:26Z
+REVIEWER=项目负责人（独立复核，不采信交付自报）
+SCOPE=B10 前端 api/types 契约 + 开发未覆盖的相邻面 + R78 疑似缺口复现
+MYSQL_READY=1 (port 3337, 独立容器 rb10-mysql)
+APP_PID=6506 (port 18117)
+APP_UP=1
+SEED_OK (seed-b95.sql：团队 7，仓库 9004，SKU-A=9002 / SKU-B=9003 / SKU-C=9005 各 10.000)
+SEED_EXTRA_OK (approver01/APPROVER, 仅本复核库)
+TOKEN_OWNER=312 TOKEN_ADMIN=312 TOKEN_OPER=320 TOKEN_VIEWER=315 TOKEN_APPROVER=320
+PASS P0 四个基础账号可登录（token 非空） => ok
+---------------------------------------------------------------
+PASS P1 余额列表 http => 200
+PASS P1 分页字段为 list => 3
+PASS P1 四列齐全(on_hand/in_transit/committed/available) => 4
+PASS P1 数量为字符串("10.000") => 10.000
+---------------------------------------------------------------
+P2 默认首行 qty=6.000
+P2 sort=...,desc 首行 qty=10.000
+P2 sort[]=...,desc 首行 qty=10.000
+PASS P2 sort=on_hand_qty,desc 生效（最大在前） => 10.000
+PASS P2 axios 数组形态 sort[]= 亦被后端识别（无静默失效） => 10.000
+---------------------------------------------------------------
+PASS P3 流水列表 http => 200
+PASS P3 分页字段为 list => yes
+PASS P3 首条流水 qty_delta 为字符串 => yes
+PASS P3 流水详情 http => 200
+PASS P3 详情含 occurred_at/created_at（前端类型声明的字段） => 2
+---------------------------------------------------------------
+PASS P4 缺 Idempotency-Key http => 400
+PASS P4 缺键错误码 => COM-0001
+---------------------------------------------------------------
+PASS P5 首次调整 http(201) => 201
+PASS P5 首次无 Idempotent-Replayed => 
+PASS P5 同键重放 http(201) => 201
+PASS P5 重放带 Idempotent-Replayed: true => true
+PASS P5 重放返回同一 transaction_id => 4
+PASS P5 重放后余额仍为首次结果 => 8.000
+PASS P5 重放不新增流水（该键仅 1 条） => 1
+---------------------------------------------------------------
+PASS P6 APPROVER 执行 COUNT_ADJUST http(201) => 201
+---------------------------------------------------------------
+PASS P7 VIEWER 调整 http(403) => 403
+PASS P7 VIEWER 错误码 => TEAM-2003
+---------------------------------------------------------------
+PASS P8 销售列表 http => 200
+PASS P8 dateFrom=dateTo 命中 1 行 => 1
+PASS P8 qty 原样字符串 => 12.000
+---------------------------------------------------------------
+TMPD_WIN=D:/Desktop/ShopPilot-AI/backend-java/tools/rb-b10/tmp
+---------------------------------------------------------------
+P9 upload http=201 bizType=SALES_DAILY status=UPLOADED body={"code":"OK","message":"success","data":{"batch_id":1,"batch_no":"IMP-20261017-000001","biz_type":"SALES_DAILY","file_name":"sales.csv","file_hash":"acaeb706ec996462677202f1f45db5e32856b85ebedbc998c2c62cdf0dd65e90","file_size":173,"status":"UPLOADED","created_at":"2026-10-17T17:09:59.329Z"},"request
+P9 preview http=200 status=PARSED rows=2 body={"code":"OK","message":"success","data":{"batch_id":1,"status":"PARSED","biz_type":"SALES_DAILY","template_version":null,"total_rows":2,"preview_rows":2,"columns":[{"index":0,"source_name":"SKU编码","mapped_field":null},{"index":1,"source_name":"仓库编码","mapped_field":null},{"index":2,"source_name":"销售日期","mapped_field":null},{"index":3,"source_name":"净销量","mapped_field":null
+P9 mapping http=200 status=MAPPED
+P9 validate http=200 status=VALIDATED error_rows=0 warning_rows=0
+P9 confirm http=400 code=COM-0001 detail=[{"field": "bizType", "message": "该业务类型落库尚未支持（依赖表未建）", "rejectedValue": "SALES_DAILY"}]
+PASS P9 SALES_DAILY 校验通过(VALIDATED) => VALIDATED
+★ P9 结论：校验=VALIDATED / confirm_http=400 / code=COM-0001
+NOTE P9 【缺口】SALES_DAILY 校验可过但 confirm 不可用 => SSOT IMPORT_WORKFLOW §7.6 要求经 SalesWriteService.batchUpsert 落库；实现 SUPPORTED_BIZ_TYPES 仅 4 类主数据。销售数据唯一入口（PRD F-SAL-01 不做手工录入）因此失效
+PASS P9 批次保持 VALIDATED（未误推进） => VALIDATED
+---------------------------------------------------------------
+P10 upload http=201 bizType=INVENTORY_SNAPSHOT status=UPLOADED body={"code":"OK","message":"success","data":{"batch_id":2,"batch_no":"IMP-20261017-000002","biz_type":"INVENTORY_SNAPSHOT","file_name":"snapshot.csv","file_hash":"0dedb052796775940710755d9df2bb738edf66632f6effc45c3c308df4ae3f3a","file_size":101,"status":"UPLOADED","created_at":"2026-10-17T17:10:16.584Z"
+P10 preview http=200 status=PARSED rows=1 body={"code":"OK","message":"success","data":{"batch_id":2,"status":"PARSED","biz_type":"INVENTORY_SNAPSHOT","template_version":null,"total_rows":1,"preview_rows":1,"columns":[{"index":0,"source_name":"SKU编码","mapped_field":null},{"index":1,"source_name":"仓库编码","mapped_field":null},{"index":2,"source_name":"快照数量","mapped_field":null},{"index":3,"source_name":"快照日期","mapped_f
+P10 mapping http=200 status=MAPPED
+P10 validate http=200 status=VALIDATED error_rows=0 warning_rows=0
+P10 confirm http=400 code=COM-0001 detail=[{"field": "bizType", "message": "该业务类型落库尚未支持（依赖表未建）", "rejectedValue": "INVENTORY_SNAPSHOT"}]
+PASS P10 INVENTORY_SNAPSHOT 校验通过(VALIDATED) => VALIDATED
+★ P10 结论：校验=VALIDATED / confirm_http=400 / code=COM-0001
+NOTE P10 【缺口】INVENTORY_SNAPSHOT 校验可过但 confirm 不可用 => SSOT IMPORT_WORKFLOW §7.5 要求经 InventoryWriteService.applyInitialImport 落库；实现仅 4 类主数据。期初库存无法导入
+PASS P10 批次保持 VALIDATED（未误推进） => VALIDATED
+---------------------------------------------------------------
+P11 status=VALIDATED total=2 / status=COMPLETED total=0
+PASS P11 status 筛选生效（VALIDATED >= 2 且 COMPLETED = 0） => ok
+PASS P11 批次列表分页字段 list => yes
+---------------------------------------------------------------
+RB10_CHECK_FAIL=0
+RB10_NOTES=2
+RB10_RESULT=ALL PASS
+---------------------------------------------------------------
+--- cleanup ---
