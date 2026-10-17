@@ -10,11 +10,16 @@ import com.shoppilot.audit.domain.model.AuditAction;
 import com.shoppilot.audit.domain.model.AuditEvent;
 import com.shoppilot.audit.domain.model.AuditResult;
 import com.shoppilot.catalog.application.CatalogWriteService;
+import com.shoppilot.catalog.application.SkuQueryService;
+import com.shoppilot.catalog.application.WarehouseQueryService;
 import com.shoppilot.common.context.TeamContext;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
 import com.shoppilot.importdata.application.dto.ConfirmRequest;
+import com.shoppilot.inventory.application.InventoryWriteService;
+import com.shoppilot.inventory.domain.InventoryBizType;
+import com.shoppilot.inventory.domain.InventoryTxnType;
 import com.shoppilot.importdata.application.dto.ConfirmResultView;
 import com.shoppilot.importdata.domain.model.ImportBatchStatus;
 import com.shoppilot.importdata.domain.model.ImportBizType;
@@ -30,14 +35,20 @@ import com.shoppilot.importdata.infrastructure.persistence.entity.ImportBatchEnt
 import com.shoppilot.importdata.infrastructure.persistence.entity.ImportRowErrorEntity;
 import com.shoppilot.importdata.infrastructure.persistence.mapper.ImportBatchMapper;
 import com.shoppilot.importdata.infrastructure.persistence.mapper.ImportRowErrorMapper;
+import com.shoppilot.sales.application.SalesWriteService;
+import com.shoppilot.sales.application.dto.SalesDailyUpsertRow;
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -102,14 +113,15 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       无该列、新增须迁移（超出本批零迁移红线）→ 留待后续批次。</li>
  * </ul>
  *
- * <h2>裁定 A2：未支持类型 + 裁定 K1：行数上限</h2>
- * <ul>
- *   <li>{@code INVENTORY_SNAPSHOT} / {@code SALES_DAILY}（依赖 {@code inventory_balances} V1.0.6 /
- *       {@code sales_daily} V1.0.7，均未建）→ {@code 400 COM-0001} + {@code details[bizType]}，
- *       且批次<b>保持 {@code VALIDATED}</b>（先判定、后推进）；</li>
- *   <li>{@code total_rows > }{@value #MAX_TOTAL_ROWS} → {@code 400 IMP-4013}。本批<b>至少保证 confirm
- *       不会绕过</b>该上限（上传/校验入口的补齐已登记待办）。</li>
- * </ul>
+ * <h2>裁定 A2（R78 后已失效）：未支持类型 → 现六类全部支持</h2>
+ * 旧实现把 {@code INVENTORY_SNAPSHOT} / {@code SALES_DAILY} 判为「依赖表未建」而拒（{@code 400 COM-0001}）。
+ * 两张依赖表（{@code inventory_balances} V1.0.6 / {@code sales_daily} V1.0.8）已建、
+ * 两个写服务已就绪（M3-B10.5 / R78），故 {@link #SUPPORTED_BIZ_TYPES} 扩到六类。
+ * <b>「先判定、后推进」的顺序不变</b>：类型判定仍在状态推进之前，未知/未接线类型不会误推进批次。
+ *
+ * <h2>裁定 K1：行数上限</h2>
+ * {@code total_rows > }{@value #MAX_TOTAL_ROWS} → {@code 400 IMP-4013}。本批<b>至少保证 confirm
+ * 不会绕过</b>该上限（上传/校验入口的补齐已登记待办）。
  *
  * <h2>审计：条数不减、提交粒度降到「每批一次」、无孤儿（{@code ADR-004} D1/D2/D3）</h2>
  * {@code catalog} 的写服务对每个对象写一行 {@code MASTER_DATA_STATUS_CHANGE}（新建与
@@ -135,10 +147,24 @@ public class ImportConfirmService {
     /** 单批数据行上限（{@code §8.5}：20 万行/批；{@code IMP-4013}）。 */
     private static final int MAX_TOTAL_ROWS = 200_000;
 
-    /** 本批支持落库的业务类型（裁定 A1）。 */
+    /**
+     * 已支持落库的业务类型（{@code IMPORT_WORKFLOW §7.1}–§7.7 六类全集；M3-B10.5 / R78 补齐后四类）。
+     *
+     * <h2>★ 为什么从四类扩到六类（R78）</h2>
+     * 旧实现在此处只列 {@code PRODUCT}/{@code SKU}/{@code SUPPLIER}/{@code WAREHOUSE}，
+     * 理由是「{@code inventory_balances}(V1.0.6) / {@code sales_daily}(V1.0.8) 依赖表未建」。
+     * 该理由<b>已不成立</b>：两张表都已随 B6/B8 建好，{@code InventoryWriteService#applyInitialImport}
+     * 与 {@code SalesWriteService#batchUpsert} 均已就绪 ⇒ 不放开会让销售数据唯一入口失效
+     * （{@code sales_daily} 恒空 ⇒ M4 的日均销量 {@code D} 无数据源；期初库存无 {@code INIT_IMPORT} 来源）。
+     *
+     * <p><b>未知类型防御保留</b>：{@link ImportBizType} 现为六值枚举，理论上不会走到 {@code default} 分支；
+     * 但 {@code writeRow}/{@code upsertRowsByCode} 的 {@code default ->} 仍保留抛错
+     * ——枚举日后新增而忘了接线时，必须<b>显式失败</b>而不是静默跳过（任务书【4】明文禁止静默跳过）。
+     */
     private static final Set<String> SUPPORTED_BIZ_TYPES =
             Set.of(ImportBizType.PRODUCT.name(), ImportBizType.SKU.name(),
-                    ImportBizType.SUPPLIER.name(), ImportBizType.WAREHOUSE.name());
+                    ImportBizType.SUPPLIER.name(), ImportBizType.WAREHOUSE.name(),
+                    ImportBizType.INVENTORY_SNAPSHOT.name(), ImportBizType.SALES_DAILY.name());
 
     /** 走「重放分支」的状态（裁定 E2）：已进入导入中或已是终态。 */
     private static final Set<String> REPLAY_STATUSES = Set.of(
@@ -153,6 +179,10 @@ public class ImportConfirmService {
     private final ImportParserFactory parserFactory;
     private final ObjectMapper objectMapper;
     private final CatalogWriteService catalogWriteService;
+    private final SkuQueryService skuQueryService;
+    private final WarehouseQueryService warehouseQueryService;
+    private final InventoryWriteService inventoryWriteService;
+    private final SalesWriteService salesWriteService;
     private final AuditWriteService auditWriteService;
     private final TransactionTemplate txTemplate;
 
@@ -162,6 +192,10 @@ public class ImportConfirmService {
                                 ImportParserFactory parserFactory,
                                 ObjectMapper objectMapper,
                                 CatalogWriteService catalogWriteService,
+                                SkuQueryService skuQueryService,
+                                WarehouseQueryService warehouseQueryService,
+                                InventoryWriteService inventoryWriteService,
+                                SalesWriteService salesWriteService,
                                 AuditWriteService auditWriteService,
                                 PlatformTransactionManager transactionManager) {
         this.batchMapper = batchMapper;
@@ -170,6 +204,10 @@ public class ImportConfirmService {
         this.parserFactory = parserFactory;
         this.objectMapper = objectMapper;
         this.catalogWriteService = catalogWriteService;
+        this.skuQueryService = skuQueryService;
+        this.warehouseQueryService = warehouseQueryService;
+        this.inventoryWriteService = inventoryWriteService;
+        this.salesWriteService = salesWriteService;
         this.auditWriteService = auditWriteService;
         this.txTemplate = new TransactionTemplate(transactionManager);
     }
@@ -258,6 +296,11 @@ public class ImportConfirmService {
             throw new BizException(ex.code(), ex.getMessage());
         }
 
+        // ---- 引用预解析（仅 INVENTORY_SNAPSHOT / SALES_DAILY 需要；一次查询覆盖整个文件）----
+        // ★ MODULE_BOUNDARIES §2.4：经 catalog 的 application 服务批量取 code → id，
+        //   不注入 SkuMapper/WarehouseMapper；也不逐行查（N+1，见 SkuQueryService#getIdsByCodes）。
+        ImportRefs refs = preloadRefs(bizType, targetCol, rows);
+
         // ---- 阶段 1：状态推进 VALIDATED → IMPORTING【单事务】----
         LocalDateTime startedAt = LocalDateTime.now(ZoneOffset.UTC);
         Boolean advanced = txTemplate.execute(tx -> batchMapper.update(null,
@@ -281,7 +324,7 @@ public class ImportConfirmService {
         // ---- 阶段 2：分批落库【每批独立事务】----
         for (int from = 0; from < rows.size(); from += ROW_BATCH_SIZE) {
             int to = Math.min(from + ROW_BATCH_SIZE, rows.size());
-            writeRowBatch(batch, teamId, bizType, header, rows, targetCol, from, to, snapshot);
+            writeRowBatch(batch, teamId, bizType, header, rows, targetCol, from, to, refs, snapshot);
         }
 
         // ---- 阶段 3：终态【单事务】----
@@ -326,7 +369,14 @@ public class ImportConfirmService {
     private void writeRowBatch(ImportBatchEntity batch, long teamId, ImportBizType bizType,
                                List<String> header, List<List<String>> rows,
                                Map<String, Integer> targetCol, int from, int to,
-                               TeamContext.Snapshot snapshot) {
+                               ImportRefs refs, TeamContext.Snapshot snapshot) {
+        // ---- 数据类（INVENTORY_SNAPSHOT / SALES_DAILY）走独立的落库路径 ----
+        // 它们的写入方不是 catalog 的 by-code upsert，而是 inventory / sales 的写服务，
+        // 行模型也不是 JsonNode 而是强类型行对象；两遍式结构（Pass 1 批内原子 / Pass 2 行级重放）保持一致。
+        if (isDataBizType(bizType)) {
+            writeDataRowBatch(batch, teamId, bizType, header, rows, targetCol, from, to, refs, snapshot);
+            return;
+        }
         // ---------- Pass 1：整批一个事务，无 SAVEPOINT ----------
         try {
             try (AuditBufferScope auditScope = new AuditBufferScope(auditWriteService)) {
@@ -381,6 +431,288 @@ public class ImportConfirmService {
             txTemplate.executeWithoutResult(tx -> recordWholeBatchFailure(batch, teamId, header, rows,
                     from, to, snapshot));
         }
+    }
+
+    // =====================================================================
+    // 数据类（INVENTORY_SNAPSHOT / SALES_DAILY）落库路径（M3-B10.5 / R78）
+    // =====================================================================
+
+    /** 是否为「数据类」业务类型（落库到 inventory / sales，而非 catalog 主数据）。 */
+    private static boolean isDataBizType(ImportBizType bizType) {
+        return bizType == ImportBizType.INVENTORY_SNAPSHOT || bizType == ImportBizType.SALES_DAILY;
+    }
+
+    /**
+     * 整个文件的引用预解析：{@code sku_code → id} / {@code warehouse_code → id}（各<b>一条</b>批量查询）。
+     *
+     * <p>只对数据类生效；主数据类返回空壳（不查库，零行为变化）。
+     *
+     * <p>预解析<b>不改变错误语义</b>：查不到的编码不会出现在 {@code Map} 里，
+     * 由 {@link #parseDataRow} 按 {@code CAT-3001}/{@code CAT-3003} 逐行报错（行级失败）。
+     * 文件里出现但库里没有的编码**不在这里抛**——否则会退化成整批失败，与裁定 C1 冲突。
+     */
+    private ImportRefs preloadRefs(ImportBizType bizType, Map<String, Integer> targetCol,
+                                   List<List<String>> rows) {
+        if (!isDataBizType(bizType)) {
+            return ImportRefs.EMPTY;
+        }
+        Set<String> skuCodes = new LinkedHashSet<>();
+        Set<String> warehouseCodes = new LinkedHashSet<>();
+        for (List<String> cells : rows) {
+            String skuCode = cell(cells, columnOf(targetCol, "sku_code")).trim();
+            if (!skuCode.isEmpty()) {
+                skuCodes.add(skuCode);
+            }
+            String whCode = cell(cells, columnOf(targetCol, "warehouse_code")).trim();
+            if (!whCode.isEmpty()) {
+                warehouseCodes.add(whCode);
+            }
+        }
+        return new ImportRefs(skuQueryService.getIdsByCodes(skuCodes),
+                warehouseQueryService.getIdsByCodes(warehouseCodes));
+    }
+
+    /**
+     * 数据类批次区间的两遍式落库（与主数据的 {@link #writeRowBatch} 同构）。
+     *
+     * <ul>
+     *   <li><b>Pass 1</b>：整批一个事务。<b>先全部解析再写</b>（引用缺失在解析阶段就抛，不产生半批脏写）；
+     *       任一行抛 {@code BizException} → 整批回滚 → 转 Pass 2；</li>
+     *   <li><b>Pass 2</b>：逐行重放，行级失败写 {@code import_row_errors}({@code ERROR}) 并继续，
+     *       成功行照常提交（{@code SAVEPOINT} 由 {@code NESTED} 提供）；</li>
+     *   <li>非行级异常（{@code C2}）→ 整批回滚 + 该批全部行记 {@code ERROR}。</li>
+     * </ul>
+     *
+     * <p>审计缓冲（{@link AuditBufferScope}）与主数据路径一致：提交成功才 {@code recordAll}，
+     * 整批回滚则缓冲丢弃（{@code R45} 孤儿审计消除）。{@code SALES_DAILY_UPSERT} 由
+     * {@code SalesWriteService} 自己写（{@code DATABASE_DESIGN §6-J.1} #17，含被覆盖行数）。
+     */
+    private void writeDataRowBatch(ImportBatchEntity batch, long teamId, ImportBizType bizType,
+                                   List<String> header, List<List<String>> rows,
+                                   Map<String, Integer> targetCol, int from, int to,
+                                   ImportRefs refs, TeamContext.Snapshot snapshot) {
+        // ---------- Pass 1：整批一个事务 ----------
+        try {
+            try (AuditBufferScope auditScope = new AuditBufferScope(auditWriteService)) {
+                txTemplate.executeWithoutResult(tx -> {
+                    List<DataRow> parsed = new ArrayList<>(to - from);
+                    for (int i = from; i < to; i++) {
+                        parsed.add(parseDataRow(bizType, targetCol, rows.get(i), refs, i + 1));
+                    }
+                    writeDataRows(bizType, parsed, batch.getId());
+                    accumulateRows(batch, teamId, parsed.size(), 0);
+                });
+            }
+            return; // Pass 1 全部成功
+        } catch (RuntimeException | Error ex) {
+            boolean rowLevel = ex instanceof RuntimeException runtime && isRowLevelFailure(runtime);
+            if (!rowLevel) {
+                log.error("批次 {} 数据类行区间 [{}, {}) 发生非业务异常，整批回滚", batch.getId(), from, to, ex);
+                txTemplate.executeWithoutResult(tx -> recordWholeBatchFailure(batch, teamId, header, rows,
+                        from, to, snapshot));
+                return;
+            }
+            log.info("批次 {} 数据类行区间 [{}, {}) 的 Pass 1 命中行级失败（{}），改走 Pass 2 逐行重放",
+                    batch.getId(), from, to, ex.toString());
+        }
+
+        // ---------- Pass 2：逐行重放 ----------
+        try {
+            try (AuditBufferScope auditScope = new AuditBufferScope(auditWriteService)) {
+                txTemplate.executeWithoutResult(tx -> {
+                    int success = 0;
+                    int failed = 0;
+                    for (int i = from; i < to; i++) {
+                        int rowNo = i + 1;
+                        try {
+                            DataRow row = parseDataRow(bizType, targetCol, rows.get(i), refs, rowNo);
+                            writeDataRows(bizType, List.of(row), batch.getId());
+                            success++;
+                        } catch (RuntimeException ex) {
+                            if (!isRowLevelFailure(ex)) {
+                                throw ex; // C2
+                            }
+                            recordRowFailure(batch, teamId, rowNo, ex, header, rows.get(i), snapshot);
+                            failed++;
+                        }
+                    }
+                    accumulateRows(batch, teamId, success, failed);
+                });
+            }
+        } catch (RuntimeException | Error ex) {
+            log.error("批次 {} 数据类行区间 [{}, {}) 的 Pass 2 发生非业务异常，整批回滚",
+                    batch.getId(), from, to, ex);
+            txTemplate.executeWithoutResult(tx -> recordWholeBatchFailure(batch, teamId, header, rows,
+                    from, to, snapshot));
+        }
+    }
+
+    /** 把已解析的数据行交给对应模块的写服务（{@code MODULE_BOUNDARIES §2.5/§2.6}：绝不直写三张表）。 */
+    private void writeDataRows(ImportBizType bizType, List<DataRow> rows, long batchId) {
+        switch (bizType) {
+            case INVENTORY_SNAPSHOT -> {
+                for (DataRow row : rows) {
+                    // ★ qty = 0：按增量语义「加 0」= 余额与流水都不该动，且 applyInitialImport 要求 qty > 0
+                    //   （INV-5003）。故显式跳过写、仍计为成功行（口径已申报）。
+                    if (row.qty().signum() == 0) {
+                        continue;
+                    }
+                    inventoryWriteService.applyInitialImport(row.skuId(), row.warehouseId(), row.qty(),
+                            batchId, initImportIdempotencyKey(batchId, row.skuId()));
+                }
+            }
+            case SALES_DAILY -> {
+                if (rows.isEmpty()) {
+                    return;
+                }
+                List<SalesDailyUpsertRow> payload = new ArrayList<>(rows.size());
+                for (DataRow row : rows) {
+                    payload.add(toSalesRow(row, batchId));
+                }
+                salesWriteService.batchUpsert(payload);
+            }
+            default -> throw new BizException(ErrorCodes.COM_0001,
+                    "该业务类型不属于数据类，不能走数据落库路径：" + bizType);
+        }
+    }
+
+    /**
+     * {@code INIT_IMPORT} 流水的幂等键（{@code DATABASE_DESIGN §5.10} 设计要点 4 的字面构造）：
+     * {@code <txn_type>:<biz_type>:<biz_ref_id>:<sku_id>} → {@code INIT_IMPORT:IMPORT:<batchId>:<skuId>}。
+     *
+     * <p>★ 该键<b>不含仓库</b>（按 §5.10 字面）。后果：同一批次内同一 SKU 出现在<b>两个仓库</b>时，
+     * 第二行会命中幂等键而按「重放」处理（不重复累加）。这是 SSOT 口径的已知边界，
+     * 已在交付汇报「偏差申报」中登记，<b>不</b>擅自把仓库拼进键里。
+     */
+    private static String initImportIdempotencyKey(long batchId, long skuId) {
+        return InventoryTxnType.INIT_IMPORT.name() + ":" + InventoryBizType.IMPORT.name()
+                + ":" + batchId + ":" + skuId;
+    }
+
+    /** 数据行 → 销售 upsert 行（{@code source=IMPORT}、{@code batch_id=当前批次}，{@code §7.6}）。 */
+    private static SalesDailyUpsertRow toSalesRow(DataRow row, long batchId) {
+        return new SalesDailyUpsertRow(
+                row.skuId(), row.warehouseId(), row.saleDate(),
+                row.qty(), row.returnQty(), row.salesAmount(), row.orderCount(),
+                SalesWriteService.SOURCE_IMPORT, batchId,
+                "SALES_DAILY:" + InventoryBizType.IMPORT.name() + ":" + batchId
+                        + ":" + row.skuId() + ":" + row.warehouseId() + ":" + row.saleDate());
+    }
+
+    /**
+     * 单元格 → 强类型数据行（引用解析 + 数值/日期归一）。
+     *
+     * <p><b>错误语义与校验阶段一致</b>：SKU 不存在/跨团队 → {@code CAT-3001}（{@code IMPORT_WORKFLOW §7.5/§7.6}），
+     * 仓库不存在/跨团队 → {@code CAT-3003}；数值/日期非法 → {@code COM-0001}。
+     * 这些都是 {@link BizException} ⇒ 走裁定 C1 的行级失败路径（{@code PARTIAL_SUCCESS}）。
+     *
+     * <p>「跨团队」在这里表现为「查不到」：{@code getIdsByCodes} 受租户线约束，
+     * 异团队同编码不会出现在 {@code Map} 里 ⇒ 不会误落到本队。
+     */
+    private DataRow parseDataRow(ImportBizType bizType, Map<String, Integer> targetCol,
+                                 List<String> cells, ImportRefs refs, int rowNo) {
+        String skuCode = cell(cells, columnOf(targetCol, "sku_code")).trim();
+        String warehouseCode = cell(cells, columnOf(targetCol, "warehouse_code")).trim();
+        Long skuId = refs.skuIds().get(skuCode);
+        if (skuId == null) {
+            throw BizException.withDetails(ErrorCodes.CAT_3001, "引用的SKU不存在",
+                    List.of(new ApiErrorDetail("sku_code",
+                            "第 " + rowNo + " 行：SKU 编码（" + skuCode + "）不存在或不属于当前团队", skuCode)));
+        }
+        Long warehouseId = refs.warehouseIds().get(warehouseCode);
+        if (warehouseId == null) {
+            throw BizException.withDetails(ErrorCodes.CAT_3003, "引用的仓库不存在",
+                    List.of(new ApiErrorDetail("warehouse_code",
+                            "第 " + rowNo + " 行：仓库编码（" + warehouseCode + "）不存在或不属于当前团队",
+                            warehouseCode)));
+        }
+
+        BigDecimal qty = requiredDecimal(cell(cells, columnOf(targetCol, "qty")), "qty", rowNo);
+        if (bizType == ImportBizType.INVENTORY_SNAPSHOT) {
+            return new DataRow(rowNo, skuId, warehouseId, null, qty, null, null, null);
+        }
+        LocalDate saleDate = requiredDate(cell(cells, columnOf(targetCol, "sale_date")), rowNo);
+        return new DataRow(rowNo, skuId, warehouseId, saleDate, qty,
+                optionalDecimal(cell(cells, columnOf(targetCol, "return_qty")), "return_qty", rowNo),
+                optionalDecimal(cell(cells, columnOf(targetCol, "sales_amount")), "sales_amount", rowNo),
+                optionalInt(cell(cells, columnOf(targetCol, "order_count")), "order_count", rowNo));
+    }
+
+    private static int columnOf(Map<String, Integer> targetCol, String target) {
+        Integer idx = targetCol.get(target);
+        return idx == null ? -1 : idx;
+    }
+
+    private static BigDecimal requiredDecimal(String value, String field, int rowNo) {
+        if (value == null || value.isBlank()) {
+            throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                    List.of(new ApiErrorDetail(field, "第 " + rowNo + " 行：" + field + " 必填", null)));
+        }
+        return toDecimal(value, field, rowNo);
+    }
+
+    private static BigDecimal optionalDecimal(String value, String field, int rowNo) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return toDecimal(value, field, rowNo);
+    }
+
+    private static BigDecimal toDecimal(String value, String field, int rowNo) {
+        try {
+            return new BigDecimal(value.trim());
+        } catch (NumberFormatException ex) {
+            throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                    List.of(new ApiErrorDetail(field,
+                            "第 " + rowNo + " 行：" + field + " 不是合法数值（" + value + "）", value)));
+        }
+    }
+
+    private static Integer optionalInt(String value, String field, int rowNo) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(value.trim());
+        } catch (NumberFormatException ex) {
+            throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                    List.of(new ApiErrorDetail(field,
+                            "第 " + rowNo + " 行：" + field + " 不是合法整数（" + value + "）", value)));
+        }
+    }
+
+    private static LocalDate requiredDate(String value, int rowNo) {
+        if (value == null || value.isBlank()) {
+            throw BizException.withDetails(ErrorCodes.SAL_6003, "sale_date 不合法",
+                    List.of(ApiErrorDetail.of("sale_date", "第 " + rowNo + " 行：sale_date 必填，格式 yyyy-MM-dd")));
+        }
+        try {
+            return LocalDate.parse(value.trim());
+        } catch (DateTimeParseException ex) {
+            throw BizException.withDetails(ErrorCodes.SAL_6003, "sale_date 不合法",
+                    List.of(new ApiErrorDetail("sale_date",
+                            "第 " + rowNo + " 行：sale_date 格式应为 yyyy-MM-dd（" + value + "）", value)));
+        }
+    }
+
+    /** 引用预解析结果（空壳用于主数据类，避免 null 判断散落各处）。 */
+    private record ImportRefs(Map<String, Long> skuIds, Map<String, Long> warehouseIds) {
+
+        private static final ImportRefs EMPTY = new ImportRefs(Map.of(), Map.of());
+    }
+
+    /**
+     * 数据类的一行（解析后的强类型形态）。
+     *
+     * @param rowNo      行号（1 基，用于错误信息与 {@code import_row_errors.row_no}）
+     * @param saleDate   销售日期；{@code INVENTORY_SNAPSHOT} 不适用 → {@code null}
+     * @param returnQty  退货量；{@code INVENTORY_SNAPSHOT} 不适用 → {@code null}
+     * @param salesAmount 销售金额；同上
+     * @param orderCount 订单数；同上
+     */
+    private record DataRow(int rowNo, long skuId, long warehouseId, LocalDate saleDate,
+                           BigDecimal qty, BigDecimal returnQty, BigDecimal salesAmount,
+                           Integer orderCount) {
     }
 
     /**

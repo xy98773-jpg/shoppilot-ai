@@ -10,7 +10,12 @@ import com.shoppilot.catalog.infrastructure.persistence.entity.SkuEntity;
 import com.shoppilot.catalog.infrastructure.persistence.mapper.SkuMapper;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.PageResult;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 
@@ -22,6 +27,9 @@ public class SkuQueryService {
 
     private static final Set<String> SORT_WHITELIST =
             Set.of("id", "sku_code", "name", "status", "created_at", "updated_at");
+
+    /** 单次 {@code IN} 查询的编码上限（避免超大 IN 列表把 SQL 语句撑爆）。 */
+    private static final int CODE_CHUNK_SIZE = 1000;
 
     private final SkuMapper skuMapper;
     private final ProductQueryService productQueryService;
@@ -94,6 +102,59 @@ public class SkuQueryService {
             return List.of();
         }
         return skuMapper.selectBatchIds(ids);
+    }
+
+    /**
+     * <b>按业务编码批量解析 {@code sku_code → id}</b>（M3-B10.5 / R78；供 {@code importdata} 落库前解析引用）。
+     *
+     * <h2>为什么是批量</h2>
+     * 导入落库按行解析引用若逐行查库，1 万行就是 1 万次往返（{@code CatalogWriteService
+     * #preloadWarehouseIdsByCode} 实测逐行 1.91 ms/次 ⇒ 19.1 s，见 {@code ADR-004 D5}）。
+     * 本方法对同一批编码只发<b>一条</b> {@code IN} 查询（超长时按 {@value #CODE_CHUNK_SIZE} 分片，
+     * 仍是 O(n/1000) 而非 O(n)）。
+     *
+     * <h2>口径（{@code IMPORT_WORKFLOW §7.6}）</h2>
+     * 只要求「<b>必须存在且同团队</b>」，故<b>不</b>加 {@code status='ACTIVE'} 过滤——否则
+     * 「停用 SKU 的历史销售导入」会被误判为引用缺失。团队隔离由租户线兜底（跨团队同编码查不到）。
+     *
+     * <p><b>不改变错误语义</b>：键存在但不在返回 {@code Map} 中即「不存在或跨团队」，
+     * 由调用方按 {@code CAT-3001} 处理（文件内重复编码取最后一个，与唯一键
+     * {@code uk_sku_team_code} 一致，不可能并存两行）。
+     *
+     * @param codes 业务编码集合（{@code null}/空白元素自动跳过；{@code null} 或全空 → 空 {@code Map}）
+     * @return 命中的 {@code sku_code → id}；未命中的编码<b>不出现</b>在结果中
+     */
+    public Map<String, Long> getIdsByCodes(Collection<String> codes) {
+        Set<String> distinct = distinctCodes(codes);
+        if (distinct.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Long> ids = new HashMap<>(distinct.size() * 2);
+        List<String> all = new ArrayList<>(distinct);
+        for (int from = 0; from < all.size(); from += CODE_CHUNK_SIZE) {
+            List<String> chunk = all.subList(from, Math.min(from + CODE_CHUNK_SIZE, all.size()));
+            List<SkuEntity> rows = skuMapper.selectList(new QueryWrapper<SkuEntity>()
+                    .select("id", "sku_code")
+                    .in("sku_code", chunk));
+            for (SkuEntity row : rows) {
+                ids.put(row.getSkuCode(), row.getId());
+            }
+        }
+        return ids;
+    }
+
+    /** 去空白 + 去重（保持顺序，仅为稳定日志/分片）。 */
+    private static Set<String> distinctCodes(Collection<String> codes) {
+        if (codes == null || codes.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> distinct = new LinkedHashSet<>();
+        for (String code : codes) {
+            if (code != null && !code.isBlank()) {
+                distinct.add(code.trim());
+            }
+        }
+        return distinct;
     }
 
     /** 归属判定（受控探测区分 403/404）。 */

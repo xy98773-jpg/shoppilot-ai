@@ -10,6 +10,7 @@ import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
 import com.shoppilot.common.web.PageResult;
 import com.shoppilot.sales.application.dto.SalesDailyFilter;
+import com.shoppilot.sales.application.dto.SalesDayKey;
 import com.shoppilot.sales.application.dto.SalesDailyResponse;
 import com.shoppilot.sales.application.dto.SalesGroupView;
 import com.shoppilot.sales.application.dto.SalesPageQuery;
@@ -20,6 +21,8 @@ import com.shoppilot.sales.infrastructure.persistence.mapper.SalesDailyMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -52,12 +55,74 @@ public class SalesQueryService {
             "id", "warehouse_id", "sku_id", "product_id", "sale_date", "qty",
             "return_qty", "sales_amount", "order_count", "source", "created_at", "updated_at");
 
+    /** 批量存在性查询的单次 {@code IN} 分片上限。 */
+    private static final int DAY_KEY_CHUNK_SIZE = 1000;
+
     private final SalesDailyMapper salesDailyMapper;
     private final SkuQueryService skuQueryService;
 
     public SalesQueryService(SalesDailyMapper salesDailyMapper, SkuQueryService skuQueryService) {
         this.salesDailyMapper = salesDailyMapper;
         this.skuQueryService = skuQueryService;
+    }
+
+    /**
+     * <b>批量判定</b>「这些 {@code (sku_id, warehouse_id, sale_date)} 是否已有日销售行」
+     * （M3-B10.5 / R78）。
+     *
+     * <h2>用途与口径</h2>
+     * {@code importdata} 在 {@code VALIDATED} 阶段用它产生 {@code IMP-4006}（{@code WARNING}，
+     * 「将覆盖 N 行已有数据」，{@code IMPORT_WORKFLOW §7.6} / {@code DATABASE_DESIGN §6-D.2}）。
+     * 判定口径就是唯一键 {@code uk_sales_team_wh_sku_date}：<b>行存在即命中</b>。
+     *
+     * <h2>为什么不是逐行查</h2>
+     * N+1。这里按 {@value #DAY_KEY_CHUNK_SIZE} 分片对 {@code sku_id} 发 {@code IN} 查询，
+     * 并用文件的<b>日期区间</b>收窄，最后回到入参 {@code Set} 做精确三元组判定
+     * （同一 SKU 跨仓库/跨日期是笛卡尔超集，不能只看「该 SKU 有任意销售行」）。
+     *
+     * <p>只读：{@code @Transactional(readOnly = true)}，无任何副作用。
+     *
+     * @param keys 待判定的业务键（{@code null}/空 → 空结果；含 {@code null} 日期 → 忽略该键）
+     * @return 命中的子集
+     */
+    @Transactional(readOnly = true)
+    public Set<SalesDayKey> findExistingDayKeys(Collection<SalesDayKey> keys) {
+        if (keys == null || keys.isEmpty()) {
+            return Set.of();
+        }
+        Set<SalesDayKey> wanted = keys.stream()
+                .filter(k -> k != null && k.saleDate() != null)
+                .collect(Collectors.toSet());
+        if (wanted.isEmpty()) {
+            return Set.of();
+        }
+        Set<Long> skuIds = wanted.stream().map(SalesDayKey::skuId).collect(Collectors.toSet());
+        Set<Long> warehouseIds = wanted.stream().map(SalesDayKey::warehouseId).collect(Collectors.toSet());
+        LocalDate minDate = wanted.stream().map(SalesDayKey::saleDate).min(LocalDate::compareTo).orElseThrow();
+        LocalDate maxDate = wanted.stream().map(SalesDayKey::saleDate).max(LocalDate::compareTo).orElseThrow();
+        if (skuIds.isEmpty() || warehouseIds.isEmpty()) {
+            return Set.of();
+        }
+        Set<SalesDayKey> hit = new HashSet<>();
+        List<Long> all = new ArrayList<>(skuIds);
+        for (int from = 0; from < all.size(); from += DAY_KEY_CHUNK_SIZE) {
+            List<Long> chunk = all.subList(from, Math.min(from + DAY_KEY_CHUNK_SIZE, all.size()));
+            List<SalesDailyEntity> rows = salesDailyMapper.selectList(
+                    new LambdaQueryWrapper<SalesDailyEntity>()
+                            .select(SalesDailyEntity::getSkuId, SalesDailyEntity::getWarehouseId,
+                                    SalesDailyEntity::getSaleDate)
+                            .in(SalesDailyEntity::getSkuId, chunk)
+                            .in(SalesDailyEntity::getWarehouseId, warehouseIds)
+                            .ge(SalesDailyEntity::getSaleDate, minDate)
+                            .le(SalesDailyEntity::getSaleDate, maxDate));
+            for (SalesDailyEntity row : rows) {
+                SalesDayKey key = SalesDayKey.of(row.getSkuId(), row.getWarehouseId(), row.getSaleDate());
+                if (wanted.contains(key)) {
+                    hit.add(key);
+                }
+            }
+        }
+        return hit;
     }
 
     // =====================================================================

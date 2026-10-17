@@ -10,7 +10,12 @@ import com.shoppilot.catalog.infrastructure.persistence.entity.WarehouseEntity;
 import com.shoppilot.catalog.infrastructure.persistence.mapper.WarehouseMapper;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.PageResult;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 
@@ -26,6 +31,9 @@ public class WarehouseQueryService {
     /** 允许排序的物理列白名单（{@code §2.2}：白名单外 → COM-0007）。 */
     private static final Set<String> SORT_WHITELIST =
             Set.of("id", "code", "name", "status", "is_default", "created_at", "updated_at");
+
+    /** 单次 {@code IN} 查询的编码上限（避免超大 IN 列表把 SQL 语句撑爆）。 */
+    private static final int CODE_CHUNK_SIZE = 1000;
 
     private final WarehouseMapper warehouseMapper;
 
@@ -75,5 +83,43 @@ public class WarehouseQueryService {
                 warehouseMapper.selectById(id),
                 () -> warehouseMapper.selectTeamIdById(id),
                 ErrorCodes.CAT_3003, "仓库不存在");
+    }
+
+    /**
+     * <b>按业务编码批量解析 {@code code → id}</b>（M3-B10.5 / R78；同 {@code SkuQueryService#getIdsByCodes}）。
+     *
+     * <p>一次 {@code IN} 查询（超长按 {@value #CODE_CHUNK_SIZE} 分片）代替逐行解析，
+     * 理由与 {@code CatalogWriteService#preloadWarehouseIdsByCode} 一致（逐行 1.91 ms/次）。
+     *
+     * <p><b>口径</b>：只判「存在且同团队」（{@code IMPORT_WORKFLOW §7.5}），<b>不</b>按 {@code status} 过滤；
+     * 跨团队同编码由租户线过滤后自然查不到，由调用方按 {@code CAT-3003} 处理。
+     *
+     * @param codes 仓库编码集合（{@code null}/空白元素自动跳过；全空 → 空 {@code Map}）
+     * @return 命中的 {@code code → id}；未命中的编码<b>不出现</b>
+     */
+    public Map<String, Long> getIdsByCodes(Collection<String> codes) {
+        Set<String> distinct = new LinkedHashSet<>();
+        if (codes != null) {
+            for (String code : codes) {
+                if (code != null && !code.isBlank()) {
+                    distinct.add(code.trim());
+                }
+            }
+        }
+        if (distinct.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Long> ids = new HashMap<>(distinct.size() * 2);
+        List<String> all = new ArrayList<>(distinct);
+        for (int from = 0; from < all.size(); from += CODE_CHUNK_SIZE) {
+            List<String> chunk = all.subList(from, Math.min(from + CODE_CHUNK_SIZE, all.size()));
+            List<WarehouseEntity> rows = warehouseMapper.selectList(new QueryWrapper<WarehouseEntity>()
+                    .select("id", "code")
+                    .in("code", chunk));
+            for (WarehouseEntity row : rows) {
+                ids.put(row.getCode(), row.getId());
+            }
+        }
+        return ids;
     }
 }

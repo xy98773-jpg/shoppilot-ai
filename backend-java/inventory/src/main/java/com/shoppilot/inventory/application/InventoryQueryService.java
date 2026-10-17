@@ -10,6 +10,7 @@ import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
 import com.shoppilot.common.web.PageResult;
 import com.shoppilot.inventory.application.dto.AlertView;
+import com.shoppilot.inventory.application.dto.BalanceKey;
 import com.shoppilot.inventory.application.dto.BalanceView;
 import com.shoppilot.inventory.application.dto.InventoryPageQuery;
 import com.shoppilot.inventory.application.dto.TransactionView;
@@ -26,6 +27,8 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +58,9 @@ public class InventoryQueryService {
     /** 允许排序的物理列白名单（snake_case）。 */
     private static final Set<String> BALANCE_SORT_WHITELIST = Set.of(
             "id", "warehouse_id", "sku_id", "on_hand_qty", "available_qty", "last_txn_at", "version");
+    /** 批量余额存在性查询的单次 {@code IN} 分片上限。 */
+    private static final int BALANCE_KEY_CHUNK_SIZE = 1000;
+
     private static final Set<String> TXN_SORT_WHITELIST = Set.of(
             "id", "warehouse_id", "sku_id", "txn_type", "qty_delta", "qty_after",
             "occurred_at", "created_at");
@@ -228,6 +234,54 @@ public class InventoryQueryService {
                 .eq(InventoryBalanceEntity::getSkuId, skuId)
                 .last("LIMIT 1");
         return balanceMapper.selectCount(wrapper) > 0;
+    }
+
+    /**
+     * <b>批量判定</b>「这些 {@code (sku_id, warehouse_id)} 是否已有余额行」（M3-B10.5 / R78）。
+     *
+     * <h2>用途与口径</h2>
+     * {@code importdata} 在 {@code VALIDATED} 阶段要用它产生 {@code IMP-4006}（{@code WARNING}，
+     * 「该 {@code (wh, sku)} 已有余额行，确认后将按增量累加」，{@code IMPORT_WORKFLOW §7.5}）。
+     * 判定口径就是 {@code uk_invbal_team_wh_sku}：<b>行存在即命中</b>，不看数量是否为 0、不看 {@code version}。
+     *
+     * <h2>为什么不是逐行 {@link #hasBalance}</h2>
+     * 那是 N+1：1 万行 = 1 万次往返。这里按 {@value #BALANCE_KEY_CHUNK_SIZE} 分片对
+     * {@code sku_id} 发 {@code IN} 查询，再用入参集合<b>精确过滤</b>（同一 SKU 跨仓库是笛卡尔超集，
+     * 必须回到精确 {@code Set} 判定，不能只看「该 SKU 有任意余额行」）。
+     *
+     * <p>只读：{@code @Transactional(readOnly = true)}，无任何副作用。
+     *
+     * @param keys 待判定的业务键（{@code null}/空 → 空结果）
+     * @return 命中的子集（与入参同一元素类型）
+     */
+    @Transactional(readOnly = true)
+    public Set<BalanceKey> findExistingBalanceKeys(Collection<BalanceKey> keys) {
+        if (keys == null || keys.isEmpty()) {
+            return Set.of();
+        }
+        Set<BalanceKey> wanted = new HashSet<>(keys);
+        Set<Long> skuIds = wanted.stream().map(BalanceKey::skuId).collect(Collectors.toSet());
+        Set<Long> warehouseIds = wanted.stream().map(BalanceKey::warehouseId).collect(Collectors.toSet());
+        if (skuIds.isEmpty() || warehouseIds.isEmpty()) {
+            return Set.of();
+        }
+        Set<BalanceKey> hit = new HashSet<>();
+        List<Long> all = new ArrayList<>(skuIds);
+        for (int from = 0; from < all.size(); from += BALANCE_KEY_CHUNK_SIZE) {
+            List<Long> chunk = all.subList(from, Math.min(from + BALANCE_KEY_CHUNK_SIZE, all.size()));
+            List<InventoryBalanceEntity> rows = balanceMapper.selectList(
+                    new LambdaQueryWrapper<InventoryBalanceEntity>()
+                            .select(InventoryBalanceEntity::getSkuId, InventoryBalanceEntity::getWarehouseId)
+                            .in(InventoryBalanceEntity::getSkuId, chunk)
+                            .in(InventoryBalanceEntity::getWarehouseId, warehouseIds));
+            for (InventoryBalanceEntity row : rows) {
+                BalanceKey key = BalanceKey.of(row.getSkuId(), row.getWarehouseId());
+                if (wanted.contains(key)) {
+                    hit.add(key);
+                }
+            }
+        }
+        return hit;
     }
 
     // =====================================================================

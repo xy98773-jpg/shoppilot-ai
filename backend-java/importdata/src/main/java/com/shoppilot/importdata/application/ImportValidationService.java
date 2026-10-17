@@ -10,6 +10,12 @@ import com.shoppilot.catalog.infrastructure.persistence.mapper.WarehouseMapper;
 import com.shoppilot.common.context.TeamContext;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.BizException;
+import com.shoppilot.catalog.application.SkuQueryService;
+import com.shoppilot.catalog.application.WarehouseQueryService;
+import com.shoppilot.inventory.application.InventoryQueryService;
+import com.shoppilot.inventory.application.dto.BalanceKey;
+import com.shoppilot.sales.application.SalesQueryService;
+import com.shoppilot.sales.application.dto.SalesDayKey;
 import com.shoppilot.importdata.application.dto.RowErrorView;
 import com.shoppilot.importdata.application.dto.ValidationResultView;
 import com.shoppilot.importdata.domain.model.ImportBizType;
@@ -80,12 +86,15 @@ import org.springframework.transaction.annotation.Transactional;
  * <b>upsert 更新、不报错</b>，<b>只有「文件内重复」记后行 {@code ERROR}</b>。
  * 原判定会堵死 upsert 更新路径（{@code R38} 缺陷根因）。
  *
- * <h2>★ 裁定 F：依赖未建表的检查登记跳过</h2>
- * {@code INVENTORY_SNAPSHOT}/{@code SALES_DAILY} 的「命中库内已有行 → {@code IMP-4006}（WARNING）」
- * 依赖 {@code inventory_balances}（V1.0.6）/ {@code sales_daily}（V1.0.7，均未建），
- * 本批<b>登记并跳过</b>（见 {@code DESIGN_REVIEW} 待办）。{@code SALES_DAILY} 的「日期缺口 >30%
- * → {@code IMP-4014}（WARNING）」亦为 WARNING 且仅依赖文件内启发式，本批同样登记跳过，
- * 待 M3-T12 随销售表落地一并实现。
+ * <h2>★ IMP-4006 已实现（M3-B10.5 / R78 撤销「裁定 F 登记跳过」）</h2>
+ * 原「裁定 F」因 {@code inventory_balances}（V1.0.6）/ {@code sales_daily}（V1.0.8）当时未建，
+ * 把两类数据的「命中库内已有行 → {@code IMP-4006}（{@code WARNING}）」登记跳过。两张表已就绪，
+ * 本批改为<b>真实实现</b>（见 {@link #applyOverwriteWarnings}）：存在性查询经
+ * {@code InventoryQueryService#findExistingBalanceKeys} / {@code SalesQueryService#findExistingDayKeys}
+ * 两个只读批量接口（{@code MODULE_BOUNDARIES §2.4}：不注入 inventory / sales 的 Mapper）。
+ *
+ * <p><b>仍未实现</b>：{@code SALES_DAILY} 的「日期缺口 >30% → {@code IMP-4014}（{@code WARNING}）」
+ * ——任务书未列入本批范围（仅要求 {@code IMP-4006}），继续登记待办。
  */
 @Service
 public class ImportValidationService {
@@ -104,6 +113,12 @@ public class ImportValidationService {
     private final SkuMapper skuMapper;
     private final SupplierMapper supplierMapper;
     private final WarehouseMapper warehouseMapper;
+    /** 批量 code → id（{@code IMPORT_WORKFLOW §7.5/§7.6} 引用解析；不注入这两个模块的 Mapper）。 */
+    private final SkuQueryService skuQueryService;
+    private final WarehouseQueryService warehouseQueryService;
+    /** 库内命中判定（{@code IMP-4006} WARNING）：经 application 服务，绝不注入 inventory/sales 的 Mapper。 */
+    private final InventoryQueryService inventoryQueryService;
+    private final SalesQueryService salesQueryService;
 
     public ImportValidationService(ImportParseService parseService,
                                   ImportBatchMapper batchMapper,
@@ -113,7 +128,11 @@ public class ImportValidationService {
                                   ProductMapper productMapper,
                                   SkuMapper skuMapper,
                                   SupplierMapper supplierMapper,
-                                  WarehouseMapper warehouseMapper) {
+                                  WarehouseMapper warehouseMapper,
+                                  SkuQueryService skuQueryService,
+                                  WarehouseQueryService warehouseQueryService,
+                                  InventoryQueryService inventoryQueryService,
+                                  SalesQueryService salesQueryService) {
         this.parseService = parseService;
         this.batchMapper = batchMapper;
         this.rowErrorMapper = rowErrorMapper;
@@ -123,6 +142,10 @@ public class ImportValidationService {
         this.skuMapper = skuMapper;
         this.supplierMapper = supplierMapper;
         this.warehouseMapper = warehouseMapper;
+        this.skuQueryService = skuQueryService;
+        this.warehouseQueryService = warehouseQueryService;
+        this.inventoryQueryService = inventoryQueryService;
+        this.salesQueryService = salesQueryService;
     }
 
     /**
@@ -245,6 +268,9 @@ public class ImportValidationService {
             }
         }
 
+        // ---- IMP-4006：库内命中 → WARNING（{@code §7.5} 增量累加提示 / {@code §7.6} 覆盖提示）----
+        applyOverwriteWarnings(bizType, targetCol, rows, issuesByRow);
+
         // ---- 计数（内存，裁定 H）----
         long errorRows = 0;
         long warningRows = 0;
@@ -316,6 +342,138 @@ public class ImportValidationService {
         view.setWarningRows(warningRows);
         view.setErrors(detail);
         return view;
+    }
+
+    // =====================================================================
+    // IMP-4006：库内命中 → WARNING（M3-B10.5 / R78）
+    // =====================================================================
+
+    /**
+     * 对 {@code INVENTORY_SNAPSHOT} / {@code SALES_DAILY} 补充「命中库内已有行」的 {@code IMP-4006} 告警。
+     *
+     * <h2>为什么必须在 VALIDATED 阶段</h2>
+     * {@code IMPORT_WORKFLOW §7.5}/{@code §7.6} + {@code DATABASE_DESIGN §6-D.2}：两类数据落库后
+     * <b>会改写既有数据</b>（快照=增量累加、日销售=覆盖），用户必须在「确认导入」之前被告知。
+     * 告警级别是 {@code WARNING}（{@code ERROR_CODES §2}：{@code IMP-4006} 已固化，200 语义、
+     * <b>不阻断</b>确认），故不影响 {@code VALIDATED} 推进，也不触发 {@code IMP-4009} 前置门
+     * （前置门只看 {@code ERROR} 行）。
+     *
+     * <h2>口径</h2>
+     * <ul>
+     *   <li>{@code INVENTORY_SNAPSHOT}：目标 {@code (wh, sku)} 已有余额行 → 提示「将按增量累加，
+     *       如需覆盖请使用盘点调整」（{@code §7.5}，本类型<b>不</b>覆盖）；</li>
+     *   <li>{@code SALES_DAILY}：命中 {@code uk_sales_team_wh_sku_date} → 提示「将覆盖」。
+     *       文案与 {@code API_CONTRACT §10.6} 的响应样例逐字一致；</li>
+     *   <li><b>已有 {@code ERROR} 的行不再叠加 WARNING</b>：该行不会被导入，提示「将覆盖」只会误导
+     *       （且 {@code warning_rows} 的计数口径本就是「有 WARNING 且无 ERROR 的行」）；</li>
+     *   <li>引用解析不到（{@code sku_code}/{@code warehouse_code} 查不到 id）的行同样跳过：
+     *       它已有 {@code CAT-3001}/{@code CAT-3003} 的 {@code ERROR}。</li>
+     * </ul>
+     *
+     * <h2>性能</h2>
+     * 编码解析 2 条批量查询 + 命中判定 1~N 条（按 1000 分片）——<b>与行数无关的常数级查询次数</b>，
+     * 不是逐行 N+1。全部经 application 服务（{@code MODULE_BOUNDARIES §2.4}：
+     * {@code importdata} 不注入 {@code inventory}/{@code sales} 的 Mapper）。
+     */
+    private void applyOverwriteWarnings(ImportBizType bizType, Map<String, Integer> targetCol,
+                                        List<List<String>> rows,
+                                        Map<Integer, List<Issue>> issuesByRow) {
+        if (bizType != ImportBizType.INVENTORY_SNAPSHOT && bizType != ImportBizType.SALES_DAILY) {
+            return;
+        }
+        // ---- 1) 收集编码（只收集本文件真正出现的，避免无谓的全表探测）----
+        Set<String> skuCodes = new LinkedHashSet<>();
+        Set<String> warehouseCodes = new LinkedHashSet<>();
+        for (List<String> cells : rows) {
+            String sku = valueOf(targetCol, cells, "sku_code").trim();
+            if (!sku.isEmpty()) {
+                skuCodes.add(sku);
+            }
+            String wh = valueOf(targetCol, cells, "warehouse_code").trim();
+            if (!wh.isEmpty()) {
+                warehouseCodes.add(wh);
+            }
+        }
+        if (skuCodes.isEmpty() || warehouseCodes.isEmpty()) {
+            return;
+        }
+        Map<String, Long> skuIds = skuQueryService.getIdsByCodes(skuCodes);
+        Map<String, Long> warehouseIds = warehouseQueryService.getIdsByCodes(warehouseCodes);
+        if (skuIds.isEmpty() || warehouseIds.isEmpty()) {
+            return;
+        }
+
+        if (bizType == ImportBizType.INVENTORY_SNAPSHOT) {
+            Map<Integer, BalanceKey> keyByRow = new LinkedHashMap<>();
+            for (int r = 0; r < rows.size(); r++) {
+                List<String> cells = rows.get(r);
+                Long skuId = skuIds.get(valueOf(targetCol, cells, "sku_code").trim());
+                Long whId = warehouseIds.get(valueOf(targetCol, cells, "warehouse_code").trim());
+                if (skuId == null || whId == null || hasError(issuesByRow.get(r + 1))) {
+                    continue;
+                }
+                keyByRow.put(r + 1, BalanceKey.of(skuId, whId));
+            }
+            if (keyByRow.isEmpty()) {
+                return;
+            }
+            Set<BalanceKey> hits = inventoryQueryService.findExistingBalanceKeys(keyByRow.values());
+            for (Map.Entry<Integer, BalanceKey> entry : keyByRow.entrySet()) {
+                if (hits.contains(entry.getValue())) {
+                    addWarning(issuesByRow, entry.getKey(), "sku_code",
+                            "该仓库与 SKU 已有余额行，确认导入后将按增量累加（如需覆盖请使用盘点调整）");
+                }
+            }
+            return;
+        }
+
+        Map<Integer, SalesDayKey> keyByRow = new LinkedHashMap<>();
+        for (int r = 0; r < rows.size(); r++) {
+            List<String> cells = rows.get(r);
+            Long skuId = skuIds.get(valueOf(targetCol, cells, "sku_code").trim());
+            Long whId = warehouseIds.get(valueOf(targetCol, cells, "warehouse_code").trim());
+            if (skuId == null || whId == null || hasError(issuesByRow.get(r + 1))) {
+                continue;
+            }
+            LocalDate saleDate;
+            try {
+                saleDate = LocalDate.parse(valueOf(targetCol, cells, "sale_date").trim());
+            } catch (DateTimeParseException ex) {
+                continue; // 日期非法已由 ERROR（SAL-6003）覆盖
+            }
+            keyByRow.put(r + 1, SalesDayKey.of(skuId, whId, saleDate));
+        }
+        if (keyByRow.isEmpty()) {
+            return;
+        }
+        Set<SalesDayKey> hits = salesQueryService.findExistingDayKeys(keyByRow.values());
+        for (Map.Entry<Integer, SalesDayKey> entry : keyByRow.entrySet()) {
+            if (hits.contains(entry.getValue())) {
+                addWarning(issuesByRow, entry.getKey(), "sale_date",
+                        "该日期已存在销售数据，确认导入后将覆盖");
+            }
+        }
+    }
+
+    /** 该行是否已存在 {@code ERROR} 级问题（只有 {@code WARNING} 或无问题 → false）。 */
+    private static boolean hasError(List<Issue> issues) {
+        return issues != null && issues.stream().anyMatch(i -> "ERROR".equals(i.level));
+    }
+
+    /**
+     * 追加一条 {@code WARNING}（{@code IMP-4006}）。
+     *
+     * <p>去重：同一行若已因同一错误码告警过则不重复追加（本方法目前只被 {@code IMP-4006} 调用，
+     * 保留判断是为了防止后续接入 {@code IMP-4014} 时同一行被重复计数）。
+     */
+    private static void addWarning(Map<Integer, List<Issue>> issuesByRow, int rowNo,
+                                   String field, String message) {
+        List<Issue> issues = issuesByRow.computeIfAbsent(rowNo, k -> new ArrayList<>());
+        boolean duplicated = issues.stream()
+                .anyMatch(i -> "WARNING".equals(i.level) && ErrorCodes.IMP_4006.equals(i.code()));
+        if (!duplicated) {
+            issues.add(new Issue("WARNING", ErrorCodes.IMP_4006, field, message));
+        }
     }
 
     // =====================================================================
