@@ -24,5 +24,18 @@
             <groupId>com.shoppilot</groupId>
             <artifactId>shoppilot-common</artifactId>
         </dependency>
+        <!-- M3-T12（B8）：销售 upsert 必须写审计 SALES_DAILY_UPSERT（DATABASE_DESIGN §6-J.1 #17 /
+             IMPORT_WORKFLOW:265），为免重蹈 R66（B7 策略 upsert 无审计）。audit 为叶子模块
+             （仅依赖 common），sales → audit 不构成环（MODULE_BOUNDARIES §2.10 / F-40 裁定）。 -->
+        <dependency>
+            <groupId>com.shoppilot</groupId>
+            <artifactId>shoppilot-audit</artifactId>
+        </dependency>
+        <!-- 实体/DTO 的 getter/setter 与构造（与其它业务模块一致用 provided 作用域）。 -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 </project>
