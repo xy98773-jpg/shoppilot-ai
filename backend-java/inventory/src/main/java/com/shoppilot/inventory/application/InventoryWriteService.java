@@ -162,12 +162,28 @@ public class InventoryWriteService {
      * <p>余额行不存在时<b>自动建行</b>（初值 0 再累加，{@code §6-C.6} 并发首次建行）；
      * {@code INIT_IMPORT} 只增不减，不会触发 {@code INV-5006}。
      *
+     * <h2>★ 为什么传播是 {@code NESTED} 而不是 {@code REQUIRED}（{@code R79}，{@code M3-B10.6}）</h2>
+     * 本方法的<b>唯一</b>批量调用方是 {@code ImportConfirmService} 的 Pass 2（逐行重放）。
+     * 在那里，每一行必须是一个可独立回滚的单元：若行内的 {@code BizException}（如 {@code INV-5003}）
+     * 参与并「污染」了外层批事务，Spring 的 {@code globalRollbackOnParticipationFailure=true}
+     * 会把<b>共享事务</b>标 {@code rollback-only} ⇒ 外层 {@code TransactionTemplate.commit()} 抛
+     * {@code UnexpectedRollbackException} ⇒ 该异常既不是 {@code BizException} 也不是
+     * {@code DuplicateKeyException}，被判为「非行级失败」⇒ 整批回滚 + 全行记 {@code COM-0002}，
+     * 也就是说 {@code PARTIAL_SUCCESS} 实际不可达、行级业务错误码被替换成「系统内部错误」。
+     * 改 {@code NESTED} 后，行内失败只回滚到本行的 {@code SAVEPOINT}，外层批事务继续，
+     * 与主数据单行入口 {@code CatalogWriteService#upsertSkuByCode} 完全同构。
+     *
+     * <p><b>HTTP 直调语义不变</b>：无外层事务时 Spring 将 {@code NESTED} 退化为「新建事务」，
+     * 与外层存在时的 {@code REQUIRED} 表现一致（唯一差别是无 {@code SAVEPOINT} 往返）。
+     * <p><b>隔离级别</b>：{@code SAVEPOINT} 无法单独设定隔离级别——存在外层事务时本注解的
+     * {@code READ_COMMITTED} 由 Spring 静默忽略（沿用外层级别），无外层事务时按 {@code READ_COMMITTED} 新建。
+     *
      * @param qty            导入数量（&gt; 0，精度 ≤ 3 位）
      * @param bizRefId       导入批次 ID（可空）
-     * @param idempotencyKey 幂等键（调用方按 {@code §8.3} 构造，长度 ≤ 128）
+     * @param idempotencyKey 幂等键（调用方按 {@code §5.10} 构造：{@code INIT_IMPORT:IMPORT:<batchId>:<skuId>:<warehouseId>}，长度 ≤ 128）
      * @throws BizException {@code INV-5003} / {@code INV-5002}
      */
-    @Transactional(propagation = Propagation.REQUIRED, isolation = Isolation.READ_COMMITTED,
+    @Transactional(propagation = Propagation.NESTED, isolation = Isolation.READ_COMMITTED,
             rollbackFor = Exception.class)
     public StockChangeResult applyInitialImport(long skuId, long warehouseId, BigDecimal qty,
                                                 Long bizRefId, String idempotencyKey) {

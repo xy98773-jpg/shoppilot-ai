@@ -486,6 +486,23 @@ public class ImportConfirmService {
      * <p>审计缓冲（{@link AuditBufferScope}）与主数据路径一致：提交成功才 {@code recordAll}，
      * 整批回滚则缓冲丢弃（{@code R45} 孤儿审计消除）。{@code SALES_DAILY_UPSERT} 由
      * {@code SalesWriteService} 自己写（{@code DATABASE_DESIGN §6-J.1} #17，含被覆盖行数）。
+     *
+     * <h2>★ 行级隔离的成立条件（{@code R79}，{@code M3-B10.6}）</h2>
+     * Pass 2 能把「一行失败」与「其余行成功」分开，<b>前提是写服务入口本身是
+     * {@code @Transactional(propagation = NESTED)}</b>：{@code InventoryWriteService#applyInitialImport}
+     * 与 {@code SalesWriteService#batchUpsert} 均为此传播级别（与主数据单行入口
+     * {@code CatalogWriteService#upsertSkuByCode} 同构）。
+     *
+     * <p>若写成 {@code REQUIRED}：行内 {@code BizException} 会让<b>共享</b>外层批事务被标
+     * {@code rollback-only}（{@code globalRollbackOnParticipationFailure=true}）⇒ 本方法的
+     * {@code txTemplate} 在提交时抛 {@code UnexpectedRollbackException} ⇒ 该异常<b>不是</b>
+     * {@code BizException}/{@code DuplicateKeyException} ⇒ {@link #isRowLevelFailure} 判假 ⇒
+     * 走 {@code C2} 整批失败并把每行记成 {@code COM-0002}。这正是 {@code R79} 的缺陷形态
+     * （现象：{@code PARTIAL_SUCCESS} 不可达、行级业务码被替换成「系统内部错误」、0 行落库）。
+     *
+     * <p>❌ <b>不得</b>用「关掉 {@code globalRollbackOnParticipationFailure}」或「在 importdata 里
+     * {@code catch} 掉 {@code UnexpectedRollbackException} 当作成功」来修——前者全局放宽会掩盖
+     * 真实回滚需求，后者是事务已回滚却声称成功（假成功）。
      */
     private void writeDataRowBatch(ImportBatchEntity batch, long teamId, ImportBizType bizType,
                                    List<String> header, List<List<String>> rows,
@@ -558,7 +575,7 @@ public class ImportConfirmService {
                         continue;
                     }
                     inventoryWriteService.applyInitialImport(row.skuId(), row.warehouseId(), row.qty(),
-                            batchId, initImportIdempotencyKey(batchId, row.skuId()));
+                            batchId, initImportIdempotencyKey(batchId, row.skuId(), row.warehouseId()));
                 }
             }
             case SALES_DAILY -> {
@@ -577,16 +594,29 @@ public class ImportConfirmService {
     }
 
     /**
-     * {@code INIT_IMPORT} 流水的幂等键（{@code DATABASE_DESIGN §5.10} 设计要点 4 的字面构造）：
-     * {@code <txn_type>:<biz_type>:<biz_ref_id>:<sku_id>} → {@code INIT_IMPORT:IMPORT:<batchId>:<skuId>}。
+     * {@code INIT_IMPORT} 流水的幂等键（{@code DATABASE_DESIGN §5.10} 设计要点 4）：
+     * {@code <txn_type>:<biz_type>:<biz_ref_id>:<sku_id>[:<suffix>]}
+     * → {@code INIT_IMPORT:IMPORT:<batchId>:<skuId>:<warehouseId>}。
      *
-     * <p>★ 该键<b>不含仓库</b>（按 §5.10 字面）。后果：同一批次内同一 SKU 出现在<b>两个仓库</b>时，
-     * 第二行会命中幂等键而按「重放」处理（不重复累加）。这是 SSOT 口径的已知边界，
-     * 已在交付汇报「偏差申报」中登记，<b>不</b>擅自把仓库拼进键里。
+     * <h2>★ 为什么必须追加 {@code :<warehouse_id>}（{@code R80}，{@code M3-B10.6}）</h2>
+     * 余额与流水都是 {@code (team_id, warehouse_id, sku_id)} <b>三键</b>维度，而初始库存模板
+     * （{@code INVENTORY_SNAPSHOT}）的 {@code warehouse_code} 是<b>必填</b>列 ⇒「同一批次内同一 SKU
+     * 出现在多个仓库」是<b>常规合法场景</b>。旧实现按 §5.10 的一般式构造（不含仓库），于是：
+     * 第二行命中同一幂等键 → {@code InventoryWriteService#replayIfIdempotent} 的 {@code sameContent}
+     * 比 {@code warehouse_id} → 内容不同 → 抛 {@code INV-5003}（文案「请勿重复提交」，完全误导），
+     * 整批 0 行落库。
+     *
+     * <p>{@code §5.10} 要点 4 的判定口径（{@code 0f4cade} 订正）：<b>若不加后缀会导致「两条合法业务行同键」，
+     * 则该后缀是必填而非可选</b>。{@code INIT_IMPORT} 正属此列。
+     *
+     * <p><b>保持不变的语义</b>：同一批次 + 同一 SKU + <b>同一仓库</b> 重复确认仍是<b>纯重放</b>
+     * （同键 → {@code replayIfIdempotent} 命中且内容一致 → 余额与流水都不增）；
+     * {@code replayIfIdempotent} 的比对字段（{@code txn_type}/{@code biz_type}/{@code biz_ref_id}/
+     * {@code sku_id}/{@code warehouse_id}/数量，<b>不含 {@code reason}</b>）一字未改（{@code R75} 维持）。
      */
-    private static String initImportIdempotencyKey(long batchId, long skuId) {
+    private static String initImportIdempotencyKey(long batchId, long skuId, long warehouseId) {
         return InventoryTxnType.INIT_IMPORT.name() + ":" + InventoryBizType.IMPORT.name()
-                + ":" + batchId + ":" + skuId;
+                + ":" + batchId + ":" + skuId + ":" + warehouseId;
     }
 
     /** 数据行 → 销售 upsert 行（{@code source=IMPORT}、{@code batch_id=当前批次}，{@code §7.6}）。 */

@@ -28,6 +28,7 @@ import java.util.TreeSet;
 import java.util.stream.Collectors;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -118,10 +119,20 @@ public class SalesWriteService {
     /**
      * 批量日销售 upsert。逐行校验 → 逐行 upsert（覆盖）→ 一条审计（记覆盖行数）。
      *
+     * <h2>★ 为什么传播是 {@code NESTED}（{@code R79}，{@code M3-B10.6}）</h2>
+     * 批量调用方是 {@code ImportConfirmService} 的 Pass 2（逐行重放 {@code List.of(row)}）。
+     * 若用 {@code REQUIRED} 参与外层批事务，行内 {@code BizException}（如 {@code SAL-6003}）
+     * 会让共享事务被标 {@code rollback-only} ⇒ 外层提交抛 {@code UnexpectedRollbackException}
+     * ⇒ 被判为「非行级失败」⇒ 整批回滚 + 全行 {@code COM-0002}，{@code PARTIAL_SUCCESS} 不可达。
+     * {@code NESTED} 提供行级 {@code SAVEPOINT}，失败行只回滚自己，与主数据单行入口同构。
+     *
+     * <p><b>HTTP 直调语义不变</b>：无外层事务时 {@code NESTED} 退化为新建事务。
+     * 单条入口 {@link #upsertDaily} 保持 {@code REQUIRED}（其唯一调用方是控制器，无外层事务）。
+     *
      * @param rows 待写入行（团队 / product_id 由服务端派生）
      * @return 与入参同序的落库视图
      */
-    @Transactional
+    @Transactional(propagation = Propagation.NESTED, rollbackFor = Exception.class)
     public List<SalesDailyResponse> batchUpsert(List<SalesDailyUpsertRow> rows) {
         return doBatchUpsert(rows);
     }
