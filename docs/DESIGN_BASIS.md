@@ -724,6 +724,12 @@ effective_in_transit_qty = Σ(poi.ordered_qty − poi.received_qty)
 | `IMP-4014` |
 | `INV-5006` |
 | `INV-5009` |
+| `INV-5004` |
+| `INV-5005` |
+| `INV-5007` |
+| `INV-5008` |
+| `INV-5010` |
+| `INV-5011` |
 | `RPL-8007` |
 | `ANL-7005` |
 | `RPL-8004` |
