@@ -1,0 +1,80 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=8f33a0f861bb72be5127202abc5db65bc9e881b1327ab0a13cddd153008ec394
+DATE=2026-10-17T15:36:00Z
+MYSQL_READY=1 (port 3334)
+APP_PID=1528 (port 18114)
+APP_UP=1
+SEED_OK (seed-b95.sql)
+TOKENS own=eyJhbG op=eyJhbG adm=eyJhbG own8=eyJhbG
+SEED-EXTRA team8 余额行=1
+---------------------------------------------------------------
+P1 首次 COUNT_ADJUST 目标==当前(10.000) → 201、无流水、且【不得】带 Idempotent-Replayed
+P1-http=201 txn_null=null replay_header=[true]
+PASS P1-http => 201
+PASS P1-无流水id => null
+PASS P1-#12不写审计 => 0
+FAIL P1-首次不得带重放头 expected= actual=true
+---------------------------------------------------------------
+P2 首次变更(10→9) 无重放头；同键重放 → 同流水 + 重放头 + 审计不增
+P2-http=201 txn=3 version=1 header=[]
+PASS P2-http => 201
+PASS P2-首次无重放头 => 
+PASS P2-余额 => 9.000
+PASS P2-#12审计+1 => 1
+P2b-http=201 txn=3 header=[true]
+PASS P2b-http201 => 201
+PASS P2b-同流水 => 3
+PASS P2b-重放头 => true
+PASS P2b-审计不增 => 1
+PASS P2b-余额不变 => 9.000
+---------------------------------------------------------------
+P3 审计阻断下冲销 seed-init-9002(SKU-A 10.000) → 500、REVERSAL 0 行、余额/审计不变
+P3-前置 REVERSAL=0 #13=0 SKU-A=10.000 原流水=1
+P3-http=500 code=COM-0002
+PASS P3-http(非2xx) => 500
+PASS P3-无新增REVERSAL => 0
+PASS P3-余额未回退 => 10.000
+PASS P3-#13不增 => 0
+PASS P3-原流水仍可冲 => 0
+---------------------------------------------------------------
+P4 阻断下 MANUAL_ADJUST(ADMIN, +1, key=rb-p4-retry) 失败 → 解除后【同 key】重试必须真落账
+P4-http=500 code=COM-0002 余额=9.000
+PASS P4-http(非2xx) => 500
+PASS P4-余额未变 => 9.000
+PASS P4-无幂等残留 => 0
+P4b-http=201 txn=6 header=[]
+PASS P4b-重试成功 => 201
+PASS P4b-真落账(新流水) => notnull
+PASS P4b-非重放 => 
+PASS P4b-余额 => 10.000
+PASS P4b-#11审计+1 => 1
+---------------------------------------------------------------
+P5 team8 复用 team7 已用键(rb-p2-change) 做 MANUAL_ADJUST → 不得返回 team7 流水
+P5-http=201 team7_txn=3 team8_txn=7 body={"code":"OK","message":"success","data":{"transaction_id":7,"warehouse_id":9103,"sku_id":9102,"txn_type":"MANUAL_ADJUST","qty_delta":"5.000","qty_before":"0.000","qty_after":"5.000","balance_version":1,"occurred_at":"2026-10-17T15:37:28.093Z"},"requestId":"req_365ccf82c0b85e4c6d1abde088c69f50","timestamp":"2026-10-17T15:37:28.115Z"}
+PASS P5-http => 201
+PASS P5-非team7流水 => 1
+PASS P5-team8余额 => 5.000
+PASS P5-team7无污染 => 1
+---------------------------------------------------------------
+P6 冲销 seed-init-9005：同 key 同体 → 200；同 key 改 reason → 实测口径（§6.3 期望 409）
+P6-首次 http=200 txn=8 header=[]
+PASS P6-首次200 => 200
+PASS P6-首次无头 => 
+P6b-同key改reason http=200 code=OK txn=8 header=[true]
+NOTE P6b FINDING：同 key 改 reason 返回 200/OK（§6.3 要求请求体不一致→409；实现按业务等价字段比对，reason 不参与）
+PASS P6b-记录实际口径(200重放) => 200
+PASS P6b-仍只1笔REVERSAL => 1
+---------------------------------------------------------------
+P7 P2 重放时余额已变为 10.000 → 重放响应仍须回放首次结果(qty_after=9.000)
+P7-http=201 txn=3 before=10.000 after=9.000 version=2 当前余额=10.000
+PASS P7-同流水 => 3
+PASS P7-回放qtyAfter => 9.000
+PASS P7-回放qtyBefore => 10.000
+NOTE P7 version：首次=1 重放=2 当前余额=10.000（balance_version 取当前余额版本，与首次响应可能不同）
+---------------------------------------------------------------
+RB95_CHECK_TOTAL=36
+RB95_FAIL_COUNT=1
+RB95_NOTE_COUNT=2
+RB95_RESULT=HAS FAILURES; P1-首次不得带重放头(exp=[] act=[true])
+审计全景 team7：COUNT_ADJUST=1 MANUAL_ADJUST=1 REVERSE=1
+--- cleanup ---
