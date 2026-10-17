@@ -1,0 +1,115 @@
+API=http://localhost:8082
+WEB=http://localhost:5173
+DATE=2026-10-17T16:50:24Z
+BACKEND_HEALTH_HTTP=200
+FRONTEND_DEV_HTTP=200
+SEED_OK (backend-java/tools/evi/seed-b95.sql)
+TOKENS own=eyJhbGci op=eyJhbGci view=eyJhbGci
+---------------------------------------------------------------
+P1 /importdata/wizard：模板端点 + 上传→预览→映射→校验（经前端 dev 代理）
+PASS P1-路由200 => 200
+P1-api=200 templates=6
+PASS P1-模板api200 => 200
+PASS P1-模板含SKU => 1
+CSV=SKU编码,所属商品编码,展示名 SKU-B10-1,P-BAG-001,B10 联调 SKU 一 SKU-B10-2,P-BAG-001,B10 联调 SKU 二 
+CSV_WIN=D:/Desktop/ShopPilot-AI/frontend-web/tools/b10/sku-master.csv
+P1-upload=201 batch=7 status=UPLOADED
+PASS P1-上传201 => 201
+P1-preview=200 status=PARSED rows=2
+PASS P1-预览200 => 200
+PASS P1-预览解析2行 => 2
+P1-mapping=200 status=MAPPED
+PASS P1-映射200 => 200
+P1-validate=200 body={"code":"OK","message":"success","data":{"batch_id":7,"status":"VALIDATED","total_rows":2,"error_rows":0,"warning_rows":0,"errors":[]},"requestId":"req_ccb043bee5fa1803211bff2686c14613","timestamp":"2026-10-17T16:50:45.632Z"}
+PASS P1-校验200 => 200
+PASS P1-校验无错误行 => 0
+---------------------------------------------------------------
+P2 /importdata/batches：批次列表 + 详情 + 错误分页 + 错误导出
+PASS P2-路由200 => 200
+P2-api=200 body={"code":"OK","message":"success","data":{"list":[{"batch_id":7,"batch_no":"IMP-20261017-000001","biz_type":"SKU","file_name":"sku-master.csv","status":"VALIDATED","total_rows":2,"success_rows":0,"failed_rows":0,"error_code":null,"error_message":null,"created_at":"2026-10-17T16:50:38.446Z","started_at":null,"finished_at":null}],"total":1,"page":1,"pageSize":10},"requestId":"req_5493d08854172709f6dc8f579bed67a7","timestamp":"2026-10-17T16:50:48.704Z"}
+PASS P2-列表api200 => 200
+PASS P2-分页字段list => 1
+PASS P2-列表含本批次 => 1
+P2-详情=200
+PASS P2-详情api200 => 200
+P2-错误分页=200 body={"code":"OK","message":"success","data":{"list":[],"total":0,"page":1,"pageSize":20},"requestId":"req_dccf0a3ef4dd827dfce25f7cc191d952","timestamp":"2026-10-17T16:50:52.031Z"}
+PASS P2-错误api200 => 200
+PASS P2-错误分页字段list => 1
+P2-错误导出=http=200 bytes=69 bom=efbbbf
+PASS P2-错误导出200 => 200
+PASS P2-导出UTF8_BOM => efbbbf
+---------------------------------------------------------------
+P3 /inventory/overview：SPA 路由 + 余额/预警端点
+PASS P3-路由200 => 200
+P3-balances=200 sample={"code":"OK","message":"success","data":{"list":[{"id":13,"warehouse_id":9004,"sku_id":9002,"sku_code":"SKU-A","on_hand_qty":"10.000","in_transit_qty":"0.000","committed_qty":"0.000","available_qty":"10.000","last_txn_at":null,"version":0},{"id":14,"warehouse_id":9004,"sku_id":9003,"sku_code":"SKU-B","on_hand_qty":"10.000","in_transit_qty":"0.000","committed_qty":"0.000","available_qty":"10.000","last_txn_at":null,"version":0},{"id":15,"warehouse_id":9004,"sku_id":9005,"sku_code":"SKU-C","on_hand_qty":"10.000","in_transit_qty":"0.000","committed_qty":"0.000","available_qty":"10.000","last_txn_at":null,"version":0}],"total":3,"page":1,"pageSize":10},"requestId":"req_84ad585d545982ab4ba2b1265f72a4bf","timestamp":"2026-10-17T16:51:03.975Z"}
+PASS P3-余额api200 => 200
+PASS P3-四列齐全 => 4
+PASS P3-预警api200 => 200
+---------------------------------------------------------------
+P4 /inventory/transactions：SPA 路由 + 流水列表端点
+PASS P4-路由200 => 200
+P4-api=200 body={"code":"OK","message":"success","data":{"list":[{"id":18,"warehouse_id":9004,"sku_id":9005,"sku_code":"SKU-C","txn_type":"INIT_IMPORT","biz_type":"IMPORT","qty_delta":"10.000","qty_before":"0.000","qty_after":"10.000","biz_ref_id":null,"biz_ref_no":null,"idempotency_key":"seed-init-9005","reason":"种子导入","reversed_txn_id":null,"operator_id":1001,"occurred_at":"2026-10-17T16:50:29.933Z","created_at":"2026-10-17T16:50:29.933Z"},{"id":17,"warehouse_id":9004,"sku_id":9002,"sku_code":"SKU-A","txn_type":"INIT_IMPORT","biz_type":"IMPORT","qty_delta":"10.000","qty_before":"0.000","qty_after":"10.000","biz_ref_id":null,"biz_ref_no":null,"idempotency_key":"seed-init-9002","reason":"种子导入","reversed_txn_id":null,"operator_id":1001,"occurred_at":"2026-10-17T16:50:29.933Z","created_at":"2026-10-17T16:50:29.933Z"}],"total":2,"page":1,"pageSize":10},"requestId":"req_a07538869bdd5e6e2887389be0b5d991","timestamp":"2026-10-17T16:51:07.806Z"}
+PASS P4-流水api200 => 200
+---------------------------------------------------------------
+P5 /inventory/count-adjust：SPA 路由（写路径在 W2 验证）
+PASS P5-路由200 => 200
+---------------------------------------------------------------
+P6 /sales：先经 POST /sales/daily 播种 2 行，再验证只读列表端点与筛选
+PASS P6-路由200 => 200
+P6-播种 http=201/201 rows=2
+PASS P6-播种1_201 => 201
+PASS P6-播种2_201 => 201
+PASS P6-落库2行 => 2
+P6-sales=200 body={"code":"OK","message":"success","data":{"list":[{"id":6,"warehouse_id":9004,"sku_id":9003,"sku_code":"SKU-B","product_id":9001,"sale_date":"2026-10-16","qty":"5.500","return_qty":"0.000","sales_amount":"495.00","order_count":4,"source":"MANUAL","batch_id":null,"created_at":"2026-10-17T16:51:12.107Z","updated_at":"2026-10-17T16:51:12.107Z"},{"id":5,"warehouse_id":9004,"sku_id":9002,"sku_code":"SKU-A","product_id":9001,"sale_date":"2026-10-15","qty":"12.000","return_qty":"1.000","sales_amount":"1080.00","order_count":8,"source":"MANUAL","batch_id":null,"created_at":"2026-10-17T16:51:11.863Z","updated_at":"2026-10-17T16:51:11.863Z"}],"total":2,"page":1,"pageSize":10},"requestId":"req_9a6cf7f1700e8faebb36ca7db723897a","timestamp":"2026-10-17T16:51:15.748Z"}
+PASS P6-销售api200 => 200
+PASS P6-分页字段list => 1
+PASS P6-列表2行 => 2
+P6-日期筛选=200 body={"code":"OK","message":"success","data":{"list":[{"id":6,"warehouse_id":9004,"sku_id":9003,"sku_code":"SKU-B","product_id":9001,"sale_date":"2026-10-16","qty":"5.500","return_qty":"0.000","sales_amount":"495.00","order_count":4,"source":"MANUAL","batch_id":null,"created_at":"2026-10-17T16:51:12.107Z","updated_at":"2026-10-17T16:51:12.107Z"}],"total":1,"page":1,"pageSize":10},"requestId":"req_666835c37afdf9cf96ee751ca014f8ed","timestamp":"2026-10-17T16:51:18.446Z"}
+PASS P6-日期筛选api200 => 200
+PASS P6-日期筛选1行 => 1
+PASS P6-qty=12.000 => 1
+---------------------------------------------------------------
+W1 导入确认：SKU 批次 7 同键重试不得新增第二条记录
+W1-首次http=200 header=[] body={"code":"OK","message":"success","data":{"batch_id":7,"status":"COMPLETED","total_rows":2,"success_rows":2,"failed_rows":0,"started_at":"2026-10-17T16:51:23.050Z","finished_at":"2026-10-17T16:51:23.098Z"},"requestId":"req_1944d83a629c7ee6b2b9a466749710b8","timestamp":"2026-10-17T16:51:23.116Z"}
+PASS W1-首次200 => 200
+PASS W1-首次无重放头 => 
+PASS W1-首次批次COMPLETED => COMPLETED
+PASS W1-首次落库2行 => 5
+W1-首次审计行数=2
+PASS W1-首次审计2条 => 2
+W1-重试http=200 header=[true] body={"code":"OK","message":"success","data":{"batch_id":7,"status":"COMPLETED","total_rows":2,"success_rows":2,"failed_rows":0,"started_at":"2026-10-17T16:51:23.050Z","finished_at":"2026-10-17T16:51:23.098Z"},"requestId":"req_7d883946d0613d594fc5c822fabc774b","timestamp":"2026-10-17T16:51:30.153Z"}
+PASS W1-重试200 => 200
+PASS W1-重试带重放头 => true
+PASS W1-重试不新增记录 => 5
+PASS W1-成功行数=2 => 2
+PASS W1-失败行数=0 => 0
+PASS W1-重试不重复写审计 => 2
+---------------------------------------------------------------
+W2 盘点调整：SKU-B 10.000 → 6.000，同键重试不得二次变动余额
+W2-首次http=201 txn=19 header=[] bal=6.000
+PASS W2-首次201 => 201
+PASS W2-首次无重放头 => 
+PASS W2-余额6.000 => 6.000
+PASS W2-流水+1 => 3
+W2-重试http=201 txn=19 header=[true]
+PASS W2-重试201 => 201
+PASS W2-同一transaction_id => 19
+PASS W2-重试带重放头 => true
+PASS W2-余额仍6.000 => 6.000
+PASS W2-流水不新增 => 3
+---------------------------------------------------------------
+W3 冲销：seed-init-9005（SKU-C 10.000 → 0.000），同键重试不得二次冲销
+W3-首次http=200 txn=20 header=[]
+PASS W3-首次200 => 200
+PASS W3-首次无重放头 => 
+PASS W3-REVERSAL+1 => 1
+W3-重试http=200 txn=20 header=[true]
+PASS W3-重试200 => 200
+PASS W3-同一transaction_id => 20
+PASS W3-重试带重放头 => true
+PASS W3-REVERSAL仍1 => 1
+---------------------------------------------------------------
+B10_CHECK_TOTAL=62
+B10_FAIL_COUNT=0
+B10_RESULT=ALL PASS
+数据全景 team7：balances=3 txn=4 sales=2 batches=1
