@@ -1,0 +1,79 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=292c833c170f02e9fe014490396f09ab97a37759b9acbacc48e5f39a88b96621
+7400e0a02497749d2ca3a1bf2375d1f2bbe1bf17fed309e8104cd8a195aa89d6
+MYSQL_READY=1 (port 3330)
+APP_PID=858 (port 18110)
+APP_UP=1
+mysql: [Warning] Using a password on the command line interface can be insecure.
+SEED_OK
+TODAY=2026-10-17 TOMORROW=2026-10-18
+TOKENS op=eyJhbGciOi own=eyJhbGciOi
+---------------------------------------------------------------
+V0 迁移链 / 应用就绪（确认跑的是含 hotfix 的新 jar）
+PASS V0-迁移条数 => 9
+PASS V0-最高版本 => 1.0.8
+PASS V0-SKU-E上架日 => 2026-10-01
+---------------------------------------------------------------
+V1 覆盖更新历史行（9002/WH1/2026-10-03 先 15 再 7）→ 新校验不得阻断合法覆盖
+PASS V1-首次http => 201
+PASS V1-二次http => 201
+PASS V1-行数仍1 => 1
+PASS V1-qty为新值 => 7.000
+---------------------------------------------------------------
+V2 listed_date=NULL 的 SKU（9003）用 2026-01-05 → 必须放行（NULL 不参与比较）
+PASS V2-前置listed_date为NULL => NULL
+PASS V2-http => 201
+PASS V2-已落库 => 1
+V10-审计基线 A0=3
+---------------------------------------------------------------
+V3 sale_date 晚于今天（2026-10-18）→ 400 SAL-6003 且零落库
+PASS V3-code => SAL-6003
+PASS V3-http => 400
+PASS V3-零落库 => 0
+V3-body={"code":"SAL-6003","message":"sale_date 不合法","data":null,"details":[{"field":"sale_date","message":"sale_date 不能晚于今天","rejectedValue":"2026-10-18"}],"requestId":"req_57dd98f156a5ad939d9faab66af2ddde","timestamp":"2026-10-17T13:41:26.262Z"}
+---------------------------------------------------------------
+V4 sale_date 早于 listed_date（2026-09-30 < 2026-10-01）→ 400 SAL-6003 且零落库
+PASS V4-code => SAL-6003
+PASS V4-http => 400
+PASS V4-零落库 => 0
+V4-body={"code":"SAL-6003","message":"sale_date 不合法","data":null,"details":[{"field":"sale_date","message":"sale_date 不能早于上架日","rejectedValue":"2026-09-30"}],"requestId":"req_d8b03c09a60009471bcbf532d97c30bb","timestamp":"2026-10-17T13:41:30.294Z"}
+---------------------------------------------------------------
+V10 被拒请求（V3/V4）不得新增审计
+PASS V10-审计条数不变 => 3
+---------------------------------------------------------------
+V5 边界日 = listed_date（2026-10-01）→ 201（比较符必须 < 而非 <=）
+PASS V5-http => 201
+PASS V5-已落库 => 1
+---------------------------------------------------------------
+V6 今天（2026-10-17）→ 201（不得误杀当天数据）
+PASS V6-http => 201
+PASS V6-已落库 => 1
+PASS V6-值正确 => 2.000
+---------------------------------------------------------------
+V7 未来日期 + 不存在 SKU(9999) → 期望 422 SAL-6005（sku 校验在日期之前，不泄露存在性）
+PASS V7-code => SAL-6005
+PASS V7-http => 422
+---------------------------------------------------------------
+V8 早于上架日 + 异团队 SKU(9102, team8) → 期望 422 SAL-6005（隔离先于日期，不泄露上架日）
+PASS V8-code => SAL-6005
+PASS V8-http => 422
+---------------------------------------------------------------
+V9 全表残留检查：sale_date > 今天 的行数必须为 0
+PASS V9-未来日期残留 => 0
+---------------------------------------------------------------
+V11 sale_date 格式非法（2026-13-40）→ 400 SAL-6003
+PASS V11-code => SAL-6003
+PASS V11-http => 400
+---------------------------------------------------------------
+V12 GET /sales/daily 仍 200（新增校验不得影响读路径）
+PASS V12-http => 200
+---------------------------------------------------------------
+V13 观察项：校验优先级（仅记录，不作断言）
+NOTE V13a 未来日期+qty=-1 → code=SAL-6002 http=400
+NOTE V13b 未来日期+异团队仓库 → code=SAL-6003 http=400
+NOTE V13c 未来日期+非法source → code=SAL-6003 http=400
+---------------------------------------------------------------
+RB8H_CHECK_TOTAL=30
+RB8H_FAIL_COUNT=0
+=== RB8H EVIDENCE DONE ===
+--- cleanup ---
