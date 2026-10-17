@@ -112,8 +112,14 @@ public final class ErrorCodes {
     public static final String INV_5001 = "INV-5001";
     public static final String INV_5002 = "INV-5002";
     public static final String INV_5003 = "INV-5003";
+    public static final String INV_5004 = "INV-5004";
+    public static final String INV_5005 = "INV-5005";
     public static final String INV_5006 = "INV-5006";
+    public static final String INV_5007 = "INV-5007";
+    public static final String INV_5008 = "INV-5008";
     public static final String INV_5009 = "INV-5009";
+    public static final String INV_5010 = "INV-5010";
+    public static final String INV_5011 = "INV-5011";
 
     // SAL —— 销售（6001–6099）
     public static final String SAL_6002 = "SAL-6002";
