@@ -84,7 +84,9 @@ class M2_TenantIsolationDbIntegrationTest {
             "ProductMapper#selectTeamIdByCode",
             "SkuMapper#selectTeamIdByCode",
             "AuditLogMapper#insert",                        // 无上下文（登录失败）也要能写：显式 team_id
-            "AuditLogMapper#selectRecentByBiz"              // 显式 team_id 条件
+            "AuditLogMapper#selectRecentByBiz",             // 显式 team_id 条件
+            "InventoryBalanceMapper#insertIfAbsent"         // 并发首次建行：ON DUPLICATE KEY UPDATE
+                                                            //   （自带 team_id 列 + 解析兼容性，见其 Javadoc）
     );
 
     @DynamicPropertySource

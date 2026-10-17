@@ -126,8 +126,10 @@ class InventorySchemaConstraintTest {
 
         List<String> versions = queryStrings(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank");
-        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6"), versions,
-                "应应用 V1.0.0 → V1.0.6 七条迁移（V1.0.6 为 M3-T08 inventory）");
+        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6", "1.0.7"),
+                versions,
+                "应应用 V1.0.0 → V1.0.7 八条迁移（V1.0.6 为 M3-T08 inventory，"
+                        + "V1.0.7 为 M3-T09 inventory R53 修正）");
     }
 
     // =====================================================================
