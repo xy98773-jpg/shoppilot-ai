@@ -110,8 +110,8 @@
 - [ ] **清单校验**：缺少必填列 → `IMP-4003`；非法文件类型 → `IMP-4001`；格式错误 → `IMP-4002`
 - [ ] **库存余额查询**：`GET /api/v1/inventory/balances` → 返回 `on_hand_qty` 与 `available_qty`
 - [ ] **流水查询**：`GET /api/v1/inventory/transactions` → 可见 `INIT_IMPORT`/`COUNT_ADJUST` 等类型
-- [ ] **盘点调整**：`POST /inventory/count-adjustments` → 产生 `COUNT_ADJUST` 流水，余额同步
-- [ ] **手工调整权限**：`OPERATOR` 调用 → `TEAM-2003`；`ADMIN` 调用 → 成功
+- [ ] **盘点调整**：`POST /api/v1/inventory/adjustments`（二合一入口，`adjust_type=COUNT`）→ 产生 `COUNT_ADJUST` 流水，余额同步<br>↳ 口径订正（2026-10-18）：原写 `/inventory/count-adjustments` 已被 `API_CONTRACT §11.4 / §13.1 #9` 合并为单一入口；旧路径**不存在**，按其验收会产生假 FAIL
+- [ ] **手工调整权限**：`POST /api/v1/inventory/adjustments` + `adjust_type=MANUAL`，`OPERATOR` → **`INV-5007`**（`MANUAL_ADJUST` 需 `ADMIN`+，服务层收窄）、`ADMIN` → 成功；`VIEWER` 调任一类 → `TEAM-2003`（静态 `@RequireRole(OPERATOR+)`）<br>↳ 口径订正（2026-10-18）：原写「`OPERATOR` → `TEAM-2003`」与实现不符（`R59`：`OPERATOR` 已过静态门，落在服务层的 `INV-5007`）
 - [ ] **负库存防护**：出库超量 → `INV-5001`
 - [ ] **幂等**：同 `(team_id, idempotency_key)` 重复流水且内容不一致 → `INV-5003`
 - [ ] **并发冲突**：并发更新余额 → 可观测 `INV-5002`

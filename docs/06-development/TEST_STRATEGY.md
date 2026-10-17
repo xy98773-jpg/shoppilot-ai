@@ -173,7 +173,7 @@
 | U-5 | 同上但 `qty_delta` 不同 | `INV-5003` |
 | U-6 | 同 `(wh, sku, date)` 两次 upsert 销售 | 覆盖，行数仍为 1 |
 | U-7 | 同团队同 `file_hash` 同 `biz_type` 二次上传 | `IMP-4004`，写 `DUPLICATE_REJECTED`（槽位 `NULL`） |
-| U-8 | 同文件 `FORCE_REIMPORT` | 新批次成功，旧批次 `superseded_by_batch_id` 回填、`dedupe_hash = NULL` |
+| U-8 | 同文件 `FORCE_REIMPORT` | 新批次成功，旧批次 `superseded_by_batch_id` 回填、`dedupe_hash = NULL`（⏳ **端点未实现**，`DESIGN_REVIEW` `R84`，`M3-T19` 不验，实现后补） |
 | U-9 | 同 `file_hash` **不同 `biz_type`** | 都成功 |
 | U-10 | 同 `run_id` 下两条同 `(sku, wh)` 快照 | 第二条冲突 |
 | U-11 | 两条**不同 `run_id`** 的同 `(sku, wh)` 快照 | 都成功（历史快照必须保留） |
