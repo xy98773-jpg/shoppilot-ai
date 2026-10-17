@@ -1,0 +1,125 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=6afd60ab257554be92179e0c462b437d099f0804fe5ef979a958dfc452b0bd0c
+DATE=2026-10-17T14:37:44Z
+MYSQL_READY=1 (port 3332, 独立容器 rb9-mysql)
+APP_PID=519 (port 18112, stdout -> evidence-rb9-app.log)
+APP_UP=1
+SEED_OK (seed-b9.sql)
+TOKENS own=eyJhbGci adm=eyJhbGci op=eyJhbGci view=eyJhbGci o8=eyJhbGci
+---------------------------------------------------------------
+R1 #12 盘点调整：SKU-A 10.000 → 7.000（OPERATOR）
+R1-http=201 code=OK txn=3
+PASS R1-http => 201
+PASS R1-审计+1 => 1
+PASS R1-biz_type => INVENTORY_BALANCE
+PASS R1-biz_id=新流水 => 3
+R1-summary=数量调整 sku=9002 仓库=9004 10.000 → 7.000（COUNT_ADJUST，原因：月度盘点，流水 3）
+PASS R1-摘要含前后值
+---------------------------------------------------------------
+R2 #13 冲销：seed-init-9005（SKU-C +10.000 → 余额 0）
+R2-http=200 原流水=2 新流水=4
+PASS R2-http => 200
+PASS R2-审计+1 => 1
+PASS R2-biz_type => INVENTORY_TRANSACTION
+PASS R2-biz_id=原流水 => 2
+R2-summary=冲销流水 2 → 新流水 4，sku=9005 仓库=9004 10.000 → 0.000（原因：导入错误）
+PASS R2-摘要含新流水
+---------------------------------------------------------------
+R3 #7 策略：首次 upsert → 改阈值 → disable
+R3a-http=200 policyId=1
+PASS R3a-http => 200
+PASS R3b-http => 200
+PASS R3c-http => 200
+PASS R3-审计+3 => 3
+PASS R3-三条同一biz_id => 1
+R3c-summary=停用策略 1
+---------------------------------------------------------------
+R4 零增量（INV-5005）→ 审计不增
+PASS R4-http => 400
+PASS R4-code => INV-5005
+PASS R4-审计不增 => 0
+---------------------------------------------------------------
+P2 策略侧失败/越权：跨团队 CAT-3004 / disable 不存在 CAT-3001 / VIEWER TEAM-2003 → 审计不增
+P2a-跨团队 http=422 code=CAT-3004
+PASS P2a-http => 422
+PASS P2a-code => CAT-3004
+P2b-disable不存在 http=404 code=CAT-3001
+PASS P2b-http => 404
+PASS P2b-code => CAT-3001
+P2c-VIEWER http=403 code=TEAM-2003
+PASS P2c-http => 403
+PASS P2c-code => TEAM-2003
+PASS P2-审计不增 => 3
+---------------------------------------------------------------
+P4 #7 策略审计的 before_json/after_json 只含【实际变化】字段（开发只验了摘要文本，未验 JSON 结构）
+P4-第二条审计id=9
+PASS P4-before 只含变化字段(safety) => 8
+PASS P4-after  只含变化字段(safety) => 12
+PASS P4-未变字段不出现在 before => 0
+PASS P4-未变字段不出现在 after => 0
+PASS P4-插入行 before 各字段值为 null => 1
+---------------------------------------------------------------
+P4b 无字段变化的 upsert（与当前值完全一致）→ 仍写 1 条，摘要标注（无字段变化）
+P4b-http=200
+PASS P4b-http => 200
+PASS P4b-审计+1 => 4
+P4b-summary=策略 1 变更：sku=9002 仓库=9004（无字段变化）
+PASS P4b-摘要标注无变化
+---------------------------------------------------------------
+P6 审计 occurred_at 与流水 occurred_at 同一事实时刻（差 ≤ 2s）
+P6-delta_seconds=0
+PASS P6-≤2s => 1
+---------------------------------------------------------------
+P6b 审计 HTTP 上下文采集（request_uri 剥查询串 / request_id / ip / http_method）
+PASS P6b-request_uri => /api/v1/inventory/adjustments
+PASS P6b-http_method => POST
+PASS P6b-request_id非空 => 1
+PASS P6b-ip非空 => 1
+---------------------------------------------------------------
+P7 横向越权：团队 8 OWNER 调团队 7 资源 → 4xx 且 team_id=8 零审计行
+P7-http=404 code=INV-5004
+PASS P7-4xx => 1
+PASS P7-team8四动作零审计 => 0
+PASS P7-四动作无非7行 => 0
+---------------------------------------------------------------
+P8 冲销幂等重放（同 Idempotency-Key）→ 200 且 #13 不增
+P8-http=409 重放流水=
+PASS P8-审计不增 => 1
+FINDING P8 冲销同 Idempotency-Key 重放 → 409/INV-5009，契约要求 200 + 首次结果（API_CONTRACT §6.3）
+---------------------------------------------------------------
+P3 账本—审计对账：审计条数 == 业务流水条数
+P3 调整: audit=1 txn=1 | 冲销: audit=1 txn=1
+PASS P3-调整对账 => 1
+PASS P3-冲销对账 => 1
+---------------------------------------------------------------
+P5 禁令 9 静态核验：入库/出库/初始导入无审计调用
+PASS P5-applyInitialImport 无审计 => 0
+PASS P5-applyInbound 无审计 => 0
+PASS P5-applyOutbound 无审计 => 0
+PASS P5-recordAdjustAudit 调用点=2 => 2
+PASS P5-recordReversalAudit 调用点=1 => 1
+PASS P5-policy audit 调用点=3 => 3
+---------------------------------------------------------------
+P1 审计写失败时：业务照常成功、审计缺失、无任何补偿（§2.10 高风险同事务/可补偿 的偏离实证）
+PASS P1-触发器已装 => 1
+P1-http=201 code=OK txn=5
+PASS P1-业务仍成功 => 201
+PASS P1-流水+1 => 5
+PASS P1-余额已改 => 9.000
+PASS P1-审计缺失 => 1
+PASS P1-应用日志有失败ERROR => 1
+PASS P1-事后无补偿写回 => 1
+P1 对账结果：audit=1 txn=2（差 1 条业务流水无对应审计）
+FINDING P1 审计写失败 → 业务仍 201、审计永久缺失、无补偿机制（§2.10：高风险操作要求审计与业务同事务，或提交后立即写入并可补偿）
+---------------------------------------------------------------
+RB9_CHECK_TOTAL=57
+RB9_FAIL_COUNT=0
+RB9_FINDING_COUNT=2
+RB9_FINDINGS=; P8 冲销同 Idempotency-Key 重放 → 409/INV-5009，契约要求 200 + 首次结果（API_CONTRACT §6.3）; P1 审计写失败 → 业务仍 201、审计永久缺失、无补偿机制（§2.10：高风险操作要求审计与业务同事务，或提交后立即写入并可补偿）
+RB9_RESULT=ALL_PASS
+--- 审计全景（按 action 分组，team 7）---
+AUTH_LOGIN_SUCCESS	4
+INVENTORY_COUNT_ADJUST	1
+INVENTORY_REVERSE	1
+REPLENISHMENT_POLICY_UPSERT	4
+--- cleanup ---
