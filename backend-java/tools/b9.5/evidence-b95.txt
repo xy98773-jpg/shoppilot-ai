@@ -1,0 +1,75 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=a791a789be9a5dd08687d08cbdae7b43508e1fbf172260ccc5f65d464c5e61a8
+DATE=2026-10-17T15:02:59Z
+MYSQL_READY=1 (port 3333, 独立容器 b95-mysql)
+APP_PID=1290 (port 18113, stdout -> evidence-b95-app.log)
+APP_UP=1
+SEED_OK (seed-b95.sql)
+TOKENS own=eyJhbGci op=eyJhbGci adm=eyJhbGci
+---------------------------------------------------------------
+C1 R72 触发器阻断审计：COUNT_ADJUST SKU-A 10.000 → 7.000 必须整体失败
+C1-前置 balance=10.000 txn=2 #12=0 audit_total=3
+C1-http=500 code=COM-0002
+C1-body={"code":"COM-0002","message":"系统繁忙，请稍后重试；若持续出现请联系管理员","data":null,"requestId":"req_a56778e46e30443c12fc34a4d16c3e40","timestamp":"2026-10-17T15:03:35.528Z"}
+PASS C1-http(非2xx) => 500
+PASS C1-code => COM-0002
+PASS C1-余额回滚 => 10.000
+PASS C1-流水回滚 => 2
+PASS C1-#12审计0行 => 0
+PASS C1-全表审计不变 => 3
+---------------------------------------------------------------
+C2 R72 反证：DROP TRIGGER 后同一动作 → 201，余额/流水/审计各 +1
+C2-http=201 txn=4
+PASS C2-http => 201
+PASS C2-余额 => 7.000
+PASS C2-流水+1 => 3
+PASS C2-#12审计+1 => 1
+PASS C2-biz_id => 4
+C2-summary=数量调整 sku=9002 仓库=9004 10.000 → 7.000（COUNT_ADJUST，原因：月度盘点，流水 4）
+---------------------------------------------------------------
+C3 失败路径：COUNT_ADJUST 目标 -1.000 → 409 INV-5006，审计不增
+C3-http=409 code=INV-5006
+PASS C3-http => 409
+PASS C3-code => INV-5006
+PASS C3-审计不增 => 1
+PASS C3-余额不变 => 7.000
+---------------------------------------------------------------
+C4 有意差异：审计被阻断时 #7 策略 upsert 仍 200 且策略落库（record 解耦通道）
+C4-http=200 code=OK
+PASS C4-http(业务成功) => 200
+PASS C4-策略已落库 => 1
+PASS C4-#7审计0行(被阻断) => 0
+---------------------------------------------------------------
+R1 R73 同键同体重放：冲 seed-init-9005（SKU-C 10.000 → 0.000）
+R1-http=200 txn=5 replay_header=[]
+PASS R1-首次http => 200
+PASS R1-首次无重放头 => 
+PASS R1-biz_id=原流水 => 2
+PASS R1-#13审计+1 => 1
+PASS R1-余额 => 0.000
+R1b-http=200 txn=5 replay_header=[true]
+PASS R1b-重放http200 => 200
+PASS R1b-同一流水id => 5
+PASS R1b-重放头 => true
+PASS R1b-REVERSAL仅1行 => 1
+PASS R1b-#13审计仍1条 => 1
+---------------------------------------------------------------
+R2 R73 同键不同体：拿 seed-init-9002 配 R1 的幂等键 → 409 INV-5003
+R2-http=409 code=INV-5003
+PASS R2-http => 409
+PASS R2-code => INV-5003
+PASS R2-未新增冲销 => 1
+PASS R2-余额未变 => 7.000
+---------------------------------------------------------------
+R3 R73 回归：不同键二次冲销 seed-init-9005 → 409 INV-5009
+R3-http=409 code=INV-5009
+PASS R3-http => 409
+PASS R3-code => INV-5009
+PASS R3-审计不增 => 1
+PASS R3-REVERSAL仍1 => 1
+---------------------------------------------------------------
+B95_CHECK_TOTAL=36
+B95_FAIL_COUNT=0
+B95_RESULT=ALL PASS
+审计全景 team7：COUNT_ADJUST=1 MANUAL_ADJUST=0 REVERSE=1 POLICY=0
+--- cleanup ---
