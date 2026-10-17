@@ -346,6 +346,15 @@ flowchart TD
 
 - ⚠️ = 可执行但为**高风险操作**，服务端必须做额外前置校验（`USER_ROLES.md §4.4`）。
 - 「❌ → `TEAM-2003`」；跨团队 → `TEAM-2001`（**先于角色判定**，`USER_ROLES.md §4.1`）。
+  - ★ **例外（`ADR-005` 精确化，2026-10-17）**：`POST /api/v1/inventory/adjustments` 中
+    `txn_type = MANUAL_ADJUST` 的**角色不足**（请求方为 `OPERATOR`／`APPROVER`）抛 **`INV-5007`**（403），
+    不复用 `TEAM-2003`。理由：该端点是「盘点／手工调整」二合一入口，角色需求随 `txn_type` 动态变化，
+    `@RequireRole` 只能承载编译期静态集合 ⇒ 动态判定必须在方法内完成，而 `INV-5007` 是
+    `ERROR_CODES §2.6` 为该场景设立的**专门码**（语义＝「盘点/手工调整需更高角色」）。
+  - 由此该端点**同时**可能出现 `TEAM-2003`（静态层拦下 `VIEWER`）与 `INV-5007`（动态层拦下非 `ADMIN+` 的手工调整），
+    与 `API_CONTRACT §10.4` 列出的两个码一致。**两者分工不同，不得互相替代。**
+  - `POST /inventory/transactions/{id}/reverse`（冲销）**不属调整路径**，角色不足仍用 `TEAM-2003`
+    （`API_CONTRACT §10.4` 明文未列 `INV-5007`）。
 - **库存调整必须 `ADMIN`+ 的场合**：`MANUAL_ADJUST` 与 `REVERSAL`（`DESIGN_BASIS.md §9.6` 备注 + `USER_ROLES.md §2.3`）。
 
 ---

@@ -90,7 +90,7 @@ class CatalogSchemaConstraintTest {
     // ---------------------------------------------------------------------
 
     @Test
-    @DisplayName("§4-1 Flyway 全链跑通：V1.0.0 → V1.0.6 七条迁移均 success=1")
+    @DisplayName("§4-1 Flyway 全链跑通：V1.0.0 → V1.0.7 八条迁移均 success=1")
     void flywayChainAppliedFourVersions() throws Exception {
         List<String> tables = queryStrings(
                 "SELECT table_name FROM information_schema.tables "

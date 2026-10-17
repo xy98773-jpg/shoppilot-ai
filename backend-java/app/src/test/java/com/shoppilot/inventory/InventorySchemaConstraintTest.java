@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code DATABASE_DESIGN §5.8/§5.9/§5.10/§7.4} 与 {@code DATABASE_CONSTRAINTS #9–#12/§4.1/§4.2/§5.2}
  * 的数据库级保障：
  * <ul>
- *   <li>Flyway 应用 {@code V1.0.0} → {@code V1.0.6} 共七条迁移，三表存在；</li>
+ *   <li>Flyway 应用 {@code V1.0.0} → {@code V1.0.7} 共八条迁移，三表存在；</li>
  *   <li>四条唯一键在<b>团队内</b>冲突：{@code uk_pol_team_sku_wh} / {@code uk_invbal_team_wh_sku} /
  *       {@code uk_invtxn_team_idem} / {@code uk_invtxn_team_reversed}；</li>
  *   <li>跨团队同业务键<b>允许</b>共存（唯一性只在团队内，{@code DESIGN_BASIS §6} 规则 2）；</li>
@@ -115,7 +115,7 @@ class InventorySchemaConstraintTest {
     // =====================================================================
 
     @Test
-    @DisplayName("① Flyway 全链到 V1.0.6：三张库存表存在，七条迁移均 success=1")
+    @DisplayName("① Flyway 全链到 V1.0.7：三张库存表存在，八条迁移均 success=1")
     void migrationAppliesThroughV106AndCreatesThreeTables() throws Exception {
         List<String> tables = queryStrings(
                 "SELECT table_name FROM information_schema.tables "
