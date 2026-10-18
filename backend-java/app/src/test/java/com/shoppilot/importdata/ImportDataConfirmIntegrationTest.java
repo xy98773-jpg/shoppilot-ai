@@ -108,6 +108,27 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * 在校验阶段即被拦下，{@code INV-5003} 在导入路径上不可达（这正是 R83 的目的），
  * 故改为「外层事务 + 同幂等键两次调用」直接验证 {@code NESTED} 行级隔离——
  * 探针强度不变，见方法内注释。</p>
+ *
+ * <h2>★ M3-B10.8（R85）追加的第 17 节：编码大小写一律不敏感等价</h2>
+ * <p>依据 {@code IMPORT_WORKFLOW §8.6} 末行裁定；物理依据是唯一键 {@code (team_id, <code>)}
+ * 受 {@code utf8mb4_0900_ai_ci} 约束 ⇒ 库内不可能并存 {@code SKU-A} 与 {@code sku-a}。
+ * <ol start="18">
+ *   <li><b>R85-a</b> 快照同仓 {@code SKU-A} + {@code sku-a} → 后行 {@code ERROR COM-0001}
+ *       + {@code confirm} 422 {@code IMP-4009}；</li>
+ *   <li><b>R85-b</b> 销售同 {@code (WH-MAIN, SKU-A, 同日期)} 但大小写不同 → 后行 {@code SAL-6004}；</li>
+ *   <li><b>R85-c</b> SKU 主数据 {@code SKU-NEW-1} + {@code sku-new-1} → 后行 {@code CAT-3002}
+ *       （证明第三处 {@code duplicateCode} 也改了）；</li>
+ *   <li><b>R85-d</b> 回归：同仓同 SKU <b>同大小写</b>两行仍判重复（{@code R83} 不回退）；</li>
+ *   <li><b>R85-e</b> <b>任务书未列</b>：单行<b>全小写</b>编码应能成功导入
+ *       （覆盖 {@code §8.6} 同条款「所有 {@code code} 字段的<b>引用解析</b>」——
+ *       {@code getIdsByCodes} 返回键是<b>库中原样写法</b>，不折叠则小写编码会被误报
+ *       {@code CAT-3001}/{@code CAT-3003}）；</li>
+ *   <li><b>R85-f</b> 同上：全小写编码也必须命中已有余额行并产生 {@code IMP-4006}
+ *       （否则会被当作「引用不存在」而<b>漏报</b>告警）。</li>
+ * </ol>
+ *
+ * <p>★ 这两项的探针有效性已负向验证：把 {@code ImportCodeKeys#normalize} 改成恒等返回后，
+ * {@code R85-e}/{@code R85-f} 立即失败（{@code CAT-3001} 误报）。见 {@code tools/b10.8/}。</p>
  */
 @SpringBootTest(classes = ShopPilotApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -824,6 +845,117 @@ class ImportDataConfirmIntegrationTest {
     }
 
     // =====================================================================
+    // 17) R85：编码大小写一律不敏感等价（IMPORT_WORKFLOW §8.6 末行裁定）
+    // =====================================================================
+
+    @Test
+    @DisplayName("R85-a 快照同仓 SKU-A + sku-a：后行 ERROR COM-0001 + confirm 422 IMP-4009")
+    void snapshotCaseInsensitiveDuplicateIsError() throws Exception {
+        byte[] csv = csv("sku_code,warehouse_code,qty\n"
+                + "SKU-A,WH-MAIN,2.000\n"
+                + "sku-a,WH-MAIN,3.000\n");
+        // R85 前：error_rows=0（判定键大小写敏感）→ confirm PARTIAL_SUCCESS 且余额只 +2.000
+        long batchId = validatedBatch("snapshot-case.csv", csv, "INVENTORY_SNAPSHOT", 1, 0);
+
+        Map<String, Object> error = jdbc.queryForMap("SELECT row_no, error_code, error_level "
+                + "FROM import_row_errors WHERE batch_id = ? AND error_level = 'ERROR'", batchId);
+        assertEquals(2L, ((Number) error.get("row_no")).longValue(), "后行才是重复行");
+        assertEquals("COM-0001", error.get("error_code"), "R83 既定错误码不得改变");
+        assertEquals("ERROR", error.get("error_level"), "必须是 ERROR，不能降级成 WARNING（相加会静默改数）");
+
+        ResponseEntity<String> resp = confirm(batchId, "key-r85-a", Map.of());
+        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, resp.getStatusCode(), resp.getBody());
+        assertEquals("IMP-4009", code(resp), "有 ERROR 行时 confirm 必须被前置门拦下");
+        assertEquals(1, data(resp).get("error_rows").asInt());
+        assertNull(balanceOf(9004L, 9002L), "被拦下则一行都不该落库");
+    }
+
+    @Test
+    @DisplayName("R85-b 销售同 (WH-MAIN, SKU-A, 同日期) 但 sku_code 大小写不同：后行 ERROR SAL-6004")
+    void salesDailyCaseInsensitiveDuplicateIsError() throws Exception {
+        byte[] csv = csv("sku_code,warehouse_code,sale_date,qty,return_qty,sales_amount,order_count\n"
+                + "SKU-A,WH-MAIN," + PAST_DATE + ",12.000,0.000,1080.00,8\n"
+                + "sku-a,wh-main," + PAST_DATE + ",6.000,0.000,540.00,4\n");
+        long batchId = validatedBatch("sales-case.csv", csv, "SALES_DAILY", 1, 0);
+
+        Map<String, Object> error = jdbc.queryForMap("SELECT row_no, error_code, error_level "
+                + "FROM import_row_errors WHERE batch_id = ? AND error_level = 'ERROR'", batchId);
+        assertEquals(2L, ((Number) error.get("row_no")).longValue());
+        assertEquals("SAL-6004", error.get("error_code"), "SALES_DAILY 既定错误码不得改变");
+        assertEquals("ERROR", error.get("error_level"));
+
+        ResponseEntity<String> resp = confirm(batchId, "key-r85-b", Map.of());
+        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, resp.getStatusCode(), resp.getBody());
+        assertEquals("IMP-4009", code(resp));
+        assertEquals(0, count("sales_daily", TEAM_ID), "被拦下则一行都不该落库");
+    }
+
+    @Test
+    @DisplayName("R85-c SKU 主数据 SKU-NEW-1 + sku-new-1：后行 ERROR CAT-3002（证明第三处也改了）")
+    void masterDataCaseInsensitiveDuplicateIsError() throws Exception {
+        // 第三处 = applyBusinessUnique → duplicateCode（四类主数据的 code 判定键）
+        long batchId = validatedBatch("master-case.csv", csv("sku_code,product_code\n"
+                + "SKU-NEW-1,P-BAG-001\n"
+                + "sku-new-1,P-BAG-001\n"), "SKU", 1, 0);
+
+        Map<String, Object> error = jdbc.queryForMap("SELECT row_no, error_code, error_level "
+                + "FROM import_row_errors WHERE batch_id = ? AND error_level = 'ERROR'", batchId);
+        assertEquals(2L, ((Number) error.get("row_no")).longValue(), "后行才是重复行");
+        assertEquals("CAT-3002", error.get("error_code"), "主数据既定错误码不得改变");
+        assertEquals("ERROR", error.get("error_level"), "必须是 ERROR，不能降级成 WARNING");
+    }
+
+    @Test
+    @DisplayName("R85-d 回归：同仓同 SKU 同大小写两行仍判重复（R83 行为不回退）")
+    void snapshotExactCaseDuplicateStillError() throws Exception {
+        byte[] csv = csv("sku_code,warehouse_code,qty\n"
+                + "SKU-A,WH-MAIN,2.000\n"
+                + "SKU-A,WH-MAIN,3.000\n");
+        long batchId = validatedBatch("snapshot-exact.csv", csv, "INVENTORY_SNAPSHOT", 1, 0);
+        Map<String, Object> error = jdbc.queryForMap("SELECT error_code, error_level "
+                + "FROM import_row_errors WHERE batch_id = ? AND error_level = 'ERROR'", batchId);
+        assertEquals("COM-0001", error.get("error_code"));
+        assertEquals("ERROR", error.get("error_level"));
+    }
+
+    @Test
+    @DisplayName("R85-e 引用解析：单行小写 sku_code/wh 编码应能成功导入（不误报 CAT-3001/CAT-3003）")
+    void lowercaseCodeResolvesAndImportsSuccessfully() throws Exception {
+        // 这一项覆盖任务书未列、但 §8.6 同条款（「所有 code 字段的引用解析」）要求的第四处：
+        // getIdsByCodes 返回的 Map 键是【库里存的写法】，直接用文件原始大小写 get 会落空
+        // ⇒ R85 前，小写编码会在 confirm 阶段被误判「引用的SKU不存在」（CAT-3001）。
+        byte[] csv = csv("sku_code,warehouse_code,qty\n"
+                + "sku-a,wh-main,4.000\n");
+        long batchId = validatedBatch("snapshot-lower.csv", csv, "INVENTORY_SNAPSHOT", 0, 0);
+
+        ResponseEntity<String> resp = confirm(batchId, "key-r85-e", Map.of());
+        assertEquals(HttpStatus.OK, resp.getStatusCode(), resp.getBody());
+        JsonNode data = data(resp);
+        assertEquals("COMPLETED", data.get("status").asText(), resp.getBody());
+        assertEquals(1, data.get("success_rows").asInt(), "小写编码必须被解析成功，而不是报 CAT-3001");
+        assertEquals(0, new BigDecimal("4.000").compareTo(balanceOf(9004L, 9002L)),
+                "小写编码解析到的是同一个 SKU-A（库中原样写法），余额应正常累加");
+        assertEquals(0, count("import_row_errors", TEAM_ID), "不应产生任何行级错误");
+    }
+
+    @Test
+    @DisplayName("R85-f IMP-4006 命中判定：全小写编码也必须命中已有余额行（不被当作引用不存在而漏报）")
+    void lowercaseCodeStillTriggersOverwriteWarning() throws Exception {
+        // 为 SKU-B(9003) 建一条余额行（CSV 用 sku-b 指向它）
+        jdbc.update("INSERT INTO inventory_balances (team_id, warehouse_id, sku_id, on_hand_qty, "
+                + "in_transit_qty, committed_qty, created_by, updated_by, version) "
+                + "VALUES (?, 9004, 9003, 5.000, 0.000, 0.000, ?, ?, 0)",
+                TEAM_ID, OWNER_ID, OWNER_ID);
+        byte[] csv = csv("sku_code,warehouse_code,qty\n"
+                + "sku-b,wh-main,1.000\n");
+        long batchId = validatedBatch("snapshot-lower-warn.csv", csv, "INVENTORY_SNAPSHOT", 0, 1);
+        Map<String, Object> warn = jdbc.queryForMap("SELECT error_code, error_level "
+                + "FROM import_row_errors WHERE batch_id = ? AND error_level = 'WARNING'", batchId);
+        assertEquals("IMP-4006", warn.get("error_code"), "全小写编码也必须命中已有余额行");
+        assertEquals("WARNING", warn.get("error_level"));
+    }
+
+    // =====================================================================
     // 辅助：数据断言
     // =====================================================================
 
@@ -920,6 +1052,11 @@ class ImportDataConfirmIntegrationTest {
 
     private JsonNode data(ResponseEntity<String> response) throws Exception {
         return objectMapper.readTree(response.getBody()).get("data");
+    }
+
+    /** 错误响应的顶层业务码（{@code {"code":"IMP-4009", ...}}）。 */
+    private String code(ResponseEntity<String> response) throws Exception {
+        return objectMapper.readTree(response.getBody()).get("code").asText();
     }
 
     private int count(String table, long teamId) {

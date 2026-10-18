@@ -1,0 +1,111 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=3c98c448c3cba319335cfcbafef53bdd729e902865c915d8befcba15b148da86
+DATE=2026-10-18T03:48:32Z
+PORTS mysql=3355 app=18210（任务书指定 3355 / 18210，均在未分配区间）
+IMPORT_STORAGE_DIR=/d/Desktop/ShopPilot-AI/backend-java/tools/b10.8/.import-storage（显式设置，避免落进仓库工作区）
+MYSQL_READY=1 (port 3355, 独立容器 b108-mysql)
+APP_PID=110 (port 18210, stdout -> evidence-b108-app.log)
+APP_UP=1
+SEED_OK (seed-b95.sql：团队 7 仓库 9004=WH-MAIN；SKU 9002=SKU-A / 9003=SKU-B / 9005=SKU-C 各 10.000；团队 8 owner8)
+TOKEN op=eyJhbGci
+---------------------------------------------------------------
+G1 R85-a：快照同仓 SKU-A + sku-a → 后行 ERROR COM-0001，confirm 422 IMP-4009
+G1-前置 SKU-A@WH-MAIN=10.000 流水=3
+G1-validate err=1 warn=1 errors="errors":[{"row_no":2,"error_level":"ERROR","error_code":"COM-0001","error_field":"sku_code","error_message":"同一仓库、同一 SKU 在文件内重复"},{"row_no":2,"error_level":"WARNING","error_code":"IMP-4006","error_field":"sku_code","error_message":"该仓库与 SKU 已有余额行，确认导入后将按增量累加（如需覆盖请使用盘点调整）"},{"row_no":1,"error_level":"WARNING","error_code":"IMP-4006","error_field":"sku_code","error_message":"该仓库与 SKU 已有余额行，确认导入后将按增量累加（如需覆盖请使用盘点调整）"}]
+PASS G1-校验200 => 200
+PASS G1-error_rows=1 => 1
+PASS G1-warning_rows=1（第1行有WARNING无ERROR） => 1
+PASS G1-两条IMP-4006并存 => 2
+G1-行级错误=2|COM-0001|ERROR
+PASS G1-失败行号2（后行） => 2
+PASS G1-错误码COM-0001 => COM-0001
+PASS G1-错误级别ERROR => ERROR
+PASS G1-文案逐字 => 含[同一仓库、同一 SKU 在文件内重复]
+PASS G1-confirm422前置门 => 422
+PASS G1-code=IMP-4009 => IMP-4009
+PASS G1-余额不变 => 10.000
+PASS G1-流水不变 => 3
+---------------------------------------------------------------
+G2 R85-b：销售同 (WH-MAIN, SKU-A, 同日期) 但大小写不同 → 后行 ERROR SAL-6004
+G2-validate err=1 warn=0
+PASS G2-校验200 => 200
+PASS G2-error_rows=1 => 1
+G2-行级错误=2|SAL-6004|ERROR
+PASS G2-失败行号2 => 2
+PASS G2-错误码SAL-6004 => SAL-6004
+PASS G2-不是COM-0001 => SAL-6004（≠COM-0001）
+PASS G2-文案逐字 => 含[同一仓库、同一 SKU、同一销售日期出现重复记录]
+PASS G2-confirm422前置门 => 422
+PASS G2-code=IMP-4009 => IMP-4009
+PASS G2-一行都不落库 => 0
+---------------------------------------------------------------
+G3 R85-c：SKU 主数据 SKU-NEW-1 + sku-new-1 → 后行 ERROR CAT-3002（第三处）
+G3-validate err=1 warn=0
+PASS G3-校验200 => 200
+PASS G3-error_rows=1 => 1
+G3-行级错误=2|CAT-3002|ERROR
+PASS G3-失败行号2 => 2
+PASS G3-错误码CAT-3002 => CAT-3002
+PASS G3-不是COM-0001 => CAT-3002（≠COM-0001）
+PASS G3-SKU未新增 => 3
+---------------------------------------------------------------
+G4 R85-d 回归：同仓同 SKU【同大小写】两行仍判重复（R83 不回退）
+PASS G4-校验200 => 200
+PASS G4-error_rows=1 => 1
+PASS G4-错误码COM-0001 => COM-0001
+PASS G4-错误级别ERROR => ERROR
+---------------------------------------------------------------
+G5 R85-e/f：单行【全小写】编码能成功导入（不误报 CAT-3001）+ 全小写也能命中 IMP-4006
+G5-validate err=0 warn=1（R85 前此处 warn=0，因小写编码查不到引用而被跳过）
+PASS G5-校验200 => 200
+PASS G5-error_rows=0 => 0
+PASS G5-warning_rows=1（命中已有余额行） => 1
+PASS G5-命中告警码IMP-4006 => IMP-4006
+PASS G5-confirm200 => 200
+PASS G5-终态COMPLETED => COMPLETED
+PASS G5-成功1行 => 1
+PASS G5-本批无行级错误 => 0
+PASS G5-余额+1.000 => 11.000
+PASS G5-流水+1 => 4
+PASS G5-解析到正确的SKU/仓库id(9003/9004) => 1
+---------------------------------------------------------------
+G6 边界1：R80 跨仓不误杀（同一 SKU 两仓，且仓库编码大小写不同写法）
+G6-validate err=0 warn=1
+PASS G6-校验200 => 200
+PASS G6-不误杀 error_rows=0 => 0
+PASS G6-confirm200 => 200
+PASS G6-终态COMPLETED => COMPLETED
+PASS G6-成功2行 => 2
+PASS G6-主仓余额10+3 => 13.000
+PASS G6-副仓余额0+4 => 4.000
+PASS G6-幂等键后缀=主仓9004 => 1
+PASS G6-幂等键后缀=副仓9006 => 1
+---------------------------------------------------------------
+G7 边界2：R79 PARTIAL_SUCCESS 仍可达（SALES_DAILY 写服务内部失败 → SAL-6003）
+G7-validate err=0 warn=0
+PASS G7-校验200 => 200
+PASS G7-校验0错误（两行键不同） => 0
+G7-漂移 listed_date=2026-10-20 > sale_date=2026-10-11
+G7-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":7,"status":"PARTIAL_SUCCESS","total_rows":2,"success_rows":1,"failed_rows":1,"started_at":"2026-10-18T03:51:02.648Z","finished_at":"2026-10-18T03:51:02.825Z"},"requestId":"req_2029501d6fef1555f8bb660e5c760b2e","timestamp":"2026-10-18T03:51:02.878Z"}
+PASS G7-confirm200 => 200
+PASS G7-终态PARTIAL_SUCCESS => PARTIAL_SUCCESS
+PASS G7-成功1行 => 1
+PASS G7-失败1行 => 1
+G7-行级错误=2|SAL-6003|ERROR
+PASS G7-行级码SAL-6003 => SAL-6003
+PASS G7-不是COM-0002 => SAL-6003（≠COM-0002）
+PASS G7-成功行已落库 => 1
+---------------------------------------------------------------
+G8 门槛3：seed-b95.sql 后【直接】跑 TEST_STRATEGY §7.3 对账 SQL（不额外补流水）
+G8-种子流水=9002/seed-init-9002,9003/seed-init-9003,9003/INIT_IMPORT:IMPORT:5:9003:9004,9005/seed-init-9005,9005/INIT_IMPORT:IMPORT:6:9005:9006,9005/INIT_IMPORT:IMPORT:6:9005:9004
+G8-对账明细=9004/9002:10.000 9004/9003:11.000 9004/9005:13.000 9006/9005:4.000 
+PASS G8-余额可由流水推导（§7.3） => 0
+PASS G8-qty_after恒等式 => 0
+PASS G8-不变式success+failed=total => 0
+PASS G8-种子未出现无流水余额行 => 0
+---------------------------------------------------------------
+数据全景 team7：balances=4 txn=6 sales=1 skus=3 batches=7
+B108_CHECK_TOTAL=64
+B108_FAIL_COUNT=0
+B108_RESULT=ALL PASS
+--- cleanup ---
