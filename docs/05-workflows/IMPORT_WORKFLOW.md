@@ -343,7 +343,8 @@ flowchart TD
 | 子场景 | 检测方式 | 系统行为 | 错误码 | 可恢复 |
 | --- | --- | --- | --- | --- |
 | **文件内重复**（同一文件内两行键相同，如同一 `(wh, sku, date)`） | 校验阶段对业务键做集合去重 | `SALES_DAILY`：同一 `(wh, sku, date)` 出现多行 → 记 `ERROR`（不聚合，要求用户先聚合）；主数据：同一编码出现多行 → 后行记 `ERROR`（`CAT-3002` 的"文件内重复"语义）；`INVENTORY_SNAPSHOT`：同一 `(wh, sku)` 出现多行 → 后行记 `ERROR`（`R83` 口径，✅ 已实现于 `M3-B10.7`，大小写语义待 `R85` 裁定） | `SAL-6004` / `CAT-3002` / `COM-0001` | 是 |
-| **文件内重复——`INVENTORY_SNAPSHOT`（`R83`，`M3-B10.7` 已实现）** | 校验阶段对 `(warehouse_code, sku_code)`（各自 `trim`）做集合去重 | **口径**：同一 `(wh, sku)` 多行 → **后行 `ERROR`**（`COM-0001`，文案「同一仓库、同一 SKU 在文件内重复」），**不聚合、不自动相加、不降级为 `WARNING`**；任一字段为空则不参与判定（必填校验已另行报错）。⚠️ 键按**大小写敏感**比较，而引用解析走 DB 的 `utf8mb4_0900_ai_ci`（大小写不敏感）——混用大小写时判不出重复、会穿透到 `confirm` 阶段（`R85`，`B10.8` 前置必修） | `COM-0001` | 是 |
+| **文件内重复——`INVENTORY_SNAPSHOT`（`R83`，`M3-B10.7` 已实现）** | 校验阶段对 `(warehouse_code, sku_code)`（各自 `trim`）做集合去重 | **口径**：同一 `(wh, sku)` 多行 → **后行 `ERROR`**（`COM-0001`，文案「同一仓库、同一 SKU 在文件内重复」），**不聚合、不自动相加、不降级为 `WARNING`**；任一字段为空则不参与判定（必填校验已另行报错） | `COM-0001` | 是 |
+| **编码大小写的等价语义（`R85` 裁定，2026-10-18，适用全部业务键）** | 所有「文件内重复」判定键 + 所有 `code` 字段的引用解析，**一律大小写不敏感等价** | **结论：编码大小写不敏感**。`sku_code` / 仓库 `code` / `supplier_code` 在 DB 唯一键 `(team_id, <code>)` 上受 `utf8mb4_0900_ai_ci` 约束 ⇒ **物理上不可能**共存 `SKU-A` 与 `sku-a` 两条记录；因此「引用解析大小写不敏感」是既有既成事实，判定键若用大小写敏感比较必然与之分叉。**实现要求**：所有文件内重复判定键统一 `toUpperCase(Locale.ROOT)` 后再比较（`INVENTORY_SNAPSHOT` 的 `(wh, sku)`、`SALES_DAILY` 的 `(wh, sku, date)`、四类主数据的编码），❌ 禁止各类型各自决定语义 | — | 是 |
 | **与库内重复——`SALES_DAILY`** | 命中 `uk_sales_team_wh_sku_date` | **upsert 覆盖**，`WARNING`（`IMP-4006`），确认后可导入 | `IMP-4006`（WARNING 级） | 是 |
 | **与库内重复——主数据** | 命中 `uk_*_team_code` | **upsert 更新**，不报错 | — | 是 |
 | **与库内重复——`INVENTORY_SNAPSHOT`** | 命中 `uk_invbal_team_wh_sku` | **增量累加** + `WARNING`（提示将累加/建议走盘点覆盖） | `IMP-4006`（WARNING 级） | 是 |
@@ -480,7 +481,7 @@ flowchart TD
 | `WAREHOUSE` | `code` **文件内重复** → 后行 `ERROR`；**库内已存在 → 不报错**（`§7.4` upsert） | `CAT-3002` | ERROR（**仅限文件内重复**） |
 | `WAREHOUSE` | `is_default` 同团队至多一行 | `CAT-3008` | ERROR |
 | `INVENTORY_SNAPSHOT` | **`sku_code` 必须存在**且同团队 | `CAT-3001` / `CAT-3005` | ERROR |
-| `INVENTORY_SNAPSHOT` | 同一 `(warehouse_code, sku_code)` 在**文件内重复** → 后行 `ERROR`（要求用户先自行聚合，**不自动相加**；口径见 `§8.6`，`R83`）✅ 已实现（`M3-B10.7`）。⚠️ 键按**大小写敏感**比较，而引用解析走 DB 排序规则（`utf8mb4_0900_ai_ci`，大小写不敏感）⇒ 混用大小写时判不出重复，见 `DESIGN_REVIEW` `R85`（`B10.8` 前置必修） | `COM-0001` | ERROR |
+| `INVENTORY_SNAPSHOT` | 同一 `(warehouse_code, sku_code)` 在**文件内重复** → 后行 `ERROR`（要求用户先自行聚合，**不自动相加**；口径见 `§8.6`，`R83`）✅ 已实现（`M3-B10.7`）。判定键**大小写不敏感**（`R85` 裁定，见 `§8.6` 末行），`B10.8` 落地 | `COM-0001` | ERROR |
 | `INVENTORY_SNAPSHOT` | **仓库必须存在**且同团队 | `CAT-3003` | ERROR |
 | `INVENTORY_SNAPSHOT` | `qty ≥ 0`；累加后不得为负（本类型不会为负） | `COM-0001` | ERROR |
 | `INVENTORY_SNAPSHOT` | 目标 `(wh, sku)` 已存在余额 → 提示将增量累加 | `IMP-4006` | WARNING |
