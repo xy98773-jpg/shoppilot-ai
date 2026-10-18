@@ -241,6 +241,8 @@
 | `AI-0001` | 401 | 内部令牌缺失或无效 | `X-Internal-Token` 不匹配 `AI_INTERNAL_TOKEN` | `ANL-7002`（502），run `FAILED` | 否（配置问题） |
 | `AI-1001` | 400 | 请求 Schema 校验失败 | 请求体不合法/超 8MB | `ANL-7004`（422），run `FAILED` | 否 |
 | `AI-1002` | 400 | `analysis_run_id` 缺失或非法 | 未传/格式错；或幂等请求体不一致 | `ANL-7004`，run `FAILED` | 否 |
+| `AI-1003` | 404 | 内部路径不存在 | 请求了 `AI_SERVICE_CONTRACT.md §3` **未定义**的内部路径（Java 侧路径常量写错、或两端版本不匹配） | `ANL-7002`（502），run `FAILED` | 否（编程错误，重试必然同样失败） |
+| `AI-1004` | 405 | 内部方法不允许 | 路径存在但 HTTP 方法不匹配（如对 `analysis:validate` 发 `GET`） | `ANL-7002`（502），run `FAILED` | 否（编程错误） |
 | `AI-2001` | 422 | SKU 必需数据缺失 | `items[]` 缺 `sales_series`/`on_hand_qty` 等 | run `FAILED` | 否 |
 | `AI-2002` | 422 | 窗口内销售数据不足 | 全部 SKU `n < min_days` | `ANL-7008`（422），run `FAILED` | 否 |
 | `AI-3001` | 500 | 规则引擎执行失败 | 统计/规则计算异常 | `ANL-7002`（502），run `FAILED` | 是（有限） |
@@ -257,6 +259,16 @@
 | `AI-9001` | 500 | 未预期内部错误 | 未捕获异常 | `ANL-7002`（502），run `FAILED` | 是（有限） |
 
 > `AI-xxxx` 的内部请求/响应结构见 `AI_SERVICE_CONTRACT.md §5`。
+>
+> ★ **`AI-1003` / `AI-1004` 的由来（M4-B13.1 新增，`DESIGN_REVIEW R95`）**：`B13` 交付时 Python 只注册了
+> `InternalTokenError` / `RequestValidationError` / `Exception` 三个处理器，**没有 `StarletteHTTPException` 处理器**，
+> 于是 `404` / `405` 直接透出 FastAPI 默认形态 `{"detail": "Not Found"}`——**既无 `code` 也无 `request_id`**，
+> 与 `AI_SERVICE_CONTRACT.md §5`「内部统一错误响应体」冲突；Java 侧 `AiServiceClient` 按四字段反序列化会拿到
+> `code = null`，无法区分「路径写错（编程错误）」与「服务异常」。故给这两个**传输层**状态也分配 `AI-` 码，
+> 使内部接口的**全部**响应（含错误路径）统一为四字段。
+>
+> ⚠️ 本表 AI 域条目数由 **17 条增至 19 条**；`ErrorCodeHttpStatus`（Java 侧 HTTP 映射）与
+> `ErrorCodes`（常量）须同步补这 2 条，避免「常量表 / 映射表 / 本文档」三方漂移。
 
 ---
 

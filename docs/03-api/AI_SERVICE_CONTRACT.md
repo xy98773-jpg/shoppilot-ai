@@ -659,6 +659,11 @@ model_config = ConfigDict(
 | `detail` | object | 结构化上下文（字段、阶段、SKU 等） |
 | `request_id` | string | 回显 `X-Request-Id` |
 
+> ★ **适用范围 = `service-ai` 的全部 HTTP 响应，无例外**（M4-B13.1 明确，`DESIGN_REVIEW R95`）。
+> 早期实现只给「业务异常」包了四字段，而 FastAPI 对**未匹配路径**（`404`）与**方法不匹配**（`405`）
+> 直接透出默认形态 `{"detail": "..."}`——`code` 与 `request_id` 双双缺失，Java 侧反序列化拿到
+> `code = null`。现已分配 `AI-1003`（404）/ `AI-1004`（405）并统一包装，**任何**内部响应都必须是本表四字段。
+
 ### 5.1 业务错误 vs 技术错误（Java 的处置分工）
 
 | 类别 | 错误码 | Java 是否重试 | Java 处置 |
