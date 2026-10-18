@@ -126,3 +126,49 @@ def test_detail_is_structured_object(
     assert isinstance(detail["errors"], list) and detail["errors"]
     first = detail["errors"][0]
     assert set(first.keys()) == {"loc", "msg", "type"}
+
+
+# --------------------------------------------------------------------------- #
+# R95 —— 404 / 405 也必须走四字段信封（AI_SERVICE_CONTRACT §5 适用范围 = 全部响应）
+#
+# 这两条走的是**真实路由**（不注册临时路由）：
+#   · /internal/v1/analysis:validate 在 B13/B14 之间尚无业务端点 ⇒ Starlette 抛 404；
+#   · /internal/v1/health 只注册了 GET ⇒ 对它发 POST 触发 405。
+# B13 时这两条会透出 Starlette 默认的 {"detail": "..."}（只有 1 个键），
+# 项目负责人复核 R6/R7 因此判 FAIL。
+# --------------------------------------------------------------------------- #
+def test_unknown_internal_path_returns_404_ai_1003(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(config, "settings", Settings(ai_internal_token=TOKEN))
+    resp = client.post(
+        "/internal/v1/analysis:validate",
+        headers={TOKEN_HEADER: TOKEN, REQUEST_ID_HEADER: "req_b131_404"},
+    )
+    assert resp.status_code == 404, resp.text
+    body = resp.json()
+    _assert_envelope(body, "AI-1003")
+    # request_id 回显：响应体 == 响应头 == 入站值
+    assert body["request_id"] == "req_b131_404"
+    assert body["request_id"] == resp.headers[REQUEST_ID_HEADER]
+    # detail 给定位信息（path/method），便于 Java 侧定位「路径常量写错」
+    assert body["detail"] == {
+        "path": "/internal/v1/analysis:validate",
+        "method": "POST",
+    }
+
+
+def test_wrong_method_returns_405_ai_1004(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(config, "settings", Settings(ai_internal_token=TOKEN))
+    resp = client.post(
+        "/internal/v1/health", headers={REQUEST_ID_HEADER: "req_b131_405"}
+    )
+    assert resp.status_code == 405, resp.text
+    body = resp.json()
+    _assert_envelope(body, "AI-1004")
+    assert body["request_id"] == "req_b131_405"
+    assert body["detail"]["method"] == "POST"
+    # 405 必须保留 Allow 头（协议语义，不被信封改造吞掉）
+    assert resp.headers.get("allow") == "GET"

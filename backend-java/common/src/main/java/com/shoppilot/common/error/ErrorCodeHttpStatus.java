@@ -162,6 +162,9 @@ public final class ErrorCodeHttpStatus {
         put("AI-0001", 401);
         put("AI-1001", 400);
         put("AI-1002", 400);
+        // B13.1 / R95：Python 侧把 404/405 也纳入统一四字段信封
+        put("AI-1003", 404);
+        put("AI-1004", 405);
         put("AI-2001", 422);
         put("AI-2002", 422);
         put("AI-3001", 500);

@@ -171,3 +171,46 @@ def test_missing_request_id_is_generated_not_an_error(
     # uuid4() is a valid UUID string; parse it to prove it is well-formed.
     assert uuid.UUID(generated)
     assert resp.headers[REQUEST_ID_HEADER] == generated
+
+
+# --------------------------------------------------------------------------- #
+# R97 —— 尾斜杠变体必须直接 200（不能是 307）
+# --------------------------------------------------------------------------- #
+def test_health_trailing_slash_is_200(
+    client: TestClient, token_configured: str
+) -> None:
+    resp = client.get("/internal/v1/health/", follow_redirects=False)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"status": "UP"}
+
+
+# --------------------------------------------------------------------------- #
+# R98 —— 日志记录必须带真实 request_id（§2:75「记入自身日志」）
+#
+# 断言的是 **record 的属性**（``record.request_id``），不是消息文本。
+# ``core.logging.get_logger`` 设了 ``propagate = False``（避免与 uvicorn 的 root
+# handler 重复输出），而 pytest 的 caplog 只挂 root handler，故本用例**临时**打开
+# 传播、用完还原 —— 这是观察非传播 logger 的标准做法，不改生产行为。
+# --------------------------------------------------------------------------- #
+def test_log_record_carries_request_id(
+    client: TestClient, token_configured: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    target = logging.getLogger("shoppilot_ai.app.main")
+    previous_propagate = target.propagate
+    target.propagate = True
+    try:
+        with caplog.at_level(logging.INFO, logger="shoppilot_ai.app.main"):
+            resp = client.get(
+                "/internal/v1/health", headers={REQUEST_ID_HEADER: "req_b131_log"}
+            )
+    finally:
+        target.propagate = previous_propagate
+
+    assert resp.status_code == 200, resp.text
+    recorded = [getattr(record, "request_id", None) for record in caplog.records]
+    assert "req_b131_log" in recorded, (
+        "日志记录必须带当前请求的 request_id；实际记录的 request_id="
+        f"{recorded}"
+    )

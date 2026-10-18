@@ -1,10 +1,10 @@
 JAR=backend-java/app/target/shoppilot-app-0.1.0.jar
-JAR_SHA256=6d4f8356b58871e638d7bb51ff9c4b6c6ab6051fb61ff58313f991a7689601fe
-DATE=2026-10-18T10:09:07Z
+JAR_SHA256=6627bb9b4a3af26ca47f1bf2f9dab045537afffe89ee09cc871709172096f894
+DATE=2026-10-18T10:39:26Z
 PORTS mysql=3375 java=18295 python=18095
 TOKEN=rb-b13-review-token（复核专用值，非生产密钥）
-JAVA_UP=1 (pid=132)
-PYTHON_UP=1 (pid=144, token=<set>)
+JAVA_UP=1 (pid=38)
+PYTHON_UP=1 (pid=50, token=<set>)
 -----------------------------------------------------------------
 R1  health 不带 token（ACCEPTANCE_CRITERIA:82 的验收形态）
   raw: http=200 body={"status":"UP"}
@@ -12,18 +12,18 @@ PASS R1-health-200 => 200
 PASS R1-health-UP => UP
 -----------------------------------------------------------------
 R2  analysis:validate 不带 token → 401 AI-0001 + 四字段
-  raw: http=401 body={"code":"AI-0001","message":"Invalid or missing X-Internal-Token","detail":{},"request_id":"f320127a-a0d4-4ab4-a201-1ae56e797dde"}
+  raw: http=401 body={"code":"AI-0001","message":"Invalid or missing X-Internal-Token","detail":{},"request_id":"1edf98f2-e039-403b-aee8-75f6b19f3ac0"}
 PASS R2-401 => 401
 PASS R2-code => AI-0001
 PASS R2-四键 => code,detail,message,request_id
 -----------------------------------------------------------------
 R3  带错 token → 401 AI-0001
-  raw: http=401 body={"code":"AI-0001","message":"Invalid or missing X-Internal-Token","detail":{},"request_id":"e3923b1d-6289-47d7-8585-a8eea214ffe5"}
+  raw: http=401 body={"code":"AI-0001","message":"Invalid or missing X-Internal-Token","detail":{},"request_id":"980d0a0a-a418-4a3d-a99c-bde6c9820ea9"}
 PASS R3-401 => 401
 PASS R3-code => AI-0001
 -----------------------------------------------------------------
 R4  带对 token → 非 401（本批无业务端点）
-  raw: http=404 body={"detail":"Not Found"}
+  raw: http=404 body={"code":"AI-1003","message":"Internal path not found","detail":{"path":"/internal/v1/analysis:validate","method":"POST"},"request_id":"582375fc-4d72-48a1-a3c1-576185700375"}
 PASS R4-非401 => 404
 -----------------------------------------------------------------
 R5  X-Request-Id 回显 + body.request_id 与响应头逐字相等（★用 401 路径：404 无信封）
@@ -32,39 +32,38 @@ PASS R5-头回显 => req_rev_0001
 PASS R5-体回显 => req_rev_0001
 -----------------------------------------------------------------
 R6  §5「内部统一错误响应体」是否覆盖 404（★项目负责人新增探针）
-  raw: http=404 body={"detail":"Not Found"}
-FAIL R6-404四字段信封 => expect[code,detail,message,request_id] actual[detail]
+  raw: http=404 body={"code":"AI-1003","message":"Internal path not found","detail":{"path":"/internal/v1/analysis:validate","method":"POST"},"request_id":"5d206b54-697a-439d-92a3-1ad9a9691a55"}
+PASS R6-404四字段信封 => code,detail,message,request_id
 -----------------------------------------------------------------
 R7  §5 是否覆盖 405（★项目负责人新增探针）
-  raw: http=405 body={"detail":"Method Not Allowed"}
-FAIL R7-405四字段信封 => expect[code,detail,message,request_id] actual[detail]
+  raw: http=405 body={"code":"AI-1004","message":"Internal method not allowed","detail":{"path":"/internal/v1/health","method":"POST"},"request_id":"21bb66ff-8405-4dce-8b74-0cf4c066622d"}
+PASS R7-405四字段信封 => code,detail,message,request_id
 -----------------------------------------------------------------
 R8  health 尾斜杠变体是否仍豁免（★项目负责人新增探针）
-  raw: http=401 body={"code":"AI-0001","message":"Invalid or missing X-Internal-Token","detail":{},"request_id":"22888ee4-8a81-47cd-98b1-c7486304a30d"}
-FAIL R8-health尾斜杠非401 => expect[200] actual[401]
+  raw: http=200 body={"status":"UP"}
+PASS R8-health尾斜杠非401 => 200
 -----------------------------------------------------------------
 R9  HTTP 头名大小写不敏感（RFC 7230；契约未写）
   raw: http=404
 PASS R9-小写头名通过鉴权 => 404
 -----------------------------------------------------------------
 R10 Java 侧 /api/v1/health 的 requestId 贯通（既有链路未被破坏）
-  raw: header=[req_rev_0002] body={"code":"OK","message":"success","data":{"status":"UP","service":"shoppilot-ai","version":"0.1.0"},"requestId":"req_rev_0002","timestamp":"2026-10-18T10:09:45.642Z"}
+  raw: header=[req_rev_0002] body={"code":"OK","message":"success","data":{"status":"UP","service":"shoppilot-ai","version":"0.1.0"},"requestId":"req_rev_0002","timestamp":"2026-10-18T10:40:04.266Z"}
 PASS R10-头回显 => req_rev_0002
 PASS R10-体requestId => req_rev_0002
 -----------------------------------------------------------------
 R12 §2:75「Python 必须…记入自身日志」——日志能否按 request_id 关联（★新增）
-  raw: http=404  python.log 中出现该 id 的行数=0
-0  「req_id=-」行数=9
-FAIL R12-日志含request_id => expect[1] actual[0]
+  raw: http=404  python.log 中出现该 id 的行数=1  「req_id=-」行数=9
+PASS R12-日志含request_id => 1
 -----------------------------------------------------------------
 R11 ★R92 fail-closed：重启 Python 且清空 AI_INTERNAL_TOKEN
-PYTHON_RESTART_UP=1 (pid=321, token=<empty>)
-  raw: http=401 body={"code":"AI-0001","message":"Invalid or missing X-Internal-Token","detail":{},"request_id":"a3804c41-99a3-4e23-b1f2-e81d060e6f19"}
+PYTHON_RESTART_UP=1 (pid=227, token=<empty>)
+  raw: http=401 body={"code":"AI-0001","message":"Invalid or missing X-Internal-Token","detail":{},"request_id":"3fcd6dec-7df5-4179-b384-b5f014ab79cb"}
 PASS R11-未配置仍401 => 401
 PASS R11-未配置仍AI-0001 => AI-0001
 PASS R11-health仍200 => 200
 -----------------------------------------------------------------
-RB13_REVIEW_TOTAL=20  RB13_REVIEW_FAIL=4
-RB13_REVIEW_RESULT=HAS FAIL
+RB13_REVIEW_TOTAL=20  RB13_REVIEW_FAIL=0
+RB13_REVIEW_RESULT=ALL PASS
 -----------------------------------------------------------------
 --- cleanup ---

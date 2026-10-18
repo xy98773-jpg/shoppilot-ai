@@ -81,6 +81,20 @@ class AiContractTest {
     }
 
     @Test
+    @DisplayName("§J3-1 AI-1003（内部路径不存在）映射 404")
+    void errorCodeHttpStatusMapping1003() {
+        assertEquals("AI-1003", ErrorCodes.AI_1003);
+        assertEquals(404, ErrorCodeHttpStatus.resolve(ErrorCodes.AI_1003));
+    }
+
+    @Test
+    @DisplayName("§J3-2 AI-1004（内部方法不允许）映射 405")
+    void errorCodeHttpStatusMapping1004() {
+        assertEquals("AI-1004", ErrorCodes.AI_1004);
+        assertEquals(405, ErrorCodeHttpStatus.resolve(ErrorCodes.AI_1004));
+    }
+
+    @Test
     @DisplayName("§C3-5 forInternalCall：空令牌不放该键；非空令牌放入且值相等")
     void outboundHeadersOmitBlankToken() {
         Map<String, String> withoutToken = AiOutboundHeaders.forInternalCall("");
