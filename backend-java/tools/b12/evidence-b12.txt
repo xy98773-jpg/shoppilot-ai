@@ -1,0 +1,73 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=f7f0450cc61d4cf1f5e4f302d66b47a45a219b145ffaf0644ab6bb2fcc7dc680
+DATE=2026-10-18T08:32:56Z
+PORTS mysql=3363 app=18270（任务书建议 3363 / 18270，已 netstat 复核空闲）
+IMPORT_STORAGE_DIR=/d/Desktop/ShopPilot-AI/backend-java/tools/b12/.import-storage（显式设置，避免落进仓库工作区）
+MYSQL_READY=1 (port 3363, 独立容器 b12-mysql)
+APP_PID=1516 (port 18270, stdout -> evidence-b12-app.log)
+APP_UP=1
+SEED_OK (seed-b95.sql：团队7 / 仓库9004=WH-MAIN / 商品9001=P-BAG-001 / operator01)
+TOKEN op=eyJhbGci
+---------------------------------------------------------------
+前置：上传 → 预览 → 映射 → 校验 → 确认，得到 A(COMPLETED)
+PASS 前置-上传201 => 201
+PASS 前置-校验200 => 200
+前置-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":1,"status":"COMPLETED","total_rows":1,"success_rows":1,"failed_rows":0,"started_at":"2026-10-18T08:33:31.528Z","finished_at":"2026-10-18T08:33:31.606Z"},"requestId":"req_e168b9115089214425ba1558d6097331","timestamp":"2026-10-18T08:33:31.634Z"}
+PASS 前置-A终态COMPLETED => COMPLETED
+A.id=1 hash=42d5120efaee45e93810f82a3f9247c6edf59ab3924ee07672efd97e495888cf
+---------------------------------------------------------------
+造 D：同文件再传 → 409 IMP-4004，并落一条 DUPLICATE_REJECTED（dedupe_hash=NULL）
+dup-upload=409 body={"code":"IMP-4004","message":"该文件已导入过，如需重新导入请使用强制重导","data":{"existing_batch_id":1,"existing_batch_no":"IMP-20261018-000001"},"requestId":"req_566b298fcf332388f87d9edc9ba0252a","timestamp":"2026-10-18T08:33:35.084Z"}
+PASS D-重复上传409 => 409
+PASS D-错误码IMP-4004 => IMP-4004
+PASS D-existing_batch_id=A => 1
+D.id=2 原始行=2|DUPLICATE_REJECTED|NULL|2|1
+PASS D-状态DUPLICATE_REJECTED => DUPLICATE_REJECTED
+PASS D-槽位为NULL => NULL
+PASS D-attempt_no=2 => 2
+---------------------------------------------------------------
+G2 D 自身重导 → 422 IMP-4005（不猜 HTTP，直接看错误码）
+D-reimport=422 body={"code":"IMP-4005","message":"当前批次状态不允许强制重导","data":null,"details":[{"field":"status","message":"仅终态批次可强制重导（COMPLETED / PARTIAL_SUCCESS / FAILED / CANCELLED）","rejectedValue":"DUPLICATE_REJECTED"}],"requestId":"req_dd17e23e3bbb63de6aa7c27acb4f87eb","timestamp":"2026-10-18T08:33:50.253Z"}
+PASS G2-D重导422 => 422
+PASS G2-错误码IMP-4005 => IMP-4005
+PASS G2-不是IMP-4004（不再是「请刷新」死路） => IMP-4005（≠IMP-4004）
+---------------------------------------------------------------
+G6 提示语：只列四个合法状态、不含 DUPLICATE_REJECTED；当前状态在 rejectedValue 机读可见
+G6-details.message=仅终态批次可强制重导（COMPLETED / PARTIAL_SUCCESS / FAILED / CANCELLED）
+PASS G6-含COMPLETED => 含[COMPLETED]
+PASS G6-含PARTIAL_SUCCESS => 含[PARTIAL_SUCCESS]
+PASS G6-含FAILED => 含[FAILED]
+PASS G6-含CANCELLED => 含[CANCELLED]
+PASS G6-不含DUPLICATE_REJECTED => 不含[DUPLICATE_REJECTED]
+PASS G6-details.field=status => status
+PASS G6-当前状态仍机读可见(rejectedValue) => DUPLICATE_REJECTED
+---------------------------------------------------------------
+G3 被拒后零副作用：无新批次 / 无 FORCE_REIMPORT 审计 / A 槽位未变
+批次快照=1/COMPLETED,2/DUPLICATE_REJECTED
+PASS G3-批次总数不变 => 2
+PASS G3-无FORCE_REIMPORT审计 => 0
+PASS G3-A槽位未变 => 42d5120efaee45e93810f82a3f9247c6edf59ab3924ee07672efd97e495888cf
+PASS G3-A未被标记取代 => NULL
+PASS G3-D状态未变 => DUPLICATE_REJECTED
+---------------------------------------------------------------
+G1/G5 A(COMPLETED) 重导 → 201，新批 attempt_no=2、占槽位；A 释放并被标记取代
+A-reimport=201 body={"code":"OK","message":"success","data":{"batch_id":3,"batch_no":"IMP-20261018-000003","biz_type":"SKU","file_name":"sku-b12.csv","file_hash":"42d5120efaee45e93810f82a3f9247c6edf59ab3924ee07672efd97e495888cf","file_size":42,"status":"UPLOADED","created_at":"2026-10-18T08:34:10.566Z"},"requestId":"req_dad46dd47f68c6a92fe60dc6a64b725e","timestamp":"2026-10-18T08:34:10.612Z"}
+PASS G1-A重导201 => 201
+PASS G1-新批attempt_no=2 => 2
+PASS G5-新批占槽位 => 42d5120efaee45e93810f82a3f9247c6edf59ab3924ee07672efd97e495888cf
+PASS G5-A槽位释放 => NULL
+PASS G5-A.superseded_by=新批 => 3
+PASS G5-同hash仅1行占用 => 1
+PASS G5-FORCE_REIMPORT审计+1 => 1
+---------------------------------------------------------------
+G4 同文件再传 → 409 IMP-4004，existing_batch_id=新批（原批槽位确已释放）
+post-reimport-upload=409 body={"code":"IMP-4004","message":"该文件已导入过，如需重新导入请使用强制重导","data":{"existing_batch_id":3,"existing_batch_no":"IMP-20261018-000003"},"requestId":"req_9225b95e043431e19b925c0326f8eff7","timestamp":"2026-10-18T08:34:22.993Z"}
+PASS G4-再传409 => 409
+PASS G4-错误码IMP-4004 => IMP-4004
+PASS G4-existing_batch_id=新批 => 3
+---------------------------------------------------------------
+批次全景 team7：1/COMPLETED/attempt=1/hash=NULL,2/DUPLICATE_REJECTED/attempt=2/hash=NULL,3/UPLOADED/attempt=2/hash=42d5120e,4/DUPLICATE_REJECTED/attempt=3/hash=NULL
+B12_CHECK_TOTAL=34
+B12_FAIL_COUNT=0
+B12_RESULT=ALL PASS
+--- cleanup ---
