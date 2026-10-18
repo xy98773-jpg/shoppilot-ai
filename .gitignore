@@ -1,5 +1,6 @@
 # ===== 工具与本地工作数据（WorkBuddy/CodeBuddy 本地状态，跨机器无意义）=====
 .workbuddy/
+.workbuddy-ai/
 
 # ===== 操作系统 =====
 .DS_Store
