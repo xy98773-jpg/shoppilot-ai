@@ -4,12 +4,15 @@
 - §2:74  ``X-Internal-Token`` 必填；缺失或不匹配 → ``401 AI-0001``；
 - §5:639-660  错误体为**四字段** ``{code, message, detail, request_id}``，
   ``message`` 为英文技术描述，``request_id`` 回显请求头 ``X-Request-Id``；
-- ``ERROR_CODES.md:241-257``  ``AI-0001``(401) / ``AI-1001``(400) / ``AI-9001``(500)。
+  §5 已明确「适用范围 = service-ai 的**全部** HTTP 响应，无例外」——故 404/405 也必须走本信封；
+- ``ERROR_CODES.md §2.11``  ``AI-0001``(401) / ``AI-1001``(400) / ``AI-1003``(404) /
+  ``AI-1004``(405) / ``AI-9001``(500)。
 
 设计约束：
 1. 本模块是**错误码与错误体的唯一出口**；其它模块不得自造错误码字符串。
    早期骨架自造的 4 个非契约码（服务错误 / 令牌非法 / 校验失败 / 未找到 四个英文别名）
-   均不在 ``ERROR_CODES.md`` 表内，已按 ``R94`` 全部删除，统一改用 AI-xxxx。
+   均不在 ``ERROR_CODES.md`` 表内，已按 B13-令 §G10 / §F12 全部删除，统一改用 AI-xxxx。
+   （注：先前此处误引为 ``R94``；``R94`` 的真实内容是 V1.0.9 迁移号冲突，与本条无关。）
 2. ``error_body`` **恒定返回四键**：调用方不必判断 ``detail`` / ``request_id`` 是否存在，
    Java 侧的反序列化也不会因缺键而 NPE。
 3. ``request_id`` 缺失时给空串而非 ``None``：保持四键且类型稳定（字符串），
@@ -24,6 +27,10 @@ from typing import Any
 AI_0001 = "AI-0001"
 #: 请求体 Schema 校验失败（HTTP 400）。
 AI_1001 = "AI-1001"
+#: 内部路径不存在（HTTP 404）——请求了契约 §3 未定义的内部路径（R95）。
+AI_1003 = "AI-1003"
+#: 内部方法不允许（HTTP 405）——路径存在但 HTTP 方法不匹配（R95）。
+AI_1004 = "AI-1004"
 #: AI 服务未预期错误（HTTP 500）。
 AI_9001 = "AI-9001"
 
@@ -31,6 +38,8 @@ AI_9001 = "AI-9001"
 DEFAULT_MESSAGES: dict[str, str] = {
     AI_0001: "Invalid or missing X-Internal-Token",
     AI_1001: "Request payload failed schema validation",
+    AI_1003: "Internal path not found",
+    AI_1004: "Internal method not allowed",
     AI_9001: "Unexpected internal error",
 }
 
@@ -90,6 +99,8 @@ class SchemaValidationError(ServiceAIBaseError):
 __all__ = [
     "AI_0001",
     "AI_1001",
+    "AI_1003",
+    "AI_1004",
     "AI_9001",
     "DEFAULT_MESSAGES",
     "ServiceAIBaseError",
