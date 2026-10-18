@@ -9,7 +9,11 @@ package com.shoppilot.common.error;
  * 二者冲突时以 {@code ERROR_CODES.md §2} 为准（§12.3 原文：「冲突时以该表为准」）。
  * 本类不持有任何解释性文字。
  *
- * <p>AI 域错误码（AI-xxxx）属 Java↔Python 内部通信，定义见 ERROR_CODES.md §2.11，不在本类重复。
+ * <p>AI 域错误码（AI-xxxx）属 Java↔Python 内部通信，完整清单见 {@code ERROR_CODES.md §2.11}
+ * （17 条，HTTP 映射已在 {@link ErrorCodeHttpStatus} 固化）。本类<b>只固化 Java 侧会实际产出/断言的
+ * 3 条</b>（M4-B13 起）：{@code AI-0001} / {@code AI-1001} / {@code AI-9001}。
+ * 其余 AI 码仍只经 {@link ErrorCodeHttpStatus#resolve} 查表，不在本类重复定义 ——
+ * 避免「常量表」与「映射表」各存一份、后续改一处漏一处。
  */
 public final class ErrorCodes {
 
@@ -147,4 +151,13 @@ public final class ErrorCodes {
     public static final String PO_9002 = "PO-9002";
     public static final String PO_9003 = "PO-9003";
     public static final String PO_9004 = "PO-9004";
+
+    // AI —— Java ↔ Python 内部通信（ERROR_CODES.md §2.11）
+    // ★ 只固化 Java 侧会实际产出/断言的 3 条；其余 14 条只在 ErrorCodeHttpStatus 查表（见类 javadoc）。
+    /** 内部令牌缺失或不匹配（401）—— Python 侧 {@code require_internal_token} 产出。 */
+    public static final String AI_0001 = "AI-0001";
+    /** 请求体 Schema 校验失败（400）—— Python 侧 Pydantic 校验失败（非 FastAPI 默认的 422）。 */
+    public static final String AI_1001 = "AI-1001";
+    /** AI 服务未预期错误（500）—— Python 侧未捕获异常。 */
+    public static final String AI_9001 = "AI-9001";
 }

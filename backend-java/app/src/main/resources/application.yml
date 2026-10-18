@@ -62,6 +62,15 @@ shoppilot:
     issuer: shoppilot-ai
     audience: frontend-web
 
+  # M4-B13：Java → Python（service-ai）内部调用配置（AI_SERVICE_CONTRACT.md §2/§3）。
+  # ★ internal-token 默认空串 = 「未配置」，**刻意不做启动期 fail-fast**：
+  #   本仓 34 个 @SpringBootTest 类各自建属性源，新增必填属性会连锁改动它们；
+  #   令牌可用性由 AiProperties#isConfigured() 在调用点判定（见 M4-B13 F15）。
+  # ★ base-url 默认取 Compose 服务名（DESIGN_BASIS §13.1），本地直连时用环境变量覆盖。
+  ai:
+    internal-token: ${AI_INTERNAL_TOKEN:}
+    base-url: ${AI_SERVICE_BASE_URL:http://service-ai:8000}
+
 # M3-T02：导入原始文件落盘根目录（本地存储；不引入 MinIO/S3 等对象存储，见 IMPORT_WORKFLOW §4）。
 # 实际路径 = {storage-dir}/{teamId}/{yyyyMM}/{batchNo}_{消毒后文件名}。
 app:
