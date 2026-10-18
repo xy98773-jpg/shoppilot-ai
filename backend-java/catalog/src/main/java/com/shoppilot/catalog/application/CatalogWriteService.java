@@ -117,7 +117,7 @@ public class CatalogWriteService {
     /** 新建（{@code id==null}）/ 修改（{@code id!=null}）仓库。 */
     @Transactional(rollbackFor = Exception.class)
     public WarehouseView upsertWarehouse(Long id, JsonNode body) {
-        return id == null ? createWarehouse(body) : updateWarehouse(id, body);
+        return id == null ? createWarehouse(body) : updateWarehouse(id, body, true);
     }
 
     private WarehouseView createWarehouse(JsonNode body) {
@@ -165,7 +165,26 @@ public class CatalogWriteService {
         return withView ? WarehouseView.of(warehouseMapper.selectById(entity.getId())) : WarehouseView.of(entity);
     }
 
-    private WarehouseView updateWarehouse(Long id, JsonNode body) {
+    /**
+     * 更新仓库内核。
+     *
+     * <h2>★ {@code R86}：{@code code} 是定位键，能否被改写由<b>调用方</b>显式决定</h2>
+     * 本方法被 REST（{@link #upsertWarehouse}）与导入 by-code upsert
+     * （{@link #doUpsertWarehouseByCode}）<b>共用</b>，而两者的 {@code code} 语义不同：
+     * <ul>
+     *   <li><b>REST</b>：{@code code} 是普通业务字段，可改（{@code API_CONTRACT §10.3} 未禁止，
+     *       {@code DATABASE_DESIGN §5.4}「更新规则」也未标 {@code 不可变}——对比同文件
+     *       {@code teams.code} 与 {@code skus.product_id} 都明确标了）⇒ 传 {@code writableCode=true}；</li>
+     *   <li><b>导入</b>：{@code code} 只是<b>定位键</b>（{@code IMPORT_WORKFLOW §7.4} R86 裁定），
+     *       命中既有行后必须<b>保留库内既有字面量</b>，不得改写成文件里的写法
+     *       ⇒ 传 {@code writableCode=false}。</li>
+     * </ul>
+     * ★ 之所以做成<b>显式参数</b>而不是在导入路径上打标记（ThreadLocal / 请求头开关）：
+     * 那是「同一内核两种语义」的必要表达点，参数让差异在调用处可见、可测、可被静态检视。
+     *
+     * @param writableCode 是否允许把请求体里的 {@code code} 写进库内（见上）
+     */
+    private WarehouseView updateWarehouse(Long id, JsonNode body, boolean writableCode) {
         CatalogGuards.requireInTeam(warehouseMapper.selectById(id),
                 () -> warehouseMapper.selectTeamIdById(id), ErrorCodes.CAT_3003, "仓库不存在");
 
@@ -173,7 +192,9 @@ public class CatalogWriteService {
         requireNonBlankIfPresent(body, "name");
         UpdateWrapper<WarehouseEntity> w = new UpdateWrapper<>();
         w.eq("id", id);
-        setString(w, body, "code", "code");
+        if (writableCode) {
+            setString(w, body, "code", "code");
+        }
         setString(w, body, "name", "name");
         setString(w, body, "address", "address");
         setString(w, body, "contact_name", "contact_name");
@@ -210,7 +231,7 @@ public class CatalogWriteService {
     /** 新建（{@code id==null}）/ 修改（{@code id!=null}）供应商。 */
     @Transactional(rollbackFor = Exception.class)
     public SupplierView upsertSupplier(Long id, JsonNode body) {
-        return id == null ? createSupplier(body) : updateSupplier(id, body);
+        return id == null ? createSupplier(body) : updateSupplier(id, body, true);
     }
 
     private SupplierView createSupplier(JsonNode body) {
@@ -245,7 +266,15 @@ public class CatalogWriteService {
         return withView ? SupplierView.of(supplierMapper.selectById(entity.getId())) : SupplierView.of(entity);
     }
 
-    private SupplierView updateSupplier(Long id, JsonNode body) {
+    /**
+     * 更新供应商内核。
+     *
+     * <p>★ {@code R86}：{@code code} 是 by-code upsert 的<b>定位键、不可更新</b>
+     * （{@code IMPORT_WORKFLOW §7.3}）；REST 管理端仍可改（{@code API_CONTRACT §10.3} 未禁止，
+     * {@code DATABASE_DESIGN §5.5}「更新规则」未标 {@code 不可变}）⇒ 由调用方显式传
+     * {@code writableCode}，理由与取舍见 {@link #updateWarehouse(Long, JsonNode, boolean)}。
+     */
+    private SupplierView updateSupplier(Long id, JsonNode body, boolean writableCode) {
         CatalogGuards.requireInTeam(supplierMapper.selectById(id),
                 () -> supplierMapper.selectTeamIdById(id), ErrorCodes.CAT_3001, "供应商不存在");
 
@@ -258,7 +287,9 @@ public class CatalogWriteService {
 
         UpdateWrapper<SupplierEntity> w = new UpdateWrapper<>();
         w.eq("id", id);
-        setString(w, body, "code", "code");
+        if (writableCode) {
+            setString(w, body, "code", "code");
+        }
         setString(w, body, "name", "name");
         setString(w, body, "contact_name", "contact_name");
         setString(w, body, "contact_phone", "contact_phone");
@@ -292,7 +323,7 @@ public class CatalogWriteService {
     /** 新建（{@code id==null}）/ 修改（{@code id!=null}）商品。 */
     @Transactional(rollbackFor = Exception.class)
     public ProductView upsertProduct(Long id, JsonNode body) {
-        return id == null ? createProduct(body) : updateProduct(id, body);
+        return id == null ? createProduct(body) : updateProduct(id, body, true, true);
     }
 
     private ProductView createProduct(JsonNode body) {
@@ -324,17 +355,18 @@ public class CatalogWriteService {
         return withView ? ProductView.of(productMapper.selectById(entity.getId())) : ProductView.of(entity);
     }
 
-    private ProductView updateProduct(Long id, JsonNode body) {
-        return updateProduct(id, body, true);
-    }
-
     /**
      * 更新内核。
      *
      * @param withView {@code true}＝写后重查一次 {@code selectById} 取最新视图（REST 用）；
      *                 {@code false}＝复用 guard 已取到的实体（导入用，省掉 1 万次写后重查 ≈ 24 s）
+     * @param writableCode ★ {@code R86}：{@code product_code} 是 by-code upsert 的<b>定位键、
+     *                 不可更新</b>（{@code IMPORT_WORKFLOW §7.1}「{@code product_code} 为业务键不可改」）；
+     *                 REST 管理端仍可改（{@code API_CONTRACT §10.3} 未禁止，
+     *                 {@code DATABASE_DESIGN §5.6}「更新规则」未标 {@code 不可变}）。
+     *                 理由与取舍见 {@link #updateWarehouse(Long, JsonNode, boolean)}。
      */
-    private ProductView updateProduct(Long id, JsonNode body, boolean withView) {
+    private ProductView updateProduct(Long id, JsonNode body, boolean withView, boolean writableCode) {
         ProductEntity existing = productMapper.selectById(id);
         CatalogGuards.requireInTeam(existing,
                 () -> productMapper.selectTeamIdById(id), ErrorCodes.CAT_3001, "商品不存在");
@@ -343,7 +375,9 @@ public class CatalogWriteService {
         requireNonBlankIfPresent(body, "name");
         UpdateWrapper<ProductEntity> w = new UpdateWrapper<>();
         w.eq("id", id);
-        setString(w, body, "product_code", "product_code");
+        if (writableCode) {
+            setString(w, body, "product_code", "product_code");
+        }
         setString(w, body, "name", "name");
         setString(w, body, "category", "category");
         setString(w, body, "brand", "brand");
@@ -372,7 +406,7 @@ public class CatalogWriteService {
      */
     @Transactional(rollbackFor = Exception.class)
     public SkuView upsertSku(Long id, Long pathProductId, JsonNode body) {
-        return id == null ? createSku(pathProductId, body) : updateSku(id, body);
+        return id == null ? createSku(pathProductId, body) : updateSku(id, body, true);
     }
 
     private SkuView createSku(Long pathProductId, JsonNode body) {
@@ -430,7 +464,16 @@ public class CatalogWriteService {
         return withView ? SkuView.of(skuMapper.selectById(entity.getId())) : SkuView.of(entity);
     }
 
-    private SkuView updateSku(Long id, JsonNode body) {
+    /**
+     * 更新 SKU 内核。
+     *
+     * <p>★ {@code R86}：{@code sku_code} 是 by-code upsert 的<b>定位键、不可更新</b>
+     * （{@code IMPORT_WORKFLOW §7.2}，与 {@code product_id} 同级）；REST 管理端仍可改
+     * （{@code API_CONTRACT §10.3} 未禁止，{@code DATABASE_DESIGN §5.7}「更新规则」只标了
+     * {@code product_id} 不可变、未标 {@code sku_code}）⇒ 由调用方显式传 {@code writableCode}，
+     * 理由与取舍见 {@link #updateWarehouse(Long, JsonNode, boolean)}。
+     */
+    private SkuView updateSku(Long id, JsonNode body, boolean writableCode) {
         skuQueryService.requireInTeam(id);
 
         requireNonBlankIfPresent(body, "sku_code");
@@ -438,7 +481,9 @@ public class CatalogWriteService {
         UpdateWrapper<SkuEntity> w = new UpdateWrapper<>();
         w.eq("id", id);
         // product_id 不可变：请求体中的 product_id 一律忽略（换商品须新建 SKU，§6-B）
-        setString(w, body, "sku_code", "sku_code");
+        if (writableCode) {
+            setString(w, body, "sku_code", "sku_code");
+        }
         setString(w, body, "name", "name");
         setString(w, body, "barcode", "barcode");
         setJson(w, body, "spec_json", "spec_json");
@@ -594,6 +639,13 @@ public class CatalogWriteService {
      *
      * <p>缺失/空白的键直接跳过：交给下游 {@code requireText} 抛 {@code COM-0001}（行级失败），
      * 预取阶段不改变错误语义。
+     *
+     * <p>★ {@code R86}：返回表的键与查找<b>都</b>经 {@link #foldCode(String)} 折叠。
+     * {@code in("code", …)} 受 {@code utf8mb4_0900_ai_ci} 约束<b>能</b>用文件里的 {@code wh-main}
+     * 匹配到库里的 {@code WH-MAIN}，但返回的 Map 键是<b>库里写法</b>；若查找侧不折叠，
+     * 则预取表必然落空 ⇒ 命中既有行被判成「不存在」⇒ 走 create 分支撞 {@code uk_*_team_code}，
+     * 批量出口退化成整批回滚 + 逐行重放（与单行出口的 {@code selectIdByCode} 行为分叉）。
+     * 折叠后两条出口的判定<b>严格等价</b>（与 {@code IMPORT_WORKFLOW §8.6} 末行一致）。
      */
     private Map<String, Long> preloadWarehouseIdsByCode(List<JsonNode> bodies) {
         Set<String> codes = new LinkedHashSet<>();
@@ -610,7 +662,7 @@ public class CatalogWriteService {
         for (WarehouseEntity row : warehouseMapper.selectList(new LambdaQueryWrapper<WarehouseEntity>()
                 .select(WarehouseEntity::getId, WarehouseEntity::getCode)
                 .in(WarehouseEntity::getCode, codes))) {
-            ids.put(row.getCode(), row.getId());
+            ids.put(foldCode(row.getCode()), row.getId());
         }
         return ids;
     }
@@ -618,20 +670,29 @@ public class CatalogWriteService {
     /**
      * by-code upsert 的无事务内核。
      *
+     * <p>★ {@code R86}：命中既有行时 {@code code} 是<b>定位键</b>（{@code IMPORT_WORKFLOW §7.4}），
+     * 传给更新内核的是 {@code writableCode=false} —— <b>保留库内既有字面量</b>，不得改写成文件里的写法。
+     * 判定仍按 {@code IMPORT_WORKFLOW §8.6} 末行（编码大小写不敏感等价）命中：{@code selectIdByCode} 走
+     * {@code utf8mb4_0900_ai_ci}，{@code sku-a} 能命中库内的 {@code SKU-A}；命中后只是<b>不改</b>它。
+     * create 分支（{@code existingId == null}）保持原样，{@code code} 照写。
+     *
      * @param preloadedIds 整批预取的 {@code code → id}；{@code null} 表示「未预取，逐行解析」
      */
     private WarehouseView doUpsertWarehouseByCode(JsonNode body, Map<String, Long> preloadedIds) {
         String code = requireText(body, "code");
         Long existingId = preloadedIds == null
                 ? warehouseMapper.selectIdByCode(code)
-                : preloadedIds.get(code);
+                : preloadedIds.get(foldCode(code));
         WarehouseView view;
         if (existingId == null) {
             view = createWarehouse(body, false);
         } else {
-            view = updateWarehouse(existingId, body);
+            // R86：writableCode=false ⇒ 不 set code 列，保留库内既有写法
+            view = updateWarehouse(existingId, body, false);
             // R48（ADR-004 D4）：updateWarehouse 本身不写审计（REST PUT 由 @Audited 记），
             // 导入路径不经 Controller ⇒ 必须在此补一条「导入更新」，否则更新无痕。
+            // ★ R86：bizNo 取 view.getCode()——更新后重查得到的正是【库内既有字面量】，
+            //   而不是文件里的写法（否则审计会记录一个被改写前的、不存在的编码）。
             recordMasterData(BIZ_TYPE_WAREHOUSE, view.getId(), view.getCode(), "导入更新仓库");
         }
         if (needsStatusChange(body, view.getStatus())) {
@@ -678,6 +739,9 @@ public class CatalogWriteService {
      *
      * <p>缺失/空白的键直接跳过：交给下游 {@code requireText} 抛 {@code COM-0001}（行级失败），
      * 预取阶段不改变错误语义。
+     *
+     * <p>★ {@code R86}：返回表的键与查找<b>都</b>经 {@link #foldCode(String)} 折叠，
+     * 使批量出口与单行出口的命中判定<b>严格等价</b>（详见 {@link #preloadWarehouseIdsByCode}）。
      */
     private Map<String, Long> preloadSupplierIdsByCode(List<JsonNode> bodies) {
         Set<String> codes = new LinkedHashSet<>();
@@ -694,7 +758,7 @@ public class CatalogWriteService {
         for (SupplierEntity row : supplierMapper.selectList(new LambdaQueryWrapper<SupplierEntity>()
                 .select(SupplierEntity::getId, SupplierEntity::getCode)
                 .in(SupplierEntity::getCode, codes))) {
-            ids.put(row.getCode(), row.getId());
+            ids.put(foldCode(row.getCode()), row.getId());
         }
         return ids;
     }
@@ -702,19 +766,25 @@ public class CatalogWriteService {
     /**
      * by-code upsert 的无事务内核。
      *
+     * <p>★ {@code R86}：命中既有行时 {@code code} 是<b>定位键</b>（{@code IMPORT_WORKFLOW §7.3}），
+     * 传给更新内核的是 {@code writableCode=false} —— <b>保留库内既有字面量</b>；判定仍按
+     * {@code §8.6} 末行（大小写不敏感等价）命中。create 分支保持原样。
+     *
      * @param preloadedIds 整批预取的 {@code code → id}；{@code null} 表示「未预取，逐行解析」
      */
     private SupplierView doUpsertSupplierByCode(JsonNode body, Map<String, Long> preloadedIds) {
         String code = requireText(body, "code");
         Long existingId = preloadedIds == null
                 ? supplierMapper.selectIdByCode(code)
-                : preloadedIds.get(code);
+                : preloadedIds.get(foldCode(code));
         SupplierView view;
         if (existingId == null) {
             view = createSupplier(body, false);
         } else {
-            view = updateSupplier(existingId, body);
+            // R86：writableCode=false ⇒ 不 set code 列，保留库内既有写法
+            view = updateSupplier(existingId, body, false);
             // R48：导入更新补审计（见 doUpsertWarehouseByCode 同处注释）
+            // ★ R86：bizNo 用 view.getCode()（更新后重查＝库内既有字面量）
             recordMasterData(BIZ_TYPE_SUPPLIER, view.getId(), view.getCode(), "导入更新供应商");
         }
         if (needsStatusChange(body, view.getStatus())) {
@@ -764,6 +834,9 @@ public class CatalogWriteService {
      *
      * <p>缺失/空白的键直接跳过：交给下游 {@code requireText} 抛 {@code COM-0001}（行级失败），
      * 预取阶段不改变错误语义。
+     *
+     * <p>★ {@code R86}：返回表的键与查找<b>都</b>经 {@link #foldCode(String)} 折叠，
+     * 使批量出口与单行出口的命中判定<b>严格等价</b>（详见 {@link #preloadWarehouseIdsByCode}）。
      */
     private Map<String, Long> preloadProductIdsByCode(List<JsonNode> bodies) {
         Set<String> codes = new LinkedHashSet<>();
@@ -780,13 +853,18 @@ public class CatalogWriteService {
         for (ProductEntity row : productMapper.selectList(new LambdaQueryWrapper<ProductEntity>()
                 .select(ProductEntity::getId, ProductEntity::getProductCode)
                 .in(ProductEntity::getProductCode, codes))) {
-            ids.put(row.getProductCode(), row.getId());
+            ids.put(foldCode(row.getProductCode()), row.getId());
         }
         return ids;
     }
 
     /**
      * by-code upsert 的无事务内核。
+     *
+     * <p>★ {@code R86}：命中既有行时 {@code product_code} 是<b>定位键、不可更新</b>
+     * （{@code IMPORT_WORKFLOW §7.1}「{@code product_code} 为业务键不可改」），传给更新内核的是
+     * {@code writableCode=false} —— <b>保留库内既有字面量</b>；判定仍按 {@code §8.6} 末行命中。
+     * create 分支保持原样。
      *
      * @param preloadedIds 整批预取的 {@code product_code → id}；{@code null} 表示「未预取，逐行解析」
      */
@@ -796,13 +874,16 @@ public class CatalogWriteService {
                 code -> supplierMapper.selectIdByCode(code), "引用的供应商不存在");
         Long existingId = preloadedIds == null
                 ? productMapper.selectIdByCode(productCode)
-                : preloadedIds.get(productCode);
+                : preloadedIds.get(foldCode(productCode));
         ProductView view;
         if (existingId == null) {
             view = createProduct(normalized, false);
         } else {
-            view = updateProduct(existingId, normalized, false);
+            // R86：writableCode=false ⇒ 不 set product_code 列，保留库内既有写法
+            view = updateProduct(existingId, normalized, false, false);
             // R48：导入更新补审计（见 doUpsertWarehouseByCode 同处注释）
+            // ★ R86：bizNo 用 view.getProductCode()——此处 withView=false，返回的是 guard 已取到的
+            //   【更新前】实体，其 product_code 即库内既有字面量（正是要求的口径）。
             recordMasterData(BIZ_TYPE_PRODUCT, view.getId(), view.getProductCode(), "导入更新商品");
         }
         if (needsStatusChange(normalized, view.getStatus())) {
@@ -858,6 +939,9 @@ public class CatalogWriteService {
      *
      * <p>缺失/空白的键直接跳过：交给下游 {@code requireText} 抛 {@code COM-0001}（行级失败），
      * 预取阶段不改变错误语义。
+     *
+     * <p>★ {@code R86}：返回表的键与查找<b>都</b>经 {@link #foldCode(String)} 折叠，
+     * 使批量出口与单行出口的命中判定<b>严格等价</b>（详见 {@link #preloadWarehouseIdsByCode}）。
      */
     private Map<String, Long> preloadSkuIdsByCode(List<JsonNode> bodies) {
         Set<String> codes = new LinkedHashSet<>();
@@ -874,13 +958,18 @@ public class CatalogWriteService {
         for (SkuEntity row : skuMapper.selectList(new LambdaQueryWrapper<SkuEntity>()
                 .select(SkuEntity::getId, SkuEntity::getSkuCode)
                 .in(SkuEntity::getSkuCode, codes))) {
-            ids.put(row.getSkuCode(), row.getId());
+            ids.put(foldCode(row.getSkuCode()), row.getId());
         }
         return ids;
     }
 
     /**
      * by-code upsert 的无事务内核。
+     *
+     * <p>★ {@code R86}：命中既有行时 {@code sku_code} 是<b>定位键、不可更新</b>
+     * （{@code IMPORT_WORKFLOW §7.2}，与 {@code product_id} 同级），传给更新内核的是
+     * {@code writableCode=false} —— <b>保留库内既有字面量</b>；判定仍按 {@code §8.6} 末行命中。
+     * create 分支保持原样。
      *
      * @param preloadedIds 整批预取的 {@code sku_code → id}；{@code null} 表示「未预取，逐行解析」
      */
@@ -900,7 +989,7 @@ public class CatalogWriteService {
         // ② 再解析既有 SKU：未命中 → 创建；命中 → 校验 product_id 不可变后更新
         Long existingId = preloadedIds == null
                 ? skuMapper.selectIdByCode(skuCode)
-                : preloadedIds.get(skuCode);
+                : preloadedIds.get(foldCode(skuCode));
         SkuView view;
         if (existingId == null) {
             view = insertSku(productId, normalized, false);
@@ -911,8 +1000,10 @@ public class CatalogWriteService {
                         List.of(new ApiErrorDetail("sku_code",
                                 "SKU 编码 " + skuCode + " 已存在且隶属于其它商品（product_id 不可变）", skuCode)));
             }
-            view = updateSku(existingId, normalized);
+            // R86：writableCode=false ⇒ 不 set sku_code 列，保留库内既有写法
+            view = updateSku(existingId, normalized, false);
             // R48：导入更新补审计（见 doUpsertWarehouseByCode 同处注释）
+            // ★ R86：bizNo 用 view.getSkuCode()（更新后重查＝库内既有字面量）
             recordMasterData(BIZ_TYPE_SKU, view.getId(), view.getSkuCode(), "导入更新 SKU");
         }
         if (needsStatusChange(normalized, view.getStatus())) {
@@ -945,6 +1036,25 @@ public class CatalogWriteService {
         }
         copy.put(idField, id);
         return copy;
+    }
+
+    /**
+     * 业务编码的<b>判定键</b>折叠（{@code trim + toUpperCase(Locale.ROOT)}，{@code R85}/{@code R86}）。
+     *
+     * <p>依据 {@code IMPORT_WORKFLOW §8.6} 末行：所有 {@code code} 字段一律<b>大小写不敏感等价</b>。
+     * 物理依据是唯一键 {@code (team_id, <code>)} 建在 {@code utf8mb4_0900_ai_ci} 上 ⇒
+     * 库内<b>物理上不可能</b>并存 {@code SKU-A} 与 {@code sku-a}，故把两者折叠成同一判定键
+     * 不会引入歧义。
+     *
+     * <p>★ 只用于<b>判定</b>（命中与否、预取表键），<b>绝不</b>用于<b>写入</b>：
+     * 落库一律写用户/文件给出的原样字面量（create 分支），命中既有行则原样保留库内写法
+     * （{@code R86}）—— 折叠是「怎么找到行」，不是「把行改成什么」。
+     *
+     * <p>用 {@link Locale#ROOT} 而非 {@link Locale#TOUPPERCASE}：后者在土耳其语等 locale 下
+     * 会把 {@code i} 折叠成 {@code İ}，破坏等价性（{@code String#toUpperCase()} 的无参版同此坑）。
+     */
+    private static String foldCode(String raw) {
+        return raw == null ? "" : raw.trim().toUpperCase(Locale.ROOT);
     }
 
     /** 必填文本字段（缺失/空白 → {@code 400 COM-0001} + details）。 */
