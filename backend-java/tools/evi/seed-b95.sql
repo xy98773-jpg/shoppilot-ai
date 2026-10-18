@@ -6,7 +6,11 @@
 -- 团队 8（别的团队）：仓库 9103=WH-OTHER；SKU 9102（属商品 9101）—— 保留作跨团队背景数据
 --
 -- 余额：SKU-A/B/C 各 10.000
--- 可冲销流水：seed-init-9002（SKU-A，INIT_IMPORT +10）、seed-init-9005（SKU-C，同）
+-- 可冲销流水：seed-init-9002（SKU-A，INIT_IMPORT +10）、seed-init-9003（SKU-B，同）、
+--            seed-init-9005（SKU-C，同）
+-- ★ 不变量（TEST_STRATEGY §7.3）：每条余额行都必须有等额 INIT_IMPORT 流水，
+--   即 on_hand_qty = SUM(qty_delta)。新增/改动余额行时【必须】同步补流水，否则按 §7.3
+--   硬验的批次会产生假 FAIL（R85 曾因此漏补 9003）。
 --
 -- ★ 组次与数据的分工（避免探针互相污染）：
 --   C1  R72 触发器阻断：调 SKU-A（10 → 7）→ 必须失败并回滚；解除阻断后同样动作成功
@@ -79,6 +83,11 @@ INSERT INTO inventory_transactions (team_id, warehouse_id, sku_id, txn_type, qty
                                     qty_before, qty_after, biz_type, idempotency_key, reason,
                                     operator_id, occurred_at, created_by) VALUES
   (7, 9004, 9002, 'INIT_IMPORT', 10.000, 0.000, 10.000, 'IMPORT', 'seed-init-9002',
+   '种子导入', 1001, NOW(3), 1001),
+  -- ★ R85：SKU-B(9003) 的余额行在上一条 INSERT 里存在，但本段原先【缺】它的 INIT_IMPORT 流水
+  --   ⇒ TEST_STRATEGY §7.3 的对账 SQL（余额 = Σ流水）在【种子阶段】就返回 1 行，
+  --   任何按 §7.3 硬验的批次都会产生假 FAIL。本次只补这一条，字段与既有两行完全同构。
+  (7, 9004, 9003, 'INIT_IMPORT', 10.000, 0.000, 10.000, 'IMPORT', 'seed-init-9003',
    '种子导入', 1001, NOW(3), 1001),
   (7, 9004, 9005, 'INIT_IMPORT', 10.000, 0.000, 10.000, 'IMPORT', 'seed-init-9005',
    '种子导入', 1001, NOW(3), 1001);

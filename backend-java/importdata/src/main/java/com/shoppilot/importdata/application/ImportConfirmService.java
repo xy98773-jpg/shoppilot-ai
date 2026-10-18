@@ -450,6 +450,11 @@ public class ImportConfirmService {
      * <p>预解析<b>不改变错误语义</b>：查不到的编码不会出现在 {@code Map} 里，
      * 由 {@link #parseDataRow} 按 {@code CAT-3001}/{@code CAT-3003} 逐行报错（行级失败）。
      * 文件里出现但库里没有的编码**不在这里抛**——否则会退化成整批失败，与裁定 C1 冲突。
+     *
+     * <p>★ {@code R85}：返回表经 {@link ImportRefs#of(Map, Map)} <b>折叠键大小写</b>。
+     * {@code getIdsByCodes} 的 {@code in("sku_code", …)} 受 {@code utf8mb4_0900_ai_ci} 约束
+     * <b>能</b>匹配 {@code sku-a}，但返回键是<b>库里存的写法</b>；不折叠则 {@link #parseDataRow}
+     * 用文件原始写法查表必然落空 ⇒ 小写编码被误判「引用的SKU不存在」。
      */
     private ImportRefs preloadRefs(ImportBizType bizType, Map<String, Integer> targetCol,
                                    List<List<String>> rows) {
@@ -468,7 +473,7 @@ public class ImportConfirmService {
                 warehouseCodes.add(whCode);
             }
         }
-        return new ImportRefs(skuQueryService.getIdsByCodes(skuCodes),
+        return ImportRefs.of(skuQueryService.getIdsByCodes(skuCodes),
                 warehouseQueryService.getIdsByCodes(warehouseCodes));
     }
 
@@ -643,13 +648,13 @@ public class ImportConfirmService {
                                  List<String> cells, ImportRefs refs, int rowNo) {
         String skuCode = cell(cells, columnOf(targetCol, "sku_code")).trim();
         String warehouseCode = cell(cells, columnOf(targetCol, "warehouse_code")).trim();
-        Long skuId = refs.skuIds().get(skuCode);
+        Long skuId = refs.skuIdOf(skuCode);
         if (skuId == null) {
             throw BizException.withDetails(ErrorCodes.CAT_3001, "引用的SKU不存在",
                     List.of(new ApiErrorDetail("sku_code",
                             "第 " + rowNo + " 行：SKU 编码（" + skuCode + "）不存在或不属于当前团队", skuCode)));
         }
-        Long warehouseId = refs.warehouseIds().get(warehouseCode);
+        Long warehouseId = refs.warehouseIdOf(warehouseCode);
         if (warehouseId == null) {
             throw BizException.withDetails(ErrorCodes.CAT_3003, "引用的仓库不存在",
                     List.of(new ApiErrorDetail("warehouse_code",
@@ -725,10 +730,37 @@ public class ImportConfirmService {
         }
     }
 
-    /** 引用预解析结果（空壳用于主数据类，避免 null 判断散落各处）。 */
+    /**
+     * 引用预解析结果（空壳用于主数据类，避免 null 判断散落各处）。
+     *
+     * <p>★ {@code R85}：两张表的键<b>在构造时就折叠成规范化形态</b>
+     * （{@code trim} + {@code toUpperCase(Locale.ROOT)}，与
+     * {@code ImportValidationService#normalizeKey} 同一把尺子）。
+     * {@code SkuQueryService#getIdsByCodes} 的 {@code in("sku_code", …)} 受
+     * {@code utf8mb4_0900_ai_ci} 约束<b>能</b>匹配 {@code sku-a}，但返回表的键是
+     * <b>库里存的写法</b>；不折叠就用文件里的原始写法 {@code get}，小写编码会全部
+     * 被误判成「引用的SKU不存在」（{@code CAT-3001}）。
+     * 口径依据：{@code IMPORT_WORKFLOW §8.6} 末行「编码大小写一律不敏感等价」
+     * （含「所有 {@code code} 字段的引用解析」）。
+     */
     private record ImportRefs(Map<String, Long> skuIds, Map<String, Long> warehouseIds) {
 
         private static final ImportRefs EMPTY = new ImportRefs(Map.of(), Map.of());
+
+        /** 折叠 catalog 返回表的键（静态工厂，供 {@code preloadRefs} 唯一入口调用）。 */
+        private static ImportRefs of(Map<String, Long> rawSkuIds, Map<String, Long> rawWarehouseIds) {
+            return new ImportRefs(ImportCodeKeys.fold(rawSkuIds), ImportCodeKeys.fold(rawWarehouseIds));
+        }
+
+        /** 按文件里的原始写法查 SKU id（内部折叠为规范化键）。 */
+        private Long skuIdOf(String rawCode) {
+            return skuIds.get(ImportCodeKeys.normalize(rawCode));
+        }
+
+        /** 按文件里的原始写法查仓库 id（内部折叠为规范化键）。 */
+        private Long warehouseIdOf(String rawCode) {
+            return warehouseIds.get(ImportCodeKeys.normalize(rawCode));
+        }
     }
 
     /**

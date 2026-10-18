@@ -103,6 +103,28 @@ import org.springframework.transaction.annotation.Transactional;
  * 的口径在<b>校验阶段</b>前置拦截：同一 {@code (warehouse_code, sku_code)} 的<b>后行</b>记
  * {@code ERROR COM-0001}，不聚合、不自动相加、不降级成 {@code WARNING}
  * （见 {@link #duplicateSnapshotKey}）。
+ *
+ * <h2>★ R85 已实现（M3-B10.8）：编码大小写一律不敏感等价</h2>
+ * {@code IMPORT_WORKFLOW §8.6} 末行裁定：「编码大小写一律不敏感等价」。依据是
+ * {@code skus.sku_code} / {@code warehouses.code} / {@code suppliers.code} 的唯一键
+ * {@code (team_id, <code>)} 受 {@code utf8mb4_0900_ai_ci} 约束 ⇒ <b>物理上不可能</b>共存
+ * {@code SKU-A} 与 {@code sku-a} 两条记录。若判定键用大小写敏感的 Java 字符串比较，就会与
+ * 「引用解析已大小写不敏感」这一既成事实分叉：同批两行 {@code SKU-A} / {@code sku-a}
+ * 校验期判不出重复，随后在 confirm 阶段被写服务的幂等键判成「同内容重放」而<b>静默只落一行</b>。
+ *
+ * <p>本类内共<b>四处</b>编码比较口径，全部改用 {@link #normalizeKey(String)}
+ * （{@code trim} 之后再 {@code toUpperCase(Locale.ROOT)}，<b>唯一实现</b>，不复制粘贴）：
+ * <ol>
+ *   <li>{@link #duplicateSnapshotKey}：{@code INVENTORY_SNAPSHOT} 的 {@code (wh, sku)} → {@code COM-0001}；</li>
+ *   <li>{@code SALES_DAILY} 的内联三元组 {@code (wh, sku, date)} → {@code SAL-6004}
+ *       （原实现对这三项<b>连 trim 都没做</b>，本次一并补上，{@code §8.6} 口径含 trim）；</li>
+ *   <li>{@link #duplicateCode}：四类主数据的 {@code code} → {@code CAT-3002}；</li>
+ *   <li>{@link #teamOf} 的缓存键与 {@link #applyOverwriteWarnings} 里
+ *       {@code skuIds.get(...)} / {@code warehouseIds.get(...)} 的<b>命中判定</b>
+ *       —— 任务书未列，但属同条款「所有 {@code code} 字段的引用解析」，见该方法 javadoc。</li>
+ * </ol>
+ * ❌ 禁止各业务类型各自决定大小写语义（那就又分叉了）；❌ 禁止改成「库内原样区分大小写」
+ * （需改排序规则为 {@code utf8mb4_bin}，口径已定不敏感）。
  */
 @Service
 public class ImportValidationService {
@@ -268,7 +290,8 @@ public class ImportValidationService {
                 String sk = valueOf(targetCol, cells, "sku_code");
                 String dt = valueOf(targetCol, cells, "sale_date");
                 if (!wh.isBlank() && !sk.isBlank() && !dt.isBlank()) {
-                    String key = wh + "|" + sk + "|" + dt;
+                    // ★ R85：三项统一 trim + 大写折叠（与 §8.6 口径一致；原实现连 trim 都没做）
+                    String key = normalizeKey(wh) + "|" + normalizeKey(sk) + "|" + normalizeKey(dt);
                     if (!salesDailyKeys.add(key)) {
                         issues.add(new Issue("ERROR", ErrorCodes.SAL_6004, "warehouse_code",
                                 "同一仓库、同一 SKU、同一销售日期出现重复记录"));
@@ -383,9 +406,17 @@ public class ImportValidationService {
      *       「行 × 级别」独立留痕，合并会把两种信息压成一种。计数口径不受影响：
      *       {@code warning_rows} 本来就是「有 {@code WARNING} <b>且无</b> {@code ERROR} 的行」，
      *       有 {@code ERROR} 的行只计 {@code error_rows}；</li>
-     *   <li>引用解析不到（{@code sku_code}/{@code warehouse_code} 查不到 id）的行跳过：无从判定
+*   <li>引用解析不到（{@code sku_code}/{@code warehouse_code} 查不到 id）的行跳过：无从判定
      *       目标行是否存在，且该行已有 {@code CAT-3001}/{@code CAT-3003} 的 {@code ERROR}。</li>
      * </ul>
+     *
+     * <h2>★ R85：命中查表必须折叠大小写</h2>
+     * {@code SkuQueryService#getIdsByCodes} 的 {@code in("sku_code", …)} 受 {@code utf8mb4_0900_ai_ci}
+     * 约束<b>能</b>匹配 {@code sku-a}，但它返回的 Map 键是<b>库里的原样写法</b>
+     * （{@code ids.put(row.getSkuCode(), …)}）。若直接用文件里的原始大小写去 {@code get}，
+     * {@code "sku-a"} 就查不到 ⇒ 该行被当作「引用不存在」跳过 ⇒ <b>漏报</b> {@code IMP-4006}。
+     * 故本方法用 {@link #foldKeys(Map)} 把返回表折叠成规范化键后再查，
+     * 与 {@link #duplicateSnapshotKey} 用的是同一把尺子（{@link #normalizeKey(String)}）。
      *
      * <h2>性能</h2>
      * 编码解析 2 条批量查询 + 命中判定 1~N 条（按 1000 分片）——<b>与行数无关的常数级查询次数</b>，
@@ -414,9 +445,9 @@ public class ImportValidationService {
         if (skuCodes.isEmpty() || warehouseCodes.isEmpty()) {
             return;
         }
-        Map<String, Long> skuIds = skuQueryService.getIdsByCodes(skuCodes);
-        Map<String, Long> warehouseIds = warehouseQueryService.getIdsByCodes(warehouseCodes);
-        if (skuIds.isEmpty() || warehouseIds.isEmpty()) {
+        Map<String, Long> skuIdsByKey = foldKeys(skuQueryService.getIdsByCodes(skuCodes));
+        Map<String, Long> warehouseIdsByKey = foldKeys(warehouseQueryService.getIdsByCodes(warehouseCodes));
+        if (skuIdsByKey.isEmpty() || warehouseIdsByKey.isEmpty()) {
             return;
         }
 
@@ -424,8 +455,8 @@ public class ImportValidationService {
             Map<Integer, BalanceKey> keyByRow = new LinkedHashMap<>();
             for (int r = 0; r < rows.size(); r++) {
                 List<String> cells = rows.get(r);
-                Long skuId = skuIds.get(valueOf(targetCol, cells, "sku_code").trim());
-                Long whId = warehouseIds.get(valueOf(targetCol, cells, "warehouse_code").trim());
+                Long skuId = skuIdsByKey.get(normalizeKey(valueOf(targetCol, cells, "sku_code")));
+                Long whId = warehouseIdsByKey.get(normalizeKey(valueOf(targetCol, cells, "warehouse_code")));
                 if (skuId == null || whId == null) {
                     continue; // 引用不存在的行已有 CAT-3001/CAT-3003 的 ERROR，无从判定目标行
                 }
@@ -447,8 +478,8 @@ public class ImportValidationService {
         Map<Integer, SalesDayKey> keyByRow = new LinkedHashMap<>();
         for (int r = 0; r < rows.size(); r++) {
             List<String> cells = rows.get(r);
-            Long skuId = skuIds.get(valueOf(targetCol, cells, "sku_code").trim());
-            Long whId = warehouseIds.get(valueOf(targetCol, cells, "warehouse_code").trim());
+            Long skuId = skuIdsByKey.get(normalizeKey(valueOf(targetCol, cells, "sku_code")));
+            Long whId = warehouseIdsByKey.get(normalizeKey(valueOf(targetCol, cells, "warehouse_code")));
             if (skuId == null || whId == null) {
                 continue; // 同上：引用不存在的行由 CAT-3001/CAT-3003 负责
             }
@@ -675,16 +706,19 @@ public class ImportValidationService {
     /**
      * 同一业务键在文件内<b>第二次及以后</b>出现 → 该行记 {@code ERROR CAT-3002}
      * （{@code §8.6}「文件内重复」语义：后行 ERROR，要求用户先自行去重）。
+     *
+     * <p>★ {@code R85}：比较前统一 {@link #normalizeKey(String)}（{@code trim} + 大写折叠）。
+     * 错误文案里回显<b>用户原样写法</b>（不折叠），便于用户在自己的文件里定位到那一行。
      */
     private void duplicateCode(Map<String, Integer> targetCol, List<String> cells,
                                String codeColumn, String label, Set<String> seen, List<Issue> issues) {
-        String code = valueOf(targetCol, cells, codeColumn);
-        if (code.isBlank()) {
+        String raw = valueOf(targetCol, cells, codeColumn);
+        if (raw.isBlank()) {
             return;
         }
-        if (!seen.add(code)) {
+        if (!seen.add(normalizeKey(raw))) {
             issues.add(new Issue("ERROR", ErrorCodes.CAT_3002, codeColumn,
-                    label + " " + code + " 在当前文件内重复"));
+                    label + " " + raw.trim() + " 在当前文件内重复"));
         }
     }
 
@@ -705,8 +739,10 @@ public class ImportValidationService {
      * （{@code IMPORT_WORKFLOW §8.6}/{@code §10.2}，{@code R83} 裁定）。
      *
      * <h2>业务键与标准化</h2>
-     * 键 = {@code (warehouse_code, sku_code)}，比较前 {@code trim()}（与字段级校验的空值语义一致），
-     * <b>不做大小写折叠</b>（{@code §8.6} 口径：编码大小写属业务约定，折叠会掩盖真实差异）。
+     * 键 = {@code (warehouse_code, sku_code)}，比较前统一 {@link #normalizeKey(String)}
+     * （{@code trim()} 后再 {@code toUpperCase(Locale.ROOT)}，{@code R85} 裁定：
+     * 唯一键 {@code (team_id, sku_code)} 受 {@code utf8mb4_0900_ai_ci} 约束 ⇒ 库内不可能
+     * 并存 {@code SKU-A} 与 {@code sku-a}，故判定必须与引用解析的大小写语义一致）。
      * 任一字段为空 ⇒ <b>不参与判定</b>：该行已由必填校验给出 {@code COM-0001}，
      * 同一行不重复报错（{@code R83} 要求 4）。
      *
@@ -715,12 +751,12 @@ public class ImportValidationService {
      */
     private void duplicateSnapshotKey(Map<String, Integer> targetCol, List<String> cells,
                                       Set<String> seen, List<Issue> issues) {
-        String warehouseCode = valueOf(targetCol, cells, "warehouse_code").trim();
-        String skuCode = valueOf(targetCol, cells, "sku_code").trim();
-        if (warehouseCode.isEmpty() || skuCode.isEmpty()) {
+        String warehouseCode = valueOf(targetCol, cells, "warehouse_code");
+        String skuCode = valueOf(targetCol, cells, "sku_code");
+        if (warehouseCode.isBlank() || skuCode.isBlank()) {
             return;
         }
-        if (!seen.add(warehouseCode + "|" + skuCode)) {
+        if (!seen.add(normalizeKey(warehouseCode) + "|" + normalizeKey(skuCode))) {
             issues.add(new Issue("ERROR", ErrorCodes.COM_0001, "sku_code",
                     "同一仓库、同一 SKU 在文件内重复"));
         }
@@ -729,6 +765,28 @@ public class ImportValidationService {
     // =====================================================================
     // 工具
     // =====================================================================
+
+    /**
+     * 编码标准化的<b>唯一实现</b>在 {@link ImportCodeKeys}（包级工具类，{@code R85}）。
+     * 本类内所有判定键与查表都走它；此处仅保留薄封装以保持调用处可读性。
+     *
+     * @param raw 原始单元格值（可含空白）
+     * @return 标准化后的比较键（{@code null} 视为空串）
+     * @see ImportCodeKeys#normalize(String)
+     */
+    private static String normalizeKey(String raw) {
+        return ImportCodeKeys.normalize(raw);
+    }
+
+    /**
+     * 折叠 catalog 返回表的键（委托给 {@link ImportCodeKeys#fold(Map)}）。
+     *
+     * @param raw catalog 侧返回的表（键为库中原样编码）
+     * @return 折叠后的表（键为规范化编码）
+     */
+    private static Map<String, Long> foldKeys(Map<String, Long> raw) {
+        return ImportCodeKeys.fold(raw);
+    }
 
     private String valueOf(Map<String, Integer> targetCol, List<String> cells, String target) {
         Integer idx = targetCol.get(target);
@@ -746,12 +804,16 @@ public class ImportValidationService {
     private Long teamOf(ImportFieldSpec.ImportReference ref, String code,
                         Map<ImportFieldSpec.ImportReference, Map<String, Long>> cache) {
         Map<String, Long> m = cache.computeIfAbsent(ref, k -> new HashMap<>());
-        Long cached = m.get(code);
-        if (cached != null || m.containsKey(code)) {
+        // ★ R85：缓存键用 normalizeKey，使 `SKU-A` 与 `sku-a` 命中同一条缓存。
+        // 这与 resolveRefTeam 底层 SQL 的 ci 比较语义一致（同一编码只查一次库），
+        // 也保证「存在性/同团队」判定与文件内重复判定看到的是同一把尺子。
+        String key = normalizeKey(code);
+        Long cached = m.get(key);
+        if (cached != null || m.containsKey(key)) {
             return cached;
         }
         Long team = resolveRefTeam(ref, code);
-        m.put(code, team);
+        m.put(key, team);
         return team;
     }
 
