@@ -1,0 +1,61 @@
+APP_PID=353 port=18260
+HEALTH OK after 3s
+=== 种子 ===
+mysql: [Warning] Using a password on the command line interface can be insecure.
+SEED OK
+=== 探针 ===
+TOKEN op=eyJhbGci op8=eyJhbGci
+RESET import_batches=0 audit=0
+---------------------------------------------------------------
+P1 IMP-4011：终态批 storage_path 不可用 → 410，且零副作用
+P1-基线批 A=13 status=COMPLETED storage=D:\\Desktop\\ShopPilot-AI\\.workbuddy-ai\\rb-b11\\storage\\7\\202610\\IMP-20261018-000001_rb-csv-1.csv
+P1a 原始响应 status=410 body={"code":"IMP-4011","message":"原始文件已不可用，请重新上传","data":null,"requestId":"req_125222eab096353beb4370ad54b4ac67","timestamp":"2026-10-18T08:08:39.938Z"}
+PASS P1a-空路径-410 => 410
+PASS P1a-错误码 => IMP-4011
+PASS P1a-不产生新批次 => 1
+PASS P1a-无重导审计 => 0
+PASS P1a-原批未被取代 => NULL
+PASS P1a-槽位未被释放 => cc7d03eec83f67923e9b1f1f62905393ac0ee0553e19250145a5c91e0c1f5f9f
+P1b 原始响应 status=410 body={"code":"IMP-4011","message":"原始文件已不可用，请重新上传","data":null,"requestId":"req_0d1eadbb5b851a0805c50988e0f26dcf","timestamp":"2026-10-18T08:08:47.067Z"}
+PASS P1b-路径不存在-410 => 410
+PASS P1b-错误码 => IMP-4011
+PASS P1b-路径已还原 => D:\\Desktop\\ShopPilot-AI\\.workbuddy-ai\\rb-b11\\storage\\7\\202610\\IMP-20261018-000001_rb-csv-1.csv
+---------------------------------------------------------------
+P2 校验优先级：非终态 + 文件不可读 → 必须 422 IMP-4005（状态先于文件）
+P2-基线批 B=14 status=UPLOADED
+P2 原始响应 status=422 body={"code":"IMP-4005","message":"当前批次状态不允许强制重导","data":null,"details":[{"field":"status","message":"仅终态批次可强制重导（COMPLETED / PARTIAL_SUCCESS / FAILED / CANCELLED / DUPLICATE_REJECTED），当前状态 UPLOADED","rejectedValue":"UPLOADED"}],"requestId":"req_9316cfd57f734bd0cde1e0691fdc0904","timestamp":"2026-10-18T08:08:54.685Z"}
+PASS P2-非终态先判-422 => 422
+PASS P2-错误码是4005而非4011 => IMP-4005
+---------------------------------------------------------------
+P3 DUPLICATE_REJECTED（终态且可重导）→ 201，attempt_no 递推
+P3 重复上传原始响应 status=409 body={"code":"IMP-4004","message":"该文件已导入过，如需重新导入请使用强制重导","data":{"existing_batch_id":13,"existing_batch_no":"IMP-20261018-000001"},"requestId":"req_86caf53118508e587efec1268789c601","timestamp":"2026-10-18T08:08:56.664Z"}
+PASS P3-重复上传409 => 409
+PASS P3-留痕批次状态 => DUPLICATE_REJECTED
+PASS P3-留痕批不占槽位 => NULL
+P3-留痕批 D=15 attempt_no=2
+P3 重导原始响应 status=409 body={"code":"IMP-4004","message":"该文件已有占用中的导入批次，请刷新后查看","data":null,"requestId":"req_f5259220ebfcb871e264561306cfe00d","timestamp":"2026-10-18T08:09:02.109Z"}
+FAIL P3-重导201 => 期望[201] 实际[409]
+FAIL P3-新批attempt递推 => 期望[3] 实际[]
+FAIL P3-新批UPLOADED => 期望[UPLOADED] 实际[]
+FAIL P3-新批占槽位 => 期望[cc7d03eec83f67923e9b1f1f62905393ac0ee0553e19250145a5c91e0c1f5f9f] 实际[]
+FAIL P3-原留痕批被取代 => 期望[] 实际[NULL]
+---------------------------------------------------------------
+P4 槽位转移：新文件重导后同文件再 upload → 409 IMP-4004 且 data.existing_batch_id=重导新批
+P4-基线批 X=17 status=COMPLETED
+P4 重导原始响应 status=201 body={"code":"OK","message":"success","data":{"batch_id":18,"batch_no":"IMP-20261018-000005","biz_type":"SKU","file_name":"rb-csv-3.csv","file_hash":"3a4d4c94b6053aa46295bdbb34f742b8d3f502bec1fe4ad98d9b388609b96425","file_size":42,"status":"UPLOADED","created_at":"2026-10-18T08:09:12.416Z"},"requestId":"req_a2618a62986f91eda76d951930a4fc4c","timestamp":"2026-10-18T08:09:12.460Z"}
+PASS P4-重导201 => 201
+PASS P4-新批占槽位 => 3a4d4c94b6053aa46295bdbb34f742b8d3f502bec1fe4ad98d9b388609b96425
+PASS P4-原批槽位释放 => NULL
+PASS P4-原批被取代 => 18
+P4 重复上传原始响应 status=409 body={"code":"IMP-4004","message":"该文件已导入过，如需重新导入请使用强制重导","data":{"existing_batch_id":18,"existing_batch_no":"IMP-20261018-000005"},"requestId":"req_7cd4a0b30eaa86002fbdfc82c83fb4dd","timestamp":"2026-10-18T08:09:17.828Z"}
+PASS P4-同文件再传409 => 409
+PASS P4-回带批次=重导新批 => 18
+---------------------------------------------------------------
+P5 跨团队 reimport → 404 IMP-4007（不得 403/4004）
+P5 原始响应 status=404 body={"code":"IMP-4007","message":"导入批次不存在","data":null,"requestId":"req_a7a90c8bafa658578df2830ac4fd734a","timestamp":"2026-10-18T08:09:19.212Z"}
+PASS P5-跨团队404 => 404
+PASS P5-错误码 => IMP-4007
+---------------------------------------------------------------
+RB_B11_CHECK_TOTAL=27  RB_B11_FAIL_COUNT=5
+RB_B11_RESULT=HAS FAIL
+PROBE_RC=5
