@@ -1,0 +1,66 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=57e11a73e60fc9ecfb3f7015e978a258c071c5ce8909ca3139222f1164cd0552
+DATE=2026-10-18T09:41:42Z
+PORTS mysql=3365 java=18290 python=18090
+PYTHON_BIN=C:/Users/Shu/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe (Python 3.13.14)
+TOKEN=rb-b13-token（写进日志是测试专用值，非生产密钥）
+MYSQL_READY=1 (独立容器 rb-b13-mysql)
+JAVA_PID=1799 port=18290
+JAVA_UP=1
+PYTHON_UP=1 (pid=1813, token=rb-b13-token)
+-----------------------------------------------------------------
+P1 GET /internal/v1/health（不带 token）→ 200 status=UP
+  raw: http=200 body={"status":"UP"}
+PASS P1-health-200 => 200
+PASS P1-status-UP => UP
+-----------------------------------------------------------------
+P2 POST /internal/v1/analysis:validate（不带 token）→ 401 AI-0001
+  raw: http=401 body={"code":"AI-0001","message":"Invalid or missing X-Internal-Token","detail":{},"request_id":"eacf4a7c-9210-4969-a1dd-f6c2ef172037"}
+PASS P2-no-token-401 => 401
+PASS P2-code-AI-0001 => AI-0001
+-----------------------------------------------------------------
+P3 同上（带错 token）→ 401 AI-0001
+  raw: http=401 body={"code":"AI-0001","message":"Invalid or missing X-Internal-Token","detail":{},"request_id":"67ee319d-43a6-404e-b9ab-6c4dd7d11642"}
+PASS P3-wrong-token-401 => 401
+PASS P3-code-AI-0001 => AI-0001
+-----------------------------------------------------------------
+P5 401 必带 X-Request-Id，且 body.request_id 与响应头逐字相等
+  raw: P2.header=[eacf4a7c-9210-4969-a1dd-f6c2ef172037] P2.body.request_id=[eacf4a7c-9210-4969-a1dd-f6c2ef172037]
+PASS P5-401有X-Request-Id => 非空[eacf4a7c-9210-4969-a1dd-f6c2ef172037]
+PASS P5-body.request_id==响应头 => eacf4a7c-9210-4969-a1dd-f6c2ef172037
+PASS P5-四键齐全 => code,detail,message,request_id
+-----------------------------------------------------------------
+P6 显式 X-Request-Id: req_b13_probe_0001 → 响应头原样回显
+  raw: http=401 header=[req_b13_probe_0001] body.request_id=[req_b13_probe_0001]
+PASS P6-响应头回显 => req_b13_probe_0001
+PASS P6-body回显 => req_b13_probe_0001
+-----------------------------------------------------------------
+P4 同上（带对 token）→ 非 401（记录真实状态码）
+  raw: http=404 body={"detail":"Not Found"}
+PASS P4-对token未被鉴权拦下 => 404（≠401）
+  note: 本批无业务端点，404 属预期（404/405）
+-----------------------------------------------------------------
+P8 Java GET /api/v1/health 带 req_b13_probe_0002 → 响应头回显 + body.requestId 一致
+  raw: http=200 header=[req_b13_probe_0002] body={"code":"OK","message":"success","data":{"status":"UP","service":"shoppilot-ai","version":"0.1.0"},"requestId":"req_b13_probe_0002","timestamp":"2026-10-18T09:42:32.718Z"}
+PASS P8-java-200 => 200
+PASS P8-java头回显 => req_b13_probe_0002
+PASS P8-java体requestId一致 => req_b13_probe_0002
+-----------------------------------------------------------------
+P9（加分）非法 JSON + 对 token → 期望 400 AI-1001
+  raw: http=404 body={"detail":"Not Found"}
+  verdict: N/A —— 本批不实现 /internal/v1/analysis* 业务端点（G3），无路由可触发 body 校验；
+           该路径已由 pytest tests/test_error_envelope.py::test_validation_error_returns_400_ai_1001 覆盖。
+-----------------------------------------------------------------
+P7 重启 Python 且清空 AI_INTERNAL_TOKEN → P2 仍 401、P1 仍 200（fail-closed）
+PYTHON_RESTART_UP=1 (pid=1967, token=<empty>)
+  raw: http=401 body={"code":"AI-0001","message":"Invalid or missing X-Internal-Token","detail":{},"request_id":"7e1430f6-b055-4944-86d7-f1411865fd0f"}
+PASS P7-未配置token仍401 => 401
+PASS P7-未配置token仍AI-0001 => AI-0001
+  raw: http=200 body={"status":"UP"}
+PASS P7-health仍200 => 200
+PASS P7-health仍UP => UP
+-----------------------------------------------------------------
+RB13_CHECK_TOTAL=19
+RB13_FAIL_COUNT=0
+RB13_RESULT=ALL PASS
+--- cleanup ---
