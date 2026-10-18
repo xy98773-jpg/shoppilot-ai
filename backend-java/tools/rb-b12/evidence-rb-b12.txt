@@ -1,0 +1,53 @@
+APP_PID=285 port=18280
+HEALTH OK after 3s
+=== 种子 ===
+mysql: [Warning] Using a password on the command line interface can be insecure.
+SEED OK
+=== 探针 ===
+TOKEN ok | RESET batches=0
+---------------------------------------------------------------
+前置：造 A(COMPLETED) 与 D(DUPLICATE_REJECTED)
+PASS 前置-A终态 => COMPLETED
+PASS 前置-A占槽位 => b5f9ca6d51a611af18d00f898683bda4afc778f3cc1ee213be40f5eda82743e5
+前置-重复上传 status=409 body={"code":"IMP-4004","message":"该文件已导入过，如需重新导入请使用强制重导","data":{"existing_batch_id":6,"existing_batch_no":"IMP-20261018-000001"},"requestId":"req_d55d3b70a95d089a74766d29cb3fd931","timestamp":"2026-10-18T08:54:21.698Z"}
+PASS 前置-重复上传409 => 409
+PASS 前置-D状态 => DUPLICATE_REJECTED
+PASS 前置-D不占槽位 => NULL
+---------------------------------------------------------------
+P2 跨团队对 D 重导 → 404 IMP-4007（团队过滤先于状态判断）
+P2 原始响应 status=404 body={"code":"IMP-4007","message":"导入批次不存在","data":null,"requestId":"req_287b63c0a54137576def17e0639dacc3","timestamp":"2026-10-18T08:54:25.385Z"}
+PASS P2-跨团队404 => 404
+PASS P2-错误码4007 => IMP-4007
+---------------------------------------------------------------
+P3 D + storage_path=NULL → 必须 422 IMP-4005（状态先于文件，不得 410）
+P3 原始响应 status=422 body={"code":"IMP-4005","message":"当前批次状态不允许强制重导","data":null,"details":[{"field":"status","message":"仅终态批次可强制重导（COMPLETED / PARTIAL_SUCCESS / FAILED / CANCELLED）","rejectedValue":"DUPLICATE_REJECTED"}],"requestId":"req_69ca3cc97b760c1f04e5ecdeb8b4bd04","timestamp":"2026-10-18T08:54:28.947Z"}
+PASS P3-状态先判422 => 422
+PASS P3-是4005不是4011 => IMP-4005
+---------------------------------------------------------------
+P4 details 键集稳定 + message 不含 D
+P4 原始响应 body={"code":"IMP-4005","message":"当前批次状态不允许强制重导","data":null,"details":[{"field":"status","message":"仅终态批次可强制重导（COMPLETED / PARTIAL_SUCCESS / FAILED / CANCELLED）","rejectedValue":"DUPLICATE_REJECTED"}],"requestId":"req_77eb91584246d2c6e8fbad7e0b7a4d5d","timestamp":"2026-10-18T08:54:31.299Z"}
+PASS P4-details.field=status => status
+PASS P4-rejectedValue=D => DUPLICATE_REJECTED
+PASS P4-message不含D => 0
+PASS P4-无新增value键 => 0
+PASS P4-message含四个合法状态 => 4
+---------------------------------------------------------------
+P5 正确入口：A(COMPLETED) 重导 → 201；随后 D 仍 4005
+P5 原始响应 status=201 body={"code":"OK","message":"success","data":{"batch_id":8,"batch_no":"IMP-20261018-000003","biz_type":"SKU","file_name":"rb12-sku.csv","file_hash":"b5f9ca6d51a611af18d00f898683bda4afc778f3cc1ee213be40f5eda82743e5","file_size":41,"status":"UPLOADED","created_at":"2026-10-18T08:54:35.808Z"},"requestId":"req_9513ddd40708d436fe06f5373dd019ad","timestamp":"2026-10-18T08:54:35.869Z"}
+PASS P5-A重导201 => 201
+PASS P5-新批attempt递推 => 2
+PASS P5-新批占槽位 => b5f9ca6d51a611af18d00f898683bda4afc778f3cc1ee213be40f5eda82743e5
+PASS P5-A槽位释放 => NULL
+PASS P5-D仍4005 => IMP-4005
+---------------------------------------------------------------
+P1 PARTIAL_SUCCESS 批重导 → 201（收窄状态集不得误伤 PS）
+PASS P1-校验通过 => VALIDATED
+P1 confirm status=200 body={"code":"OK","message":"success","data":{"batch_id":9,"status":"PARTIAL_SUCCESS","total_rows":2,"success_rows":1,"failed_rows":1,"started_at":"2026-10-18T08:54:45.109Z","finished_at":"2026-10-18T08:54:45.224Z"},"requestId":"req_049e353330749a0bb39d6a8a467178ad","timestamp":"2026-10-18T08:54:45.256Z"}
+PASS P1-PARTIAL_SUCCESS => PARTIAL_SUCCESS
+P1 重导原始响应 status=201 body={"code":"OK","message":"success","data":{"batch_id":10,"batch_no":"IMP-20261018-000005","biz_type":"SALES_DAILY","file_name":"rb12-sales.csv","file_hash":"6a4005ca21c95a8719bab8a69c696e7df6e0eaa0a6789511eb442c5d122229ce","file_size":100,"status":"UPLOADED","created_at":"2026-10-18T08:54:47.549Z"},"requestId":"req_9838409af2b3b68ef1f5d516fe2d9dd0","timestamp":"2026-10-18T08:54:47.575Z"}
+PASS P1-PS重导201 => 201
+PASS P1-PS新批attempt递推 => 2
+---------------------------------------------------------------
+RB_B12_CHECK_TOTAL=23  RB_B12_FAIL_COUNT=0
+RB_B12_RESULT=ALL PASS
+PROBE_RC=0
