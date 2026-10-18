@@ -70,7 +70,8 @@ public class ImportUploadService {
     private static final Set<String> ALLOWED_EXTENSIONS = Set.of("csv", "xlsx", "xls");
 
     /**
-     * 可强制重导的批次状态（<b>终态</b>）。
+     * 可强制重导的批次状态（<b>终态</b>）：{@code COMPLETED} / {@code PARTIAL_SUCCESS} /
+     * {@code FAILED} / {@code CANCELLED}。
      *
      * <p>反向定义更安全：{@code UPLOADED}/{@code PARSED}/{@code MAPPED}/{@code VALIDATED}/
      * {@code IMPORTING} 五个<b>非终态</b>一律拒（{@code IMP-4005}）——批次还在流程中时重导，
@@ -78,11 +79,21 @@ public class ImportUploadService {
      *
      * <p>{@code CANCELLED} 一并允许：它已释放槽位（{@code §6-E.4}），重导等价于「重新开始」，
      * 与 {@code FAILED} 同构。
+     *
+     * <p><b>★ 为什么<b>不</b>含 {@code DUPLICATE_REJECTED}（{@code R87} / {@code B12}）</b>：
+     * 该状态批次的 {@code dedupe_hash} <b>恒为 {@code NULL}</b>（{@code §6-E.4}：置空才能绕过唯一键），
+     * 于是三步重导的第 ② 步「释放旧槽位」释放的是<b>它自己</b>（空转），
+     * 第 ③ 步占 {@code file_hash} 槽位时<b>原成功批次仍占着该槽位</b> ⇒ {@code DuplicateKeyException}
+     * ⇒ {@code 409 IMP-4004}「该文件已有占用中的导入批次，请刷新后查看」——<b>刷新无效，用户无出路</b>。
+     * 该状态的重导入口是重复上传时 {@code 409} 回带的 {@code existing_batch_id}
+     * （{@code DESIGN_BASIS §9.5:389}：「用户在<b>既有批次</b>上调用 {@code reimport}」）；
+     * 对 D 自身重导一律 {@code 422 IMP-4005}，语义比「请刷新」准确。
+     *
+     * <p>★ 这是<b>状态集口径</b>问题，不是槽位算法问题：{@link #doReimport} 的三步顺序与语义不变。
      */
     private static final Set<ImportBatchStatus> REIMPORTABLE_STATUSES = Set.of(
             ImportBatchStatus.COMPLETED, ImportBatchStatus.PARTIAL_SUCCESS,
-            ImportBatchStatus.FAILED, ImportBatchStatus.CANCELLED,
-            ImportBatchStatus.DUPLICATE_REJECTED);
+            ImportBatchStatus.FAILED, ImportBatchStatus.CANCELLED);
 
     /** 契约原文的 IMP-4001 提示语。 */
     private static final String IMP_4001_MESSAGE = "仅支持 CSV 或 Excel 文件，且不超过 20MB";
@@ -206,6 +217,10 @@ public class ImportUploadService {
      *   <li>批次不存在 / 跨团队 → {@code 404 IMP-4007}（<b>不</b>用 {@code IMP-4004}：
      *       那是「文件重复」，会误导用户去改文件）；</li>
      *   <li>原批未终结（{@code UPLOADED}–{@code IMPORTING}）→ {@code 422 IMP-4005}；</li>
+     *   <li><b>{@code DUPLICATE_REJECTED} 批次自身重导 → {@code 422 IMP-4005}</b>
+     *       （{@code R87}）：它恒不占槽位，重导会撞原成功批次的槽位而得到「请刷新」的死路；
+     *       正确入口是 {@code 409} 回带的 {@code existing_batch_id}，见
+     *       {@link #REIMPORTABLE_STATUSES} 的说明；</li>
      *   <li>原批已被取代（{@code superseded_by_batch_id} 非空）→ {@code 422 IMP-4005}，避免链条分叉；</li>
      *   <li>原始文件丢失/不可读 → {@code 410 IMP-4011}；</li>
      *   <li>并发重导同一原批（守卫更新影响 0 行）或新槽位被占（唯一键冲突）→ {@code 409 IMP-4004}。
@@ -240,10 +255,11 @@ public class ImportUploadService {
 
         ImportBatchStatus status = parseStatus(origin.getStatus());
         if (status == null || !REIMPORTABLE_STATUSES.contains(status)) {
+            // 提示语只列【合法状态集】，当前状态放在 details[].value（机读）——
+            // 这样 message 里不会出现「DUPLICATE_REJECTED」这类非法状态名，避免误导用户去重试。
             throw BizException.withDetails(ErrorCodes.IMP_4005, "当前批次状态不允许强制重导",
                     List.of(new ApiErrorDetail("status",
-                            "仅终态批次可强制重导（COMPLETED / PARTIAL_SUCCESS / FAILED / CANCELLED / "
-                                    + "DUPLICATE_REJECTED），当前状态 " + origin.getStatus(),
+                            "仅终态批次可强制重导（COMPLETED / PARTIAL_SUCCESS / FAILED / CANCELLED）",
                             origin.getStatus())));
         }
         if (origin.getSupersededByBatchId() != null) {
