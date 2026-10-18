@@ -1,0 +1,189 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=b0f347061796ce127b08b508c85d0148c367be333e7777244ff81f7b2027f044
+DATE=2026-10-18T06:07:54Z
+PORTS mysql=3360 app=18240（任务书指定 3360 / 18240）
+IMPORT_STORAGE_DIR=/d/Desktop/ShopPilot-AI/backend-java/tools/b10.9/.import-storage（显式设置，避免落进仓库工作区）
+MYSQL_READY=1 (port 3360, 独立容器 b109-mysql)
+APP_PID=1168 (port 18240, stdout -> evidence-b109-app.log)
+APP_UP=1
+SEED_OK (seed-b95.sql：团队7 仓库9004=WH-MAIN；SKU 9002=SKU-A / 9003=SKU-B / 9005=SKU-C 各10.000；商品9001=P-BAG-001；团队8)
+SEED_SUPPLIER_OK (9003 = SUP-X)
+TOKEN op=eyJhbGci
+---------------------------------------------------------------
+G1 R86-a：库里 SKU-A(9002)，导入单行 sku-a → COMPLETED；①库内 code ②GET 对外返回 均仍为 SKU-A
+G1-前置 库内=SKU-A 对外=SKU-A 行数=3
+G1-validate err=0 warn=0
+PASS G1-校验200 => 200
+PASS G1-error_rows=0（小写命中不得报错） => 0
+G1-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":1,"status":"COMPLETED","total_rows":1,"success_rows":1,"failed_rows":0,"started_at":"2026-10-18T06:08:38.195Z","finished_at":"2026-10-18T06:08:38.328Z"},"requestId":"req_e402b51da009f75e9fdf21950e400f6a","timestamp":"2026-10-18T06:08:38.368Z"}
+PASS G1-confirm200 => 200
+PASS G1-终态COMPLETED => COMPLETED
+PASS G1-成功1行 => 1
+PASS G1-无行级错误 => 0
+PASS G1-①库内sku_code仍SKU-A => SKU-A
+PASS G1-②对外GET仍SKU-A => SKU-A
+PASS G1-库内不是sku-a => SKU-A（≠sku-a）
+PASS G1-行数不变（UPDATE非新增） => 3
+PASS G1-可变字段name已更新 => 改后的名字
+---------------------------------------------------------------
+G2 R86-b：库里 WH-MAIN(9004)，导入 wh-main → code 仍为 WH-MAIN（①②）
+G2-前置 库内=WH-MAIN 对外=WH-MAIN
+PASS G2-校验200 => 200
+PASS G2-error_rows=0 => 0
+G2-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":2,"status":"COMPLETED","total_rows":1,"success_rows":1,"failed_rows":0,"started_at":"2026-10-18T06:08:58.052Z","finished_at":"2026-10-18T06:08:58.168Z"},"requestId":"req_15c8857bddd4682ccda1d40a6705d4af","timestamp":"2026-10-18T06:08:58.201Z"}
+PASS G2-confirm200 => 200
+PASS G2-终态COMPLETED => COMPLETED
+PASS G2-①库内code仍WH-MAIN => WH-MAIN
+PASS G2-②对外GET仍WH-MAIN => WH-MAIN
+PASS G2-库内不是wh-main => WH-MAIN（≠wh-main）
+PASS G2-行数不变 => 1
+PASS G2-可变字段name已更新 => 改名后的主仓
+---------------------------------------------------------------
+G3 R86-c：库里 SUP-X(9003)，导入 sup-x → code 仍为 SUP-X（①②）
+G3-前置 库内=SUP-X 对外=SUP-X
+PASS G3-校验200 => 200
+PASS G3-error_rows=0 => 0
+G3-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":3,"status":"COMPLETED","total_rows":1,"success_rows":1,"failed_rows":0,"started_at":"2026-10-18T06:09:14.920Z","finished_at":"2026-10-18T06:09:14.990Z"},"requestId":"req_26bbd8c4af00eb00cdab93c72c6c565a","timestamp":"2026-10-18T06:09:15.020Z"}
+PASS G3-confirm200 => 200
+PASS G3-终态COMPLETED => COMPLETED
+PASS G3-①库内code仍SUP-X => SUP-X
+PASS G3-②对外GET仍SUP-X => SUP-X
+PASS G3-库内不是sup-x => SUP-X（≠sup-x）
+PASS G3-行数不变 => 1
+PASS G3-可变字段name已更新 => 改名后的供应商
+---------------------------------------------------------------
+G4 R86-d：库里 P-BAG-001(9001)，导入 p-bag-001 → code 仍为 P-BAG-001（①②）
+G4-前置 库内=P-BAG-001 对外=P-BAG-001
+PASS G4-校验200 => 200
+PASS G4-error_rows=0 => 0
+G4-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":4,"status":"COMPLETED","total_rows":1,"success_rows":1,"failed_rows":0,"started_at":"2026-10-18T06:09:32.148Z","finished_at":"2026-10-18T06:09:32.210Z"},"requestId":"req_e5e729661c5f31f8aa0e56afce3489c1","timestamp":"2026-10-18T06:09:32.246Z"}
+PASS G4-confirm200 => 200
+PASS G4-终态COMPLETED => COMPLETED
+PASS G4-①库内product_code仍P-BAG-001 => P-BAG-001
+PASS G4-②对外GET仍P-BAG-001 => P-BAG-001
+PASS G4-库内不是p-bag-001 => P-BAG-001（≠p-bag-001）
+PASS G4-行数不变 => 1
+PASS G4-可变字段name已更新 => 改名后的商品
+---------------------------------------------------------------
+G5 R86-e 回归：库里无该编码时导入【小写新编码】→ 真的新建且写入小写原样（不报 CAT-3002）
+PASS G5-校验200 => 200
+G5a-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":5,"status":"COMPLETED","total_rows":1,"success_rows":1,"failed_rows":0,"started_at":"2026-10-18T06:09:45.952Z","finished_at":"2026-10-18T06:09:46.013Z"},"requestId":"req_fb5e1288d024221862e6b671bf47b48f","timestamp":"2026-10-18T06:09:46.048Z"}
+PASS G5a-confirm200（不报CAT-3002） => 200
+PASS G5a-终态COMPLETED => COMPLETED
+PASS G5a-库内写入小写原样(BINARY) => 1
+PASS G5a-库内未出现大写写法(BINARY) => 0
+PASS G5a-SKU总数3+1 => 4
+PASS G5b-confirm200 => 200
+PASS G5b-终态COMPLETED => COMPLETED
+PASS G5b-仓库写入小写原样 => 1
+PASS G5b-仓库总数1+1 => 2
+PASS G5c-confirm200 => 200
+PASS G5c-终态COMPLETED => COMPLETED
+PASS G5c-供应商写入小写原样 => 1
+PASS G5c-供应商总数1+1 => 2
+PASS G5d-confirm200 => 200
+PASS G5d-终态COMPLETED => COMPLETED
+PASS G5d-商品写入小写原样 => 1
+PASS G5d-商品总数1+1 => 2
+---------------------------------------------------------------
+G6 R86-f 回归：完全同大小写既有编码导入仍走命中更新，可变字段确实被更新
+PASS G6-校验200 => 200
+G6-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":9,"status":"COMPLETED","total_rows":1,"success_rows":1,"failed_rows":0,"started_at":"2026-10-18T06:10:22.462Z","finished_at":"2026-10-18T06:10:22.518Z"},"requestId":"req_c77c47b320f6b55a742431b9ce55ae56","timestamp":"2026-10-18T06:10:22.543Z"}
+PASS G6-confirm200 => 200
+PASS G6-终态COMPLETED => COMPLETED
+PASS G6-行数不变（仍走命中更新） => 4
+PASS G6-库内code仍SKU-B => SKU-B
+PASS G6-可变字段barcode确实被更新 => 6901234567890
+---------------------------------------------------------------
+G7 R86-g 审计：命中分支 biz_no == 库内既有写法（不是文件里的写法）
+PASS G7-confirm200 => 200
+PASS G7-SKU导入更新审计恰好2条（G1+G7各一次） => 2
+PASS G7-两条审计biz_no均为库内写法SKU-A => 2
+PASS G7-无任何审计biz_no被写成小写 => 0
+PASS G7-SKU审计biz_no=SKU-A => SKU-A
+PASS G7-SKU审计biz_no≠sku-a => SKU-A（≠sku-a）
+PASS G7-WH审计biz_no=WH-MAIN => WH-MAIN
+PASS G7-SUP审计biz_no=SUP-X => SUP-X
+PASS G7-PROD审计biz_no=P-BAG-001 => P-BAG-001
+---------------------------------------------------------------
+G9 R86-i 批量出口(Pass 1)：一批内「大写命中+小写命中」都命中更新，不退化为整批回滚
+PASS G9-校验200 => 200
+PASS G9-error_rows=0 => 0
+G9-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":14,"status":"COMPLETED","total_rows":2,"success_rows":2,"failed_rows":0,"started_at":"2026-10-18T06:11:03.227Z","finished_at":"2026-10-18T06:11:03.296Z"},"requestId":"req_42d6881f9a71851956806ef02e730633","timestamp":"2026-10-18T06:11:03.323Z"}
+PASS G9-confirm200 => 200
+PASS G9-终态COMPLETED => COMPLETED
+PASS G9-成功2行 => 2
+PASS G9-本批无行级错误（小写那行不得CAT-3002） => 0
+PASS G9-行数不变（两行都是UPDATE） => 4
+PASS G9-大写命中行name已更新 => 大写命中
+PASS G9-小写命中行code仍SKU-C => SKU-C
+PASS G9-小写命中行name已更新 => 小写命中
+---------------------------------------------------------------
+G10 门槛3边界1：R85 四处判定键（R6 探针形态）—— 文件内大小写重复仍判 ERROR
+PASS G10a-校验200 => 200
+PASS G10a-error_rows=1（快照判定键） => 1
+PASS G10a-失败行号2（后行） => 2
+PASS G10a-错误码COM-0001（R83既定） => COM-0001
+PASS G10a-错误级别ERROR（不得降级） => ERROR
+PASS G10a-confirm422前置门 => 422
+PASS G10a-code=IMP-4009 => IMP-4009
+PASS G10b-error_rows=1（销售三元组判定键） => 1
+PASS G10b-错误码SAL-6004（既定） => SAL-6004
+PASS G10b-不是COM-0001 => SAL-6004（≠COM-0001）
+PASS G10c-error_rows=1（主数据duplicateCode判定键） => 1
+PASS G10c-错误码CAT-3002（既定） => CAT-3002
+---------------------------------------------------------------
+G11 门槛3边界2：R80 跨仓不误杀（同 SKU 两仓）→ COMPLETED，两仓余额各自正确
+PASS G11-error_rows=0 => 0
+G11-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":18,"status":"COMPLETED","total_rows":2,"success_rows":2,"failed_rows":0,"started_at":"2026-10-18T06:11:41.504Z","finished_at":"2026-10-18T06:11:41.589Z"},"requestId":"req_1bddaeca021c6eab5c1042b1f030c93f","timestamp":"2026-10-18T06:11:41.613Z"}
+PASS G11-confirm200 => 200
+PASS G11-终态COMPLETED => COMPLETED
+PASS G11-成功2行 => 2
+PASS G11-主仓余额10+3 => 13.000
+PASS G11-副仓余额0+4 => 4.000
+PASS G11-幂等键后缀=主仓9004 => 1
+PASS G11-幂等键后缀=副仓9006 => 1
+---------------------------------------------------------------
+G12 门槛3边界3：R79 PARTIAL_SUCCESS 仍可达（SALES_DAILY 写服务内部失败 → SAL-6003）
+PASS G12-校验200 => 200
+PASS G12-校验0错误（两行键不同） => 0
+G12-漂移 listed_date=2026-10-20 > sale_date=2026-10-11
+G12-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":19,"status":"PARTIAL_SUCCESS","total_rows":2,"success_rows":1,"failed_rows":1,"started_at":"2026-10-18T06:11:58.830Z","finished_at":"2026-10-18T06:11:58.945Z"},"requestId":"req_f135add80f04312d5d0c3abab6e56998","timestamp":"2026-10-18T06:11:58.978Z"}
+PASS G12-confirm200 => 200
+PASS G12-终态PARTIAL_SUCCESS => PARTIAL_SUCCESS
+PASS G12-成功1行 => 1
+PASS G12-失败1行 => 1
+PASS G12-行级码SAL-6003 => SAL-6003
+PASS G12-不是COM-0002 => SAL-6003（≠COM-0002）
+PASS G12-成功行已落库 => 1
+---------------------------------------------------------------
+G13 门槛4：seed-b95.sql 后【直接】跑 TEST_STRATEGY §7.3 对账 SQL（不额外补流水）
+G13-种子流水=9002/seed-init-9002,9002/INIT_IMPORT:IMPORT:18:9002:9006,9002/INIT_IMPORT:IMPORT:18:9002:9004,9003/seed-init-9003,9005/seed-init-9005
+G13-对账明细=9004/9002:13.000 9006/9002:4.000 9004/9003:10.000 9004/9005:10.000 
+PASS G13-余额可由流水推导（§7.3） => 0
+PASS G13-qty_after恒等式 => 0
+PASS G13-不变式success+failed=total => 0
+PASS G13-种子未出现无流水余额行 => 0
+---------------------------------------------------------------
+G8 R86-h REST 回归：PATCH 改 code 仍生效（四类全测）；POST 创建不受影响
+PASS G8-PATCH sku 200 => 200
+PASS G8-①库内sku_code=SKU-A-RENAMED => SKU-A-RENAMED
+PASS G8-②对外GET同步 => SKU-A-RENAMED
+PASS G8-PATCH wh 200 => 200
+PASS G8-仓库code=WH-RENAMED => WH-RENAMED
+PASS G8-PATCH sup 200 => 200
+PASS G8-供应商code=SUP-RENAMED => SUP-RENAMED
+PASS G8-PATCH prod 200 => 200
+PASS G8-商品product_code=P-RENAMED => P-RENAMED
+PASS G8-POST products 201（create分支不变） => 201
+PASS G8-POST小写原样落库 => 1
+---------------------------------------------------------------
+编码全景 team7：skus=9002=SKU-A-RENAMED,9003=SKU-B,9005=SKU-C,9103=sku-brand-new
+            wh=9004=WH-RENAMED,9006=WH-B,9104=wh-branch
+            sup=9003=SUP-RENAMED,9004=sup-new
+            prod=9001=P-RENAMED,9102=p-tote-001,9103=p-post-001
+审计biz_no：SKU9002=SKU-A WH9004=WH-MAIN SUP9003=SUP-X PROD9001=P-BAG-001
+B109_CHECK_TOTAL=125
+B109_FAIL_COUNT=0
+B109_RESULT=ALL PASS
+--- cleanup ---
