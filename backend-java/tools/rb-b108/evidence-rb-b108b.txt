@@ -1,0 +1,33 @@
+JAR_SHA256=424dcb2e5b8adf28ca97f51cc16df0289c796b5c4c7e1295ba835e4133e33a9a
+DATE=2026-10-18T05:00:24Z
+MYSQL_READY=1 (port 3357)
+APP_UP=1
+SEED_OK
+TOKEN op=eyJhbGci
+---------------------------------------------------------------
+N9-a ★★★ 前置：GET /api/v1/skus/9002（库里此刻是 SKU-A）
+N9a-改写前 HTTP=200 body={"code":"OK","message":"success","data":{"id":9002,"team_id":7,"product_id":9001,"sku_code":"SKU-A","name":"SKU-A","status":"ACTIVE","supplier_id":null,"default_lead_time_days":null,"moq":null,"order_multiple":null,"qty_step":null,"listed_date":null,"created_at":"2026-10-18T05:00:59.301Z"},"requestId":"req_0ba7bf7a4edfa37db3154be19683e3b9","timestamp":"2026-10-18T05:01:02.773Z"}
+---------------------------------------------------------------
+N9-b 导入单行 sku-a（库里是 SKU-A）
+N9b-validate=200 err=0
+N9b-confirm=200 status=COMPLETED
+---------------------------------------------------------------
+N9-c 后置：库内与对外接口
+N9c-DB=9002|sku-a
+N9c-GET(按id)=200 body={"code":"OK","message":"success","data":{"id":9002,"team_id":7,"product_id":9001,"sku_code":"sku-a","name":"SKU-A","status":"ACTIVE","supplier_id":null,"default_lead_time_days":null,"moq":null,"order_multiple":null,"qty_step":null,"listed_date":null,"created_at":"2026-10-18T05:00:59.301Z"},"requestId":"req_d229af3da3e2e695e8d8413284948bb3","timestamp":"2026-10-18T05:01:11.813Z"}
+PASS N9c-DB码被改写为文件写法 => 9002|sku-a
+N9c-审计biz_no=sku-a
+PASS N9c-审计biz_no=改写后码（无分叉） => sku-a
+---------------------------------------------------------------
+N9-d 后续再导入一次 SKU-A（大写）⇒ 库内码应改回大写（证明「最后写入者赢」）
+N9d-confirm=200 status=COMPLETED
+PASS N9d-库内码改回大写 => 9002|SKU-A
+---------------------------------------------------------------
+N9-e 同批 SKU-A + sku-a 两行 ⇒ 应 CAT-3002（R85 已闭环，确认不受影响）
+N9e-validate=200 err=1
+PASS N9e-判文件内重复 => 1
+PASS N9e-行级码=CAT-3002 => CAT-3002
+---------------------------------------------------------------
+RB108B_CHECK_TOTAL=5
+RB108B_FAIL_COUNT=0
+RB108B_RESULT=ALL PASS

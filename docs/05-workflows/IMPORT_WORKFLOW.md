@@ -194,7 +194,7 @@ flowchart TD
 
 - **落库目标表**：`skus`（经 `CatalogWriteService.upsertSku`）；`product_id` 由 `product_code` 解析（`skus.product_id` **不可变**，`§5.7`）。
 - **唯一键**：`uk_sku_team_code (team_id, sku_code)`。
-- **冲突策略**：**upsert 更新**；`product_id` 不可变——若同编码指向不同 `product_code` → **报错**（视为编码被占用，`CAT-3002`），不做静默改挂。
+- **冲突策略**：**upsert 更新**；`product_id` 不可变——若同编码指向不同 `product_code` → **报错**（视为编码被占用，`CAT-3002`），不做静默改挂。★ `sku_code` 本身亦**不可更新**（`R86` 裁定，与 `product_id` 同级）：它既是定位键也是 `uk_sku_team_code` 的构成部分，导入只用于**定位**既有行，**不得**把库内既有写法改写成文件里的写法。判定按 `§8.6` 末行（大小写不敏感等价）命中，命中后**保留库内既有字面量**。
 - **幂等策略**：同文件级幂等 + `uk_sku_team_code` upsert。
 
 ### 7.3 `SUPPLIER`
@@ -214,7 +214,7 @@ flowchart TD
 
 - **落库目标表**：`suppliers`（经 `CatalogWriteService.upsertSupplier`）。
 - **唯一键**：`uk_sup_team_code (team_id, code)`。
-- **冲突策略**：**upsert 更新**。
+- **冲突策略**：**upsert 更新**。★ `code` 本身**不可更新**（`R86` 裁定，与 `§7.1` 的 `product_code` 同级）：它既是定位键也是 `uk_sup_team_code` 的构成部分，导入只用于**定位**既有行，**不得**把库内既有写法改写成文件里的写法；判定按 `§8.6` 末行（大小写不敏感等价）命中，命中后**保留库内既有字面量**。
 - **幂等策略**：文件级幂等 + `uk_sup_team_code` upsert。
 
 ### 7.4 `WAREHOUSE`
@@ -229,7 +229,7 @@ flowchart TD
 
 - **落库目标表**：`warehouses`（经 `CatalogWriteService.upsertWarehouse`）。
 - **唯一键**：`uk_wh_team_code (team_id, code)`。
-- **冲突策略**：**upsert 更新**；`is_default=1` 时服务层在事务内先清零再置一（否则 `CAT-3008`）。
+- **冲突策略**：**upsert 更新**；`is_default=1` 时服务层在事务内先清零再置一（否则 `CAT-3008`）。★ `code` 本身**不可更新**（`R86` 裁定，同上）：只用于定位既有行，**不得**改写库内既有写法；判定按 `§8.6` 末行命中后保留库内字面量。
 - **幂等策略**：文件级幂等 + `uk_wh_team_code` upsert。
 
 ### 7.5 `INVENTORY_SNAPSHOT`（库存快照）

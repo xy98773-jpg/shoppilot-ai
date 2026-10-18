@@ -1,0 +1,125 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=424dcb2e5b8adf28ca97f51cc16df0289c796b5c4c7e1295ba835e4133e33a9a
+DATE=2026-10-18T04:36:58Z
+REVIEWER=architect-independent-probe
+MYSQL_READY=1 (port 3356, 独立容器 rb108-mysql)
+APP_PID=2052 (port 18220, IMPORT_STORAGE_DIR=/tmp/rb108-store)
+APP_UP=1
+SEED_OK (seed-b95.sql)
+TOKEN op=eyJhbGci admin=eyJhbGci
+SETUP 仓库=WH-MAIN,WH-B
+SETUP 种子SKU=SKU-A,SKU-B,SKU-C
+---------------------------------------------------------------
+N1 ★★★ SKU 导入【单行小写编码】：库里是 SKU-A，文件写 sku-a
+   预期（按 R85 裁定「引用解析一律大小写不敏感等价」）：应命中既有 SKU-A 走【更新】语义。
+   实际风险：catalog Pass1 的 preloadSkuIdsByCode 返回表键是【库中原样写法】，
+            下游 preloadedIds.get(文件原样) 落空 ⇒ insertSku ⇒ 撞 uk_sku_team_code。
+N1-上传=201 batch=1
+N1-预览=200
+N1-映射=200
+N1-validate=200 err=0 warn=0
+N1-行级ERROR=
+N1-confirm=200 status=COMPLETED success=1 failed=0
+N1-confirm-body={"code":"OK","message":"success","data":{"batch_id":1,"status":"COMPLETED","total_rows":1,"success_rows":1,"failed_rows":0,"started_at":"2026-10-18T04:37:52.102Z","finished_at":"2026-10-18T04:37:52.411Z"},"requestId":"req_b1a23604aab5f4056060234b70612927","timestamp":"2026-10-18T04:37:52.452Z"}
+PASS N1-SKU总数未增（未误插新行） => 3
+PASS N1-SKU-A仍只有一条 => 1
+N1-SKU-A行=9002|sku-a|9001
+N1-★关键：若 confirm 非 COMPLETED 且行级码为 CAT-3002/重复类 ⇒ 命中 R86
+---------------------------------------------------------------
+N2 ★★ WAREHOUSE 导入【单行小写编码】：库里 WH-MAIN，文件写 wh-main
+N2-上传=201 batch=2
+N2-预览=200
+N2-映射=200
+N2-validate=200 err=0 warn=0
+N2-行级ERROR=
+N2-confirm=200 status=COMPLETED success=1 failed=0
+N2-confirm-body={"code":"OK","message":"success","data":{"batch_id":2,"status":"COMPLETED","total_rows":1,"success_rows":1,"failed_rows":0,"started_at":"2026-10-18T04:38:09.110Z","finished_at":"2026-10-18T04:38:09.208Z"},"requestId":"req_c6f50b991a9be130836126f8b5b50efb","timestamp":"2026-10-18T04:38:09.243Z"}
+PASS N2-仓库数未增 => 2
+N2-WH-MAIN行=9004|wh-main|主仓改名
+---------------------------------------------------------------
+N2b ★★ PRODUCT 导入【单行小写编码】：库里 P-BAG-001，文件写 p-bag-001
+N2b-上传=201 batch=3
+N2b-预览=200
+N2b-映射=200
+N2b-validate=200 err=0 warn=0
+N2b-行级ERROR=
+N2b-confirm=200 status=COMPLETED success=1 failed=0
+N2b-confirm-body={"code":"OK","message":"success","data":{"batch_id":3,"status":"COMPLETED","total_rows":1,"success_rows":1,"failed_rows":0,"started_at":"2026-10-18T04:38:23.163Z","finished_at":"2026-10-18T04:38:23.234Z"},"requestId":"req_60eaf0ed5e2f96a1e913a5217f75c5a9","timestamp":"2026-10-18T04:38:23.258Z"}
+PASS N2b-商品数未增 => 1
+N2b-P-BAG-001行=9001|p-bag-001|箱包改名
+---------------------------------------------------------------
+N3 ★★ SUPPLIER 导入【单行小写编码】（种子里无供应商，现场建一条）
+SETUP 供应商=9500 code=SUP-X
+N3-上传=201 batch=4
+N3-预览=200
+N3-映射=200
+N3-validate=200 err=0 warn=0
+N3-行级ERROR=
+N3-confirm=200 status=COMPLETED success=1 failed=0
+N3-confirm-body={"code":"OK","message":"success","data":{"batch_id":4,"status":"COMPLETED","total_rows":1,"success_rows":1,"failed_rows":0,"started_at":"2026-10-18T04:38:40.796Z","finished_at":"2026-10-18T04:38:40.871Z"},"requestId":"req_32cbd3dd6c5a659765951c691a6c3aa9","timestamp":"2026-10-18T04:38:40.896Z"}
+PASS N3-供应商数未增 => 1
+N3-SUP-X行=9500|sup-x|供应商X改名
+---------------------------------------------------------------
+N4 ★ 反向误杀面：同文件两个【真不同】的 SKU 不得被判重复
+N4-上传=201 batch=5
+N4-预览=200
+N4-映射=200
+N4-validate=200 err=0 warn=0
+N4-行级ERROR=
+N4-confirm=200 status=COMPLETED success=2 failed=0
+N4-confirm-body={"code":"OK","message":"success","data":{"batch_id":5,"status":"COMPLETED","total_rows":2,"success_rows":2,"failed_rows":0,"started_at":"2026-10-18T04:38:54.530Z","finished_at":"2026-10-18T04:38:54.598Z"},"requestId":"req_22341c44673539791a66b9002fd00321","timestamp":"2026-10-18T04:38:54.625Z"}
+PASS N4-两个新SKU都建成 => 2
+---------------------------------------------------------------
+N5 ★★ trim 边界：' SKU-A '（首尾空格）与 'SKU-A' 应判同一编码（重复）
+N5-上传=201 batch=6
+N5-预览=200
+N5-映射=200
+N5-validate=200 err=1 warn=0
+N5-行级ERROR=
+N5-confirm=422 status=VALIDATED success= failed=
+N5-confirm-body={"code":"IMP-4009","message":"批次存在错误行，请先修正或跳过错误行后再导入","data":{"batch_id":6,"status":"VALIDATED","error_rows":1},"requestId":"req_ca3214c904238f6ed1459593b13e32d2","timestamp":"2026-10-18T04:39:06.605Z"}
+N5-★若未判重复则说明 trim 未生效（SKUS 应仍为 3）
+---------------------------------------------------------------
+N6 ★ 回归：INVENTORY_SNAPSHOT 同仓 SKU-A + sku-a 应判 COM-0001 + 422
+N6-上传=201 batch=7
+N6-预览=200
+N6-映射=200
+N6-validate=200 err=1 warn=1
+N6-行级ERROR=
+N6-confirm=422 status=VALIDATED success= failed=
+N6-confirm-body={"code":"IMP-4009","message":"批次存在错误行，请先修正或跳过错误行后再导入","data":{"batch_id":7,"status":"VALIDATED","error_rows":1},"requestId":"req_8790edc4325cefe6f336c07e82b0c704","timestamp":"2026-10-18T04:39:17.461Z"}
+PASS N6-confirm被前置门拦（422） => 422
+PASS N6-错误码=IMP-4009 => IMP-4009
+PASS N6-余额未变 => 10.000
+---------------------------------------------------------------
+N7 ★ 边界：R80 跨仓（大小写混用）+ R79 PARTIAL_SUCCESS
+N7-上传=201 batch=8
+N7-预览=200
+N7-映射=200
+N7-validate=200 err=0 warn=1
+N7-行级ERROR=
+N7-confirm=200 status=COMPLETED success=2 failed=0
+N7-confirm-body={"code":"OK","message":"success","data":{"batch_id":8,"status":"COMPLETED","total_rows":2,"success_rows":2,"failed_rows":0,"started_at":"2026-10-18T04:39:30.925Z","finished_at":"2026-10-18T04:39:31.010Z"},"requestId":"req_272e8b1c91948f47a1fc03f15e7332fd","timestamp":"2026-10-18T04:39:31.037Z"}
+PASS N7-跨仓COMPLETED => COMPLETED
+N7-主仓余额=11.000 副仓余额=2.000
+N7b-SKU-B上架日=2026-10-20（sale_date=2026-10-10）
+N7b-上传=201 batch=9
+N7b-预览=200
+N7b-映射=200
+N7b-validate=200 err=0 warn=0
+N7b-行级ERROR=
+N7b-confirm=200 status=PARTIAL_SUCCESS success=1 failed=1
+N7b-confirm-body={"code":"OK","message":"success","data":{"batch_id":9,"status":"PARTIAL_SUCCESS","total_rows":2,"success_rows":1,"failed_rows":1,"started_at":"2026-10-18T04:39:47.926Z","finished_at":"2026-10-18T04:39:48.025Z"},"requestId":"req_73ec612bc0f8e7c418504adba4f66d67","timestamp":"2026-10-18T04:39:48.050Z"}
+PASS N7b-PARTIAL_SUCCESS（R79 不回退） => PARTIAL_SUCCESS
+PASS N7b-行级码=SAL-6003（非 COM-0002） => SAL-6003
+---------------------------------------------------------------
+N8 ★ seed 对账（B10.8 已补 seed-init-9003，不额外补流水）
+N8-种子流水=9002/seed-init-9002,9003/seed-init-9003,9005/seed-init-9005,9005/INIT_IMPORT:IMPORT:8:9005:9006,9005/INIT_IMPORT:IMPORT:8:9005:9004
+PASS N8-§7.3 余额可由流水推导违例行 => 0
+PASS N8-qty_after 恒等式违例 => 0
+PASS N8-无流水余额行 => 0
+---------------------------------------------------------------
+RB108_CHECK_TOTAL=15
+RB108_FAIL_COUNT=0
+RB108_RESULT=ALL PASS
+--- cleanup ---
