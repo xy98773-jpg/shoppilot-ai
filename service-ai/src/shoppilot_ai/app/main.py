@@ -1,88 +1,185 @@
 """FastAPI application entrypoint for the ShopPilot AI service.
 
-Skeleton responsibilities (no business logic):
+Responsibilities (M4-B13 — internal contract plumbing only, **no business endpoints**):
 - Create the FastAPI app.
 - Register the ``health`` router (token-exempt, for liveness/readiness probes)
   and the ``analysis`` router (placeholder, protected by ``X-Internal-Token``).
-- Add an ``X-Request-Id`` response-header middleware.
-- Wire unified exception handlers.
+- Guarantee an ``X-Request-Id`` on every response (echo inbound, generate if absent).
+- Enforce ``X-Internal-Token`` on the whole ``/internal/v1`` surface except health.
+- Emit the contract's four-field error envelope ``{code, message, detail, request_id}``
+  for every error path.
 
-TOKEN POLICY (skeleton-level):
-  ``GET /internal/v1/health`` is intentionally EXEMPT from the
-  ``X-Internal-Token`` check so probes can run without credentials. Every
-  other endpoint (today: the analysis router) requires a matching
-  ``X-Internal-Token`` header, compared against ``config.AI_INTERNAL_TOKEN``.
-  When ``AI_INTERNAL_TOKEN`` is unset (local/dev skeleton), enforcement is
-  skipped. Full authentication/authorization is deferred to M4-T01; this is
-  the agreed "read + compare" skeleton check.
+TOKEN POLICY (M4-T01 / ``R92``):
+  ``GET /internal/v1/health`` is intentionally EXEMPT from the ``X-Internal-Token``
+  check so probes can run without credentials (``ACCEPTANCE_CRITERIA.md:82``).
+  Every other ``/internal/v1`` path requires a matching token, compared in constant
+  time. **Unset token = fail-closed** (reject), never fail-open. The process still
+  starts fine without a token — only the internal surface is closed.
+
+WHY A MIDDLEWARE *AND* A ROUTER DEPENDENCY:
+  Router-level dependencies only run for **matched** routes. The analysis router has
+  no routes yet (business endpoints land in B14+), so a dependency alone would answer
+  ``404`` for ``/internal/v1/analysis:validate`` and never check the token. The
+  middleware closes that hole for the whole prefix; the router dependency stays as
+  defence-in-depth for the day real routes appear.
 """
 from __future__ import annotations
 
-import uuid
+from fastapi import Depends, FastAPI, Header, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, Request, status
-from fastapi.responses import JSONResponse
-
 from shoppilot_ai.app.api import analysis, health
-from shoppilot_ai.app.core.config import settings
-from shoppilot_ai.app.core.exceptions import (
+from shoppilot_ai.app.core.errors import (
+    AI_0001,
+    AI_1001,
+    AI_9001,
+    DEFAULT_MESSAGES,
     InternalTokenError,
-    ServiceAIBaseError,
+    error_body,
 )
 from shoppilot_ai.app.core.logging import get_logger
-from shoppilot_ai.app.core.tracing import REQUEST_ID_HEADER
+from shoppilot_ai.app.core.security import INTERNAL_TOKEN_HEADER, is_token_valid
+from shoppilot_ai.app.core.tracing import REQUEST_ID_HEADER, resolve_request_id
 
 logger = get_logger(__name__)
 
+#: Internal API prefix — everything under it is token-protected except the exempt set.
+INTERNAL_PREFIX = "/internal/v1"
+#: Token-exempt paths (probe endpoints). Exact match, no prefix matching.
+TOKEN_EXEMPT_PATHS = frozenset({"/internal/v1/health"})
+
 app = FastAPI(title="ShopPilot AI Service", version="0.1.0")
+
+
+def _current_request_id(request: Request) -> str:
+    """Read the request id from ``request.state``, resolving it if not set yet.
+
+    Order-independent on purpose: whichever middleware runs first resolves and
+    stashes the id; the other one reuses it. This keeps the response header and
+    the error-body ``request_id`` byte-identical.
+    """
+    existing = getattr(request.state, "request_id", None)
+    if existing:
+        return existing
+    resolved = resolve_request_id(request)
+    request.state.request_id = resolved
+    return resolved
+
+
+def _error_response(
+    request: Request,
+    status_code: int,
+    code: str,
+    message: str,
+    detail: object = None,
+) -> JSONResponse:
+    """Build a contract-shaped error response, always echoing ``X-Request-Id``."""
+    rid = _current_request_id(request)
+    return JSONResponse(
+        status_code=status_code,
+        content=error_body(code, message, detail, rid),
+        headers={REQUEST_ID_HEADER: rid},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Middleware
+#
+# ★ ORDER MATTERS: Starlette's ``add_middleware`` inserts at index 0 and the
+#   *last registered* middleware ends up outermost. ``request_id_middleware``
+#   must be outermost so the id exists before anything else can fail. The token
+#   middleware is therefore registered FIRST, the request-id middleware LAST.
+#   (Both are idempotent anyway — see ``_current_request_id``.)
+# --------------------------------------------------------------------------- #
+@app.middleware("http")
+async def internal_token_middleware(request: Request, call_next):
+    """Reject any non-exempt ``/internal/v1`` request without a valid token."""
+    path = request.url.path
+    if path.startswith(INTERNAL_PREFIX) and path not in TOKEN_EXEMPT_PATHS:
+        if not is_token_valid(request.headers.get(INTERNAL_TOKEN_HEADER)):
+            return _error_response(
+                request,
+                status.HTTP_401_UNAUTHORIZED,
+                AI_0001,
+                DEFAULT_MESSAGES[AI_0001],
+                {},
+            )
+    return await call_next(request)
 
 
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
     """Guarantee an X-Request-Id on every request and echo it back."""
-    rid = request.headers.get(REQUEST_ID_HEADER) or str(uuid.uuid4())
-    request.state.request_id = str(rid)
+    _current_request_id(request)
     response = await call_next(request)
     response.headers[REQUEST_ID_HEADER] = request.state.request_id
     return response
 
 
 async def require_internal_token(
-    x_internal_token: Optional[str] = Header(default=None, alias="X-Internal-Token"),
+    x_internal_token: Optional[str] = Header(default=None, alias=INTERNAL_TOKEN_HEADER),
 ) -> None:
-    """Skeleton token gate: compare header against configured token.
+    """Router-level token gate (defence-in-depth; see module docstring).
 
-    Applied to the analysis router only (health is exempt). Raises
-    :class:`InternalTokenError` on mismatch. When no expected token is
-    configured, the check is skipped (local/dev convenience).
+    Raises :class:`InternalTokenError` (→ ``401 AI-0001``) when the token is
+    missing, wrong, or not configured at all (fail-closed).
     """
-    expected = settings.ai_internal_token
-    if expected and x_internal_token != expected:
+    if not is_token_valid(x_internal_token):
         raise InternalTokenError()
 
 
 # Health is registered WITHOUT the token dependency (probe-exempt).
 app.include_router(health.router)
-# Analysis router carries the skeleton token gate.
+# Analysis router carries the token gate (plus the prefix middleware above).
 app.include_router(analysis.router, dependencies=[Depends(require_internal_token)])
 
 
+# --------------------------------------------------------------------------- #
+# Exception handlers — every path returns the same four-field envelope.
+# --------------------------------------------------------------------------- #
 @app.exception_handler(InternalTokenError)
-async def _token_error_handler(request: Request, exc: InternalTokenError):
-    return JSONResponse(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        content={
-            "code": "INTERNAL_TOKEN_INVALID",
-            "message": "Invalid or missing X-Internal-Token",
-        },
+async def handle_internal_token_error(request: Request, exc: InternalTokenError):
+    """Missing/invalid ``X-Internal-Token`` → ``401 AI-0001``."""
+    return _error_response(
+        request,
+        status.HTTP_401_UNAUTHORIZED,
+        exc.code,
+        exc.message,
+        exc.detail,
     )
 
 
-@app.exception_handler(ServiceAIBaseError)
-async def _base_error_handler(request: Request, exc: ServiceAIBaseError):
-    logger.error("Unhandled service error: %s", exc)
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"code": "SERVICE_ERROR", "message": str(exc)},
+@app.exception_handler(RequestValidationError)
+async def handle_request_validation_error(request: Request, exc: RequestValidationError):
+    """Pydantic/FastAPI body validation failure → ``400 AI-1001`` (not FastAPI's 422)."""
+    errors = [
+        {
+            "loc": [str(part) for part in err.get("loc", ())],
+            "msg": str(err.get("msg", "")),
+            "type": str(err.get("type", "")),
+        }
+        for err in exc.errors()
+    ]
+    return _error_response(
+        request,
+        status.HTTP_400_BAD_REQUEST,
+        AI_1001,
+        DEFAULT_MESSAGES[AI_1001],
+        {"errors": errors},
+    )
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_error(request: Request, exc: Exception):
+    """Any uncaught exception → ``500 AI-9001`` (no stack trace leaked to caller)."""
+    rid = _current_request_id(request)
+    logger.exception("unhandled_error request_id=%s path=%s", rid, request.url.path)
+    return _error_response(
+        request,
+        status.HTTP_500_INTERNAL_SERVER_ERROR,
+        AI_9001,
+        DEFAULT_MESSAGES[AI_9001],
+        {},
     )

@@ -2,11 +2,13 @@
 
 Provides:
 - ``REQUEST_ID_HEADER``: the canonical request-id header name.
-- ``extract_or_generate_request_id(headers)``: pull the id from a header
-  mapping (case-insensitive) or generate a ``uuid4`` when absent.
-- ``get_request_id(request)``: a FastAPI dependency that returns the id for
-  the current request, generating and stashing one on ``request.state`` when
-  missing.
+- ``resolve_request_id(request)``: return the inbound id, or generate a uuid4 and
+  log a WARN when the caller did not supply one. The generated id is still echoed
+  back (contract ``AI_SERVICE_CONTRACT.md §2:75``: the id is mandatory in the
+  response, so a missing inbound id must NOT become an error — ``R91`` ①).
+- ``extract_or_generate_request_id(headers)``: header-mapping variant (kept for
+  callers that do not have a ``Request`` object).
+- ``get_request_id(request)``: a FastAPI dependency wrapper.
 """
 from __future__ import annotations
 
@@ -15,7 +17,30 @@ from typing import Mapping, Optional
 
 from fastapi import Request
 
+from shoppilot_ai.app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 REQUEST_ID_HEADER = "X-Request-Id"
+
+
+def resolve_request_id(request: Request) -> str:
+    """Return the inbound ``X-Request-Id`` or generate a uuid4 (with a WARN).
+
+    The WARN carries ``request_id_missing=true`` so log pipelines can alert on
+    callers that forget the header without treating it as a failure.
+    """
+    incoming = request.headers.get(REQUEST_ID_HEADER)
+    if incoming:
+        return incoming
+    generated = str(uuid.uuid4())
+    logger.warning(
+        "request_id_missing=true generated_request_id=%s method=%s path=%s",
+        generated,
+        request.method,
+        request.url.path,
+    )
+    return generated
 
 
 def extract_or_generate_request_id(headers: Optional[Mapping[str, str]]) -> str:
