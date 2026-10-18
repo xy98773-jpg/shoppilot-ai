@@ -558,7 +558,7 @@ Idempotency-Key: <客户端生成的全局唯一字符串，长度 1..128>
 | POST | `/api/v1/import/batches/{id}/confirm` | 确认导入落库，状态 `VALIDATED→IMPORTING→COMPLETED/PARTIAL_SUCCESS/FAILED` | OPERATOR+ | ⚠️ | F-IMP-03 | `IMP-4005`/`4009`、`COM-0009` |
 | GET | `/api/v1/import/batches/{id}/errors` | 错误/警告行列表（分页，按 `error_level`/`row_no` 筛选） | OPERATOR+ | ✅ | F-IMP-03 | `IMP-4007` |
 | GET | `/api/v1/import/batches/{id}/errors/export` | 导出错误报告 CSV（P1） | OPERATOR+ | ✅ | F-IMP-03 | `IMP-4007` |
-| POST | `/api/v1/import/batches/{id}/reimport` | 修正后重导（`FORCE_REIMPORT`，仅 `PARTIAL_SUCCESS`/`FAILED`/`DUPLICATE_REJECTED` 可用） | OPERATOR+ | ⚠️ | F-IMP-06 | `IMP-4005`、`IMP-4004` |
+| POST | `/api/v1/import/batches/{id}/reimport` | 修正后重导（`FORCE_REIMPORT`，仅 `COMPLETED`/`PARTIAL_SUCCESS`/`FAILED`/`CANCELLED` 四个终态可用；`DUPLICATE_REJECTED` 请对 `409` 回带的原批次重导） | OPERATOR+ | ⚠️ | F-IMP-06 | `IMP-4005`、`IMP-4004` |
 
 ### 10.7 analysis（分析任务）
 

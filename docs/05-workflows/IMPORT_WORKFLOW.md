@@ -398,6 +398,11 @@ flowchart TD
 
 三步在**同一事务**内，避免中间态被并发判定为"可用槽位"（`DATABASE_DESIGN.md §6-E.4`）。
 
+> **可重导的状态集**：`COMPLETED` / `PARTIAL_SUCCESS` / `FAILED` / `CANCELLED` 四个**终态**。
+> `DUPLICATE_REJECTED` 请对 `409` 回带的**原批次**（`existing_batch_id`）重导——该状态批次的
+> `dedupe_hash` 恒为 `NULL`（置空才能绕过唯一键），对**它自己**重导时第 ② 步释放的是它自己（空转），
+> 第 ③ 步必然撞上原成功批次占用的槽位，只会得到「请刷新」的死路（`DESIGN_REVIEW R87`）。
+
 ---
 
 ## 9. 字段映射（mapping）设计
