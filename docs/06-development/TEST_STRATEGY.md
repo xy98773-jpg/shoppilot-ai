@@ -173,7 +173,7 @@
 | U-5 | 同上但 `qty_delta` 不同 | `INV-5003` |
 | U-6 | 同 `(wh, sku, date)` 两次 upsert 销售 | 覆盖，行数仍为 1 |
 | U-7 | 同团队同 `file_hash` 同 `biz_type` 二次上传 | `IMP-4004`，写 `DUPLICATE_REJECTED`（槽位 `NULL`） |
-| U-8 | 同文件 `FORCE_REIMPORT` | 新批次成功，旧批次 `superseded_by_batch_id` 回填、`dedupe_hash = NULL`（⏳ **端点未实现**，`DESIGN_REVIEW` `R84`，`M3-T19` 不验，实现后补） |
+| U-8 | 同文件 `FORCE_REIMPORT` | 新批次成功（`201` + `UPLOADED` + `attempt_no=原+1`），旧批次 `superseded_by_batch_id` 回填、`dedupe_hash = NULL`（✅ 端点已于 `M3-B10.7` 实现，**恢复为 `M3-T19` 硬门槛**；实现前曾标注「⏳ 未实现」并剔除，`DESIGN_REVIEW` `R84`） |
 | U-9 | 同 `file_hash` **不同 `biz_type`** | 都成功 |
 | U-10 | 同 `run_id` 下两条同 `(sku, wh)` 快照 | 第二条冲突 |
 | U-11 | 两条**不同 `run_id`** 的同 `(sku, wh)` 快照 | 都成功（历史快照必须保留） |
@@ -301,6 +301,9 @@ HAVING b.on_hand_qty <> COALESCE(SUM(t.qty_delta), 0);
 ```
 
 **断言**：上述查询返回**零行**（即"余额可由流水推导"）。这是 `ACCEPTANCE_CRITERIA.md §4` 的核心不变量在测试层的落地。
+
+> ★ **真栈执行注意（`M3-B10.7` 复核发现，`DESIGN_REVIEW` `B10.7 §5.14`）**：本断言要求**余额行与流水同源**。若测试直接 `INSERT inventory_balances` 造种子而不配套写 `INIT_IMPORT` 流水，对账 SQL 会在**种子阶段**就返回非零行 —— 那是种子资产的缺陷，不是被测代码的缺陷，但会让硬验产出**假 FAIL**。共享种子 `backend-java/tools/evi/seed-b95.sql` 已知存在此缺口（SKU-B/9003 有余额无流水），修复排 `B10.8`。
+> 另注：本断言统计的是**流水累计**，含 `REVERSAL` 流水时应按净额口径（`txn_type <> 'REVERSAL'` 或对冲方向），否则冲销后余额与累计值天然不等。
 
 对账断言应作为**每个库存相关集成测试的收尾步骤**，并单独提供"随机 100 次库存操作后对账"的用例如（P-10）。
 

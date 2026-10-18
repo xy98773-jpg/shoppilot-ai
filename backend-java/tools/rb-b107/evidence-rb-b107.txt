@@ -1,0 +1,106 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SHA256=af8a417b1ac95e3c66484fb23edc4216ac88d29905012ec816201a0b4dcee97a
+DATE=2026-10-18T03:01:48Z
+REVIEWER=architect-independent-probe
+MYSQL_READY=1 (port 3351, 独立容器 rb107-mysql)
+APP_PID=2037 (port 18200, IMPORT_STORAGE_DIR=/tmp/rb107-store)
+APP_UP=1
+SEED_OK (seed-b95.sql)
+SEED_RECON_GAP_ROWS=1（评审独立确认：种子自身违反对账不变量，非本批引入）
+TOKEN op=eyJhbGci admin=eyJhbGci
+SETUP 仓库=WH-MAIN,WH-B
+---------------------------------------------------------------
+P1 R83 反向误杀面：同仓同 SKU 但【编码大小写不同】的两行
+   背景：utf8mb4_0900_ai_ci 下 catalog 的 in(sku_code) 大小写不敏感⇒两行解析到同一条 SKU；
+        但 duplicateSnapshotKey 用 Java String 比较（大小写敏感）⇒ 判不出文件内重复。
+   本探针只【记录实测行为】，不断言应有结论——先看事实再判定是实现缺陷还是别处的既有口径。
+PASS P1-上传201 => 201
+PASS P1-预览200 => 200
+PASS P1-映射200 => 200
+P1-validate=200 body={"code":"OK","message":"success","data":{"batch_id":1,"status":"VALIDATED","total_rows":2,"error_rows":0,"warning_rows":1,"errors":[{"row_no":1,"error_level":"WARNING","error_code":"IMP-4006","error_field":"sku_code","error_message":"该仓库与 SKU 已有余额行，确认导入后将按增量累加（如需覆盖请使用盘点调整）"}]},"requestId":"req_91ed26447d4b630e98faeb6bd7bc1578","timestamp":"2026-10-18T03:02:40.472Z"}
+PASS P1-校验200 => 200
+P1-error_rows=0
+P1-行级ERROR=
+P1-全部问题行=
+P1-★ 校验阶段【未】拦截大小写变体（error_rows=0）
+P1-confirm=200 body={"code":"OK","message":"success","data":{"batch_id":1,"status":"PARTIAL_SUCCESS","total_rows":2,"success_rows":1,"failed_rows":1,"started_at":"2026-10-18T03:02:46.195Z","finished_at":"2026-10-18T03:02:46.306Z"},"requestId":"req_8cccb11bf1fa7321e840f93365a6e5aa","timestamp":"2026-10-18T03:02:46.340Z"}
+P1-终态=PARTIAL_SUCCESS success=1 failed=1
+P1-后置 A=12.000（前置 10.000） 流水增=1
+P1-★结论：R83 在大小写变体下【未生效】，落入 confirm 阶段（详见 DESIGN_REVIEW R85）
+PASS P1-★实测：校验阶段未拦截（error_rows=0） => 0
+---------------------------------------------------------------
+P2 R84 核心目的：新批次必须能独立跑完 mapping→validate→confirm 并落库
+PASS P2-原批上传201 => 201
+PASS P2-原批预览200 => 200
+PASS P2-原批映射200 => 200
+PASS P2-原批校验200 => 200
+PASS P2-原批确认200 => 200
+P2-原批终态=COMPLETED
+PASS P2-原批SKU已落库 => 1
+PASS P2-reimport201 => 201
+PASS P2-新批UPLOADED => UPLOADED
+P2-新批 id=3 attempt_no=2
+PASS P2-新批attempt_no=2 => 2
+PASS P2-新批预览200 => 200
+PASS P2-新批映射200 => 200
+PASS P2-新批校验200 => 200
+P2-新批confirm=200 body={"code":"OK","message":"success","data":{"batch_id":3,"status":"COMPLETED","total_rows":1,"success_rows":1,"failed_rows":0,"started_at":"2026-10-18T03:03:09.362Z","finished_at":"2026-10-18T03:03:09.439Z"},"requestId":"req_9bdb9773df008fc22531df758cc67c7a","timestamp":"2026-10-18T03:03:09.465Z"}
+PASS P2-新批确认200 => 200
+PASS P2-新批终态COMPLETED => COMPLETED
+PASS P2-原批仍COMPLETED => COMPLETED
+PASS P2-原批被新批取代 => 3
+PASS P2-原批槽位已释放 => 1
+PASS P2-新批占槽位 => 1
+PASS P2-同哈希占用者唯一 => 1
+PASS P2-upsert语义SKU仍1行 => 1
+PASS P2-审计恰好1条 => 1
+PASS P2-审计biz_id=新批 => 3
+---------------------------------------------------------------
+P3 R84 链条：对已被取代的 A 再次 reimport、以及对未终结的 B 再次 reimport
+PASS P3-对已取代的A再reimport=422 => 422
+PASS P3-码IMP-4005 => IMP-4005
+PASS P3-对终态B再reimport=201 => 201
+PASS P3-第三批attempt_no=3 => 3
+PASS P3-B被C取代 => 4
+PASS P3-A仍指向B（不因B被取代而改变） => 3
+PASS P3-同哈希占用者唯一 => 1
+PASS P3-审计累计2条 => 2
+PASS P3-审计biz_id含B与C => 2
+---------------------------------------------------------------
+P4 槽位语义：§8.10 第 ③ 步新批占槽位 ⇒ 同文件 upload 必须 409
+PASS P4-同文件upload=409 => 409
+PASS P4-码IMP-4004 => IMP-4004
+PASS P4-指向新批C => 4
+PASS P4-改名也绕不过=409 => 409
+PASS P4-释放槽位后upload=201 => 201
+PASS P4-新上传占槽位 => 1
+PASS P4-同哈希占用者唯一 => 1
+PASS P4-无重复占槽位（按hash分组） => 0
+---------------------------------------------------------------
+P5 R83 混合场景：SKU-A@WH-MAIN×2（重复）+ SKU-A@WH-B×1（不重复）
+PASS p5-mixed.csv-上传201 => 201
+PASS p5-mixed.csv-预览200 => 200
+PASS p5-mixed.csv-映射200 => 200
+p5-mixed.csv-validate=200 err=1 warn=1
+PASS p5-mixed.csv-校验200 => 200
+P5-confirm=422 body={"code":"IMP-4009","message":"批次存在错误行，请先修正或跳过错误行后再导入","data":{"batch_id":8,"status":"VALIDATED","error_rows":1},"requestId":"req_5dcc14f9273d7ce2374cc771a37cbc4b","timestamp":"2026-10-18T03:03:59.286Z"}
+PASS P5-确认422（有ERROR行） => 422
+P5-行级ERROR=
+PASS P5-唯一ERROR在第3行 => 3|COM-0001|ERROR
+PASS P5-仅1个ERROR行 => 1
+PASS P5-被拦下不改余额 => 10.000
+PASS P5-被拦下不写流水 => 3
+---------------------------------------------------------------
+P6 对账（TEST_STRATEGY §7.3 + 流水恒等式 + 行数不变式）
+P6-已补种子流水（评审自查项，seed-b95.sql 自身缺口 1 行）
+P6-余额≠流水累计的行数=0
+PASS P6-余额可由流水推导 => 0
+PASS P6-qty_after恒等式 => 0
+PASS P6-行数不变式 => 0
+PASS P6-同幂等键无重复 => 0
+---------------------------------------------------------------
+数据全景 team7：balances=3 txn=4 skus=4 batches=8 audits=2
+RB107_CHECK_TOTAL=57
+RB107_FAIL_COUNT=0
+RB107_RESULT=ALL PASS
+--- cleanup ---
