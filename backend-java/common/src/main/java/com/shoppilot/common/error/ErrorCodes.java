@@ -32,6 +32,8 @@ public final class ErrorCodes {
     public static final String COM_0007 = "COM-0007";
     /** 幂等键冲突（409）—— 同 Idempotency-Key 重复请求但请求体不一致；**不得用于兜底其他异常**。 */
     public static final String COM_0009 = "COM-0009";
+    /** 缺少必填请求头（400）—— 对必填幂等键的接口缺失/非法 {@code Idempotency-Key}（ERROR_CODES §2.1）。 */
+    public static final String COM_0010 = "COM-0010";
 
     // AUTH —— 认证与登录（1001–1099）
     /** 未登录或 Token 失效（401）—— 缺失/格式错误的 Authorization。 */
@@ -138,6 +140,16 @@ public final class ErrorCodes {
     public static final String ANL_7003 = "ANL-7003";
     public static final String ANL_7004 = "ANL-7004";
     public static final String ANL_7005 = "ANL-7005";
+    /** SKU 数量超过上限（400）—— {@code len(scope.sku_ids) > MAX_ANALYSIS_SKUS(2000)}。 */
+    public static final String ANL_7007 = "ANL-7007";
+    /** 数据质量预检未通过（422）—— {@code analyzable=false}（AI_SERVICE_CONTRACT §3.1）。 */
+    public static final String ANL_7008 = "ANL-7008";
+    /** 分析参数非法（400）—— {@code window_days}/{@code min_days}/{@code coverage_days} 越界或不一致。 */
+    public static final String ANL_7009 = "ANL-7009";
+    /** 结果尚未就绪（409）—— {@code progress < 100} 时拉取明细。 */
+    public static final String ANL_7012 = "ANL-7012";
+    /** 分析时间窗口非法（400）—— {@code date_from > date_to} 或与 {@code window_days} 冲突。 */
+    public static final String ANL_7013 = "ANL-7013";
 
     // RPL —— 补货建议与审核（8001–8099）
     public static final String RPL_8001 = "RPL-8001";

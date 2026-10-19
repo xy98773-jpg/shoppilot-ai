@@ -1,0 +1,463 @@
+package com.shoppilot.analysis.infrastructure.ai;
+
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.shoppilot.analysis.core.AiContract;
+import com.shoppilot.analysis.core.AiOutboundHeaders;
+import com.shoppilot.analysis.core.AiProperties;
+import com.shoppilot.analysis.infrastructure.ai.dto.AiErrorEnvelope;
+import com.shoppilot.analysis.infrastructure.ai.dto.AiRunCreateEnvelope;
+import com.shoppilot.analysis.infrastructure.ai.dto.AiRunCreateRequest;
+import com.shoppilot.analysis.infrastructure.ai.dto.AiValidateEnvelope;
+import com.shoppilot.analysis.infrastructure.ai.dto.AiValidateRequest;
+import com.shoppilot.common.error.ErrorCodes;
+import com.shoppilot.common.web.BizException;
+import java.io.EOFException;
+import java.io.IOException;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Locale;
+import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.ClientHttpResponse;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.stereotype.Component;
+import org.springframework.util.StreamUtils;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
+
+/**
+ * Python {@code service-ai} 的内部 HTTP 客户端（M4-T04）。
+ *
+ * <p><b>权威来源</b>：
+ * <ul>
+ *   <li>端点与请求/响应结构 —— {@code AI_SERVICE_CONTRACT.md §3.1/§3.2}（路径常量见 {@link AiContract}，
+ *       ★ {@code analysis:validate} 是<b>冒号</b>动作后缀，{@code R93}）；</li>
+ *   <li>超时与重试 —— {@code DESIGN_BASIS.md §13.4}：预检 5s / 0 次，发起 10s / 仅网络错误 1 次；</li>
+ *   <li>错误映射 —— {@code ERROR_CODES.md §2.11} 全 19 条（{@link AiErrorMapper}）+ {@code R101} 口径
+ *       （{@code AI-1003} 只表「路由不存在」，业务 404 用 {@code AI-6001}）；</li>
+ *   <li>两条不变量 —— {@code AI_SERVICE_CONTRACT.md §12}：{@code AI-xxxx} 一律不得透传前端；
+ *       LLM 降级不破坏规则结果。</li>
+ * </ul>
+ *
+ * <h2>★ 三个刻意的实现选择</h2>
+ * <ol>
+ *   <li><b>两个 RestClient，各自固定超时</b>：{@link AiProperties} 只描述「地址 + 令牌」，超时是契约常量
+ *       （{@link AiContract#TIMEOUT_VALIDATE_MS} / {@link AiContract#TIMEOUT_CREATE_MS}）。用
+ *       {@code builder.clone()} 复制 Spring Boot 自动配置的 {@code RestClient.Builder}，
+ *       避免为「客户端配置」再引入一套自定义属性（也让测试可用四参构造器注入毫秒级超时）。</li>
+ *   <li><b>不在本类做启动期 fail-fast</b>：{@code R92} 裁定 —— 令牌缺失时在<b>调用点</b>判空并抛
+ *       {@code ANL-7002}（{@link #requireConfigured(String)}），而不是让 34 个 {@code @SpringBootTest}
+ *       因缺一个属性起不来。</li>
+ *   <li><b>错误体解析独立于传输层</b>：{@code onStatus} 先把原始响应当作字符串读出，再单独映射为
+ *       {@code AiErrorEnvelope}——即使 Python 返回的是 FastAPI 默认形态（无 {@code code}），
+ *       也能落到「未知码 → {@code ANL-7002}」兜底，而不是抛一个 500。</li>
+ * </ol>
+ *
+ * <h2>★ 重试边界（{@code §13.4}）</h2>
+ * <ul>
+ *   <li>{@code analysis:validate}：<b>0 次</b>重试（快速失败，调用方决定是否继续）；</li>
+ *   <li>{@code POST /analysis/runs}：<b>仅网络错误</b>重试 <b>1 次</b>（固定 1s 退避，整体重发请求）；
+ *       HTTP 4xx/5xx <b>不</b>重试（业务/契约错误重试必然同样失败）；读超时<b>不</b>重试
+ *       （{@code ANL-7003}，避免把 10s 超时放大成 21s）。</li>
+ * </ul>
+ *
+ * <p>线程安全：无状态；{@link RestClient} 本身线程安全。
+ */
+@Component
+public class AiServiceClient {
+
+    private static final Logger log = LoggerFactory.getLogger(AiServiceClient.class);
+
+    /** 网络错误重试的固定退避（{@code §13.4}：1 次重试；退避时长取 1s，不引入随机抖动）。 */
+    private static final long RETRY_BACKOFF_MS = 1000L;
+
+    /** 网络错误的最大尝试次数（首次 + 1 次重试）。 */
+    private static final int MAX_ATTEMPTS = 2;
+
+    /** 错误信封解析器（只做 JSON → record，不参与业务判定）。 */
+    private static final ObjectMapper ERROR_MAPPER = new ObjectMapper()
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+
+    /** 契约错误码里唯一表示「受理成功」的业务码（{@code AI_SERVICE_CONTRACT §3}）。 */
+    private static final String ACCEPTED_STATUS = "ACCEPTED";
+
+    private final AiProperties aiProperties;
+    private final RestClient validateClient;
+    private final RestClient createClient;
+    private final int validateTimeoutMs;
+    private final int createTimeoutMs;
+
+    /**
+     * Spring 装配用构造器：读契约常量超时（5s / 10s）。
+     *
+     * <p>{@code @Autowired} 标在此处而非四参构造器：Spring 需要的是一个「全部入参可由容器提供」的构造器，
+     * 两个 {@code int} 只能由测试显式传入。
+     */
+    @Autowired
+    public AiServiceClient(RestClient.Builder builder, AiProperties aiProperties) {
+        this(builder, aiProperties, AiContract.TIMEOUT_VALIDATE_MS, AiContract.TIMEOUT_CREATE_MS);
+    }
+
+    /**
+     * 可注入超时的构造器（供单测缩短等待）。
+     *
+     * @param builder          Spring Boot 自动配置的 {@code RestClient.Builder}（clone 后各建一个客户端）
+     * @param aiProperties     AI 服务地址与令牌
+     * @param validateTimeoutMs 预检超时（毫秒）
+     * @param createTimeoutMs   发起超时（毫秒）
+     */
+    public AiServiceClient(RestClient.Builder builder, AiProperties aiProperties,
+                           int validateTimeoutMs, int createTimeoutMs) {
+        this.aiProperties = aiProperties;
+        this.validateTimeoutMs = validateTimeoutMs;
+        this.createTimeoutMs = createTimeoutMs;
+        this.validateClient = builder.clone()
+                .requestFactory(requestFactory(validateTimeoutMs))
+                .build();
+        this.createClient = builder.clone()
+                .requestFactory(requestFactory(createTimeoutMs))
+                .build();
+    }
+
+    /** 预检读/连超时（毫秒）；供测试断言契约常量。 */
+    public int getValidateTimeoutMs() {
+        return validateTimeoutMs;
+    }
+
+    /** 发起读/连超时（毫秒）；供测试断言契约常量。 */
+    public int getCreateTimeoutMs() {
+        return createTimeoutMs;
+    }
+
+    // =====================================================================
+    // 数据质量预检（POST /internal/v1/analysis:validate，5s，0 重试）
+    // =====================================================================
+
+    /**
+     * 数据质量预检（{@code AI_SERVICE_CONTRACT.md §3.1}）。
+     *
+     * @param request 预检请求（items 装配在 B16+ 接入；本批恒空数组）
+     * @return 预检结果（{@code analyzable=true}）
+     * @throws BizException {@code ANL-7002}（未配置/连接失败/HTTP 错误）、{@code ANL-7003}（超时）、
+     *                      {@code ANL-7004}（2xx 但响应体不可解析/无 data）、
+     *                      {@code ANL-7008}（{@code analyzable=false}）、映射后的其它 {@code ANL-xxxx}
+     */
+    public AiValidateEnvelope.AiValidateResult validate(AiValidateRequest request) {
+        requireConfigured("validate");
+        AiValidateEnvelope envelope;
+        try {
+            envelope = validateClient.post()
+                    .uri(uri(AiContract.PATH_VALIDATE))
+                    .headers(headers -> headers.setAll(outboundHeaders()))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::isError, (req, res) -> {
+                        throw translateError(res.getStatusCode().value(), res, AiContract.PATH_VALIDATE);
+                    })
+                    .body(AiValidateEnvelope.class);
+        } catch (RestClientException ex) {
+            // ★ 传输类异常不一定被包装成 ResourceAccessException：读响应体/写请求阶段抛出的
+            //   SocketException 会被 DefaultRestClient 包成普通 RestClientException，
+            //   其 cause 是 IOException。故必须按 cause 链分类：
+            //   超时 → 7003；连接类 → 7002；其余（JSON 解析/结构不符）→ 7004。
+            if (isReadTimeout(ex)) {
+                throw transportFailure(ex, "validate", true);
+            }
+            if (isTransportFailure(ex)) {
+                throw transportFailure(ex, "validate", false);
+            }
+            throw unreadableResponse("validate", ex);
+        }
+
+        if (envelope == null || envelope.data() == null) {
+            throw unreadableResponse("validate", null);
+        }
+        if (!envelope.data().analyzable()) {
+            // ERROR_CODES §2.8：ANL-7008 的「用户可见提示」即本句，不得改写为技术描述
+            throw new BizException(ErrorCodes.ANL_7008, "所选数据不满足分析条件：有效数据不足");
+        }
+        return envelope.data();
+    }
+
+    // =====================================================================
+    // 创建分析任务（POST /internal/v1/analysis/runs，10s，仅网络错误重试 1 次）
+    // =====================================================================
+
+    /**
+     * 发起分析任务（{@code AI_SERVICE_CONTRACT.md §3.2}）。
+     *
+     * @param request 创建请求（{@code analysis_run_id} 由 Java 生成，Python 只使用不回写）
+     * @return 受理信息（{@code execution_status=ACCEPTED}）
+     * @throws BizException {@code ANL-7003}（读超时，不重试）、{@code ANL-7002}（未配置/连接失败 2 次/
+     *                      HTTP 错误/未知码）、{@code ANL-7004}（2xx 但响应体不可解析、无 data、
+     *                      {@code analysis_run_id} 缺失或与请求不一致）
+     */
+    public AiRunCreateEnvelope.AiRunAccepted createAnalysisRun(AiRunCreateRequest request) {
+        requireConfigured("create");
+        try {
+            return createWithRetry(request);
+        } catch (RestClientException ex) {
+            if (isReadTimeout(ex)) {
+                throw transportFailure(ex, "create", true);
+            }
+            if (isTransportFailure(ex)) {
+                // 两次连接类尝试均失败（createWithRetry 已重试 1 次）
+                throw transportFailure(ex, "create", false);
+            }
+            throw unreadableResponse("create", ex);
+        }
+    }
+
+    /** 发起请求 + 仅网络错误重试；读超时立即转 {@code ANL-7003}（不重试）。 */
+    private AiRunCreateEnvelope.AiRunAccepted createWithRetry(AiRunCreateRequest request) {
+        RestClientException lastFailure = null;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                return doCreate(request);
+            } catch (RestClientException ex) {
+                if (!isTransportFailure(ex)) {
+                    // 业务/解析类失败：重试必然同样失败，直接交给外层（7004）
+                    throw ex;
+                }
+                if (isReadTimeout(ex)) {
+                    throw transportFailure(ex, "create", true);
+                }
+                lastFailure = ex;
+                log.warn("AI 服务连接失败（第 {}/{} 次）：path={} err={}",
+                        attempt, MAX_ATTEMPTS, AiContract.PATH_RUNS, ex.toString());
+                if (attempt < MAX_ATTEMPTS) {
+                    backoff();
+                }
+            }
+        }
+        // 连接类错误重试用尽：交给调用方按 502 处理（ERROR_CODES §2.8 ANL-7002）
+        throw lastFailure == null
+                ? new BizException(ErrorCodes.ANL_7002, userMessage(ErrorCodes.ANL_7002))
+                : lastFailure;
+    }
+
+    /** 单次发起（不重试、不捕获传输异常）。 */
+    private AiRunCreateEnvelope.AiRunAccepted doCreate(AiRunCreateRequest request) {
+        AiRunCreateEnvelope envelope = createClient.post()
+                .uri(uri(AiContract.PATH_RUNS))
+                .headers(headers -> headers.setAll(outboundHeaders()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(request)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, (req, res) -> {
+                    throw translateError(res.getStatusCode().value(), res, AiContract.PATH_RUNS);
+                })
+                .body(AiRunCreateEnvelope.class);
+
+        if (envelope == null || envelope.data() == null
+                || envelope.data().analysisRunId() == null
+                || !envelope.data().analysisRunId().equals(request.analysisRunId())) {
+            throw unreadableResponse("create", null);
+        }
+        if (!ACCEPTED_STATUS.equals(envelope.data().executionStatus())) {
+            // 只告警不失败：契约首期恒 ACCEPTED，出现其它值属对端演进，业务仍可轮询状态
+            log.warn("AI 服务返回非 ACCEPTED 的受理状态：runId={} executionStatus={} requestId={}",
+                    envelope.data().analysisRunId(), envelope.data().executionStatus(), envelope.requestId());
+        }
+        return envelope.data();
+    }
+
+    // =====================================================================
+    // 内部：配置判空 / 传输异常归类 / 错误体映射
+    // =====================================================================
+
+    /**
+     * 调用点判空（{@code R92} Java 侧口径）：未配置令牌或基址为空 → 不发请求，直接 {@code ANL-7002}。
+     *
+     * <p>★ 不做启动期 fail-fast：见类注释。日志记 ERROR 便于运维定位「忘记注入环境变量」。
+     */
+    private void requireConfigured(String operation) {
+        if (!aiProperties.isConfigured()
+                || aiProperties.getBaseUrl() == null
+                || aiProperties.getBaseUrl().isBlank()) {
+            log.error("AI 服务未配置，拒绝发起调用：operation={} tokenConfigured={} baseUrl={}",
+                    operation, aiProperties.isConfigured(), aiProperties.getBaseUrl());
+            throw new BizException(ErrorCodes.ANL_7002, userMessage(ErrorCodes.ANL_7002));
+        }
+    }
+
+    /**
+     * 传输层异常 → 对外码。
+     *
+     * @param readTimeout {@code true} ⇒ 读超时 {@code ANL-7003}；{@code false} ⇒ 连接失败/其它 I/O {@code ANL-7002}
+     */
+    private BizException transportFailure(Throwable ex, String operation, boolean readTimeout) {
+        String code = readTimeout ? ErrorCodes.ANL_7003 : ErrorCodes.ANL_7002;
+        if (readTimeout) {
+            log.warn("AI 服务调用超时：operation={} timeoutMs={} err={}",
+                    operation, timeoutOf(operation), ex.toString());
+        } else {
+            log.warn("AI 服务连接失败：operation={} err={}", operation, ex.toString());
+        }
+        return new BizException(code, userMessage(code));
+    }
+
+    /** 2xx 但响应体不可解析 / 结构不完整 → {@code ANL-7004}（二次校验未过）。 */
+    private BizException unreadableResponse(String operation, Throwable cause) {
+        log.warn("AI 服务响应不可解析或结构不完整：operation={} err={}",
+                operation, cause == null ? "empty body" : cause.toString());
+        return new BizException(ErrorCodes.ANL_7004, userMessage(ErrorCodes.ANL_7004));
+    }
+
+    /**
+     * HTTP 4xx/5xx → 解析四字段错误信封 → 19 码映射（{@code R101}）。
+     *
+     * <p>原 AI 码、HTTP 状态、对端 requestId <b>只进 WARN 日志</b>，绝不进响应体（{@code §12} 不变量）。
+     */
+    private BizException translateError(int httpStatus, ClientHttpResponse response, String path) {
+        String body = "";
+        try {
+            body = StreamUtils.copyToString(response.getBody(), StandardCharsets.UTF_8);
+        } catch (IOException ex) {
+            log.warn("读取 AI 错误响应体失败：path={} http={} err={}", path, httpStatus, ex.toString());
+        }
+        AiErrorEnvelope envelope = parseErrorEnvelope(body);
+        String aiCode = envelope == null ? null : envelope.code();
+        String externalCode = AiErrorMapper.toExternalCode(aiCode);
+        log.warn("AI 服务返回错误：path={} http={} aiCode={} known={} externalCode={} requestId={} detail={}",
+                path, httpStatus, aiCode, AiErrorMapper.isKnown(aiCode), externalCode,
+                envelope == null ? null : envelope.requestId(),
+                envelope == null ? truncateForLog(body) : envelope.message());
+        return new BizException(externalCode, userMessage(externalCode));
+    }
+
+    /** 错误体 → 信封；非法 JSON / 空体返回 {@code null}（按未知码兜底）。 */
+    private static AiErrorEnvelope parseErrorEnvelope(String body) {
+        if (body == null || body.isBlank()) {
+            return null;
+        }
+        try {
+            return ERROR_MAPPER.readValue(body, AiErrorEnvelope.class);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    /**
+     * 对外中文提示（{@code ERROR_CODES.md §2} 的「用户可见提示」列，逐字对齐）。
+     *
+     * <p>只覆盖本 client 可能产出的码；未知码兜底取 {@code ANL-7002} 的文案。
+     */
+    private static String userMessage(String code) {
+        return switch (code) {
+            case ErrorCodes.ANL_7001 -> "该 SKU 范围已有正在运行的分析任务，请稍后或取消后重试";
+            case ErrorCodes.ANL_7002 -> "AI 分析服务暂时不可用，请稍后重试";
+            case ErrorCodes.ANL_7003 -> "AI 分析服务响应超时，请稍后重试";
+            case ErrorCodes.ANL_7004 -> "分析结果校验未通过，请稍后重试";
+            case ErrorCodes.ANL_7005 -> "分析任务不存在";
+            case ErrorCodes.ANL_7007 -> "单次分析的 SKU 数量过多，请缩小范围";
+            case ErrorCodes.ANL_7008 -> "所选数据不满足分析条件：有效数据不足";
+            case ErrorCodes.ANL_7009 -> "分析参数不合法";
+            case ErrorCodes.ANL_7012 -> "分析结果尚未生成，请等待任务完成";
+            case ErrorCodes.ANL_7013 -> "分析时间区间不合法";
+            default -> "AI 分析服务暂时不可用，请稍后重试";
+        };
+    }
+
+    // =====================================================================
+    // 内部：工具
+    // =====================================================================
+
+    /** 出站头（令牌 + request-id；两者都取不到时为空映射——由 {@link #requireConfigured} 兜底）。 */
+    private Map<String, String> outboundHeaders() {
+        return AiOutboundHeaders.forInternalCall(aiProperties.getInternalToken());
+    }
+
+    /** 拼接内部端点（baseUrl 允许带尾斜杠；路径含冒号动作后缀，故用 {@link URI} 不做模板解析）。 */
+    private URI uri(String path) {
+        String base = aiProperties.getBaseUrl().trim();
+        while (base.endsWith("/")) {
+            base = base.substring(0, base.length() - 1);
+        }
+        return URI.create(base + path);
+    }
+
+    private int timeoutOf(String operation) {
+        return "validate".equals(operation) ? validateTimeoutMs : createTimeoutMs;
+    }
+
+    /**
+     * 读超时判定：cause 链含 {@link SocketTimeoutException}。
+     *
+     * <p>★ JDK {@code HttpURLConnection} 的<b>连接</b>超时也抛 {@code SocketTimeoutException}
+     * （消息为 {@code connect timed out}），与「读超时」必须区分：连接超时属网络错误、可重试；
+     * 读超时若重试会把 10s 上限放大成 21s（{@code §13.4} 的 10s 是端到端预算）。
+     */
+    private static boolean isReadTimeout(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof SocketTimeoutException) {
+                String message = current.getMessage();
+                boolean connectTimeout = message != null
+                        && message.toLowerCase(Locale.ROOT).contains("connect timed out");
+                return !connectTimeout;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    /**
+     * 是否为「传输层」失败（{@code §13.4} 中「仅网络错误可重试」的判定）。
+     *
+     * <p>两类载体都要识别：① Spring 显式包装的 {@link ResourceAccessException}；
+     * ② 被 {@code DefaultRestClient} 包成普通 {@link RestClientException} 的 IOException
+     * ——读响应体/写请求阶段抛出的 {@link SocketException}、{@link EOFException} 走这条路径。
+     * <p>JSON 解析失败（{@code JsonProcessingException}）<b>不</b>属此类：那是 422（{@code ANL-7004}），
+     * 重试必然同样失败。
+     */
+    private static boolean isTransportFailure(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof ResourceAccessException
+                    || current instanceof SocketException
+                    || current instanceof SocketTimeoutException
+                    || current instanceof EOFException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    /** 固定 1s 退避；中断即恢复标记并放弃重试（{@code ANL-7002}）。 */
+    private static void backoff() {
+        try {
+            Thread.sleep(RETRY_BACKOFF_MS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new BizException(ErrorCodes.ANL_7002, userMessage(ErrorCodes.ANL_7002), ex);
+        }
+    }
+
+    /** 每个客户端一份独立的请求工厂：读/连超时都取同一值（契约只给单值超时）。 */
+    private static SimpleClientHttpRequestFactory requestFactory(int timeoutMs) {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(Duration.ofMillis(timeoutMs));
+        factory.setReadTimeout(Duration.ofMillis(timeoutMs));
+        return factory;
+    }
+
+    private static String truncateForLog(String body) {
+        if (body == null) {
+            return null;
+        }
+        String singleLine = body.replace('\n', ' ').replace('\r', ' ');
+        return singleLine.length() <= 256 ? singleLine : singleLine.substring(0, 256) + "…";
+    }
+}

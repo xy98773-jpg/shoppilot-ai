@@ -1,0 +1,50 @@
+JAR=shoppilot-app-0.1.0.jar
+JAR_SHA256=ce69d5007945c4854b30a727552865454d39cb8884e146009ff337f8f37ce506
+=== 端口自检 ===
+PORT_FREE 3391
+PORT_FREE 18350
+PORT_FREE 18250
+=== 起独立 MySQL（rb-b15-mysql，3391:3306）===
+MYSQL_READY=1
+=== 构建 service-ai 镜像（shoppilot-service-ai:b15）===
+AI_UP=1 (after 2s)
+-------------------------------------------------------------
+=== 对端边界（R107）：直打内部端点 ===
+DIRECT_RESPONSE={"code":"AI-1003","message":"Internal path not found","detail":{"path":"/internal/v1/analysis/runs","method":"POST"},"request_id":"req_rb_b15_direct"} 404 
+[PASS] 直打内部 runs 的 HTTP => 404
+[PASS] 直打内部 runs 的 code => AI-1003
+JAVA_UP=1 (after 4s)
+=== 灌种子（seed-b7.sql：团队 7 / operator01 / SKU 9002 / 仓 9004）===
+SEED_DONE
+[PASS] 登录拿到 accessToken => 1
+-------------------------------------------------------------
+=== V4：POST /api/v1/analysis/runs（对端 404 AI-1003）===
+RESP_STATUS=502
+RESP_BODY={"code":"ANL-7002","message":"AI 分析服务暂时不可用，请稍后重试","data":null,"requestId":"req_50d6c58604a4a7807a2763ff8b9de9c0","timestamp":"2026-10-19T06:55:32.604Z"}
+[PASS] 对外 HTTP => 502
+[PASS] 对外错误码 => ANL-7002
+[PASS] 响应体不含 AI-1003（不外泄原码） => 0
+[PASS] 响应体不含任何 AI- 码 => 0
+-------------------------------------------------------------
+=== DB：run 必须落 FAILED，不留 PENDING ===
+[PASS] run 行数 => 1
+[PASS] status => FAILED
+[PASS] error_code => ANL-7002
+[PASS] error_message 非空 => 1
+[PASS] finished_at 非空 => 1
+[PASS] timeout_at 非空（§13.4） => 1
+[PASS] team_id 来自 JWT => 7
+[PASS] run_no 形态（RUN-8位-4位） => 1
+[PASS] 审计 ANALYSIS_RUN_CREATE 条数（失败不得写成功创建） => 0
+[PASS] 审计 ANALYSIS_RUN_FINISH 条数 => 1
+[PASS] 审计 FINISH 结果 => FAILURE
+-------------------------------------------------------------
+=== 日志：AI 原码 / HTTP / requestId 只进服务端日志 ===
+[PASS] app 日志含 AI-1003 => 1
+[PASS] app 日志含 externalCode=ANL-7002 => 1
+--- 日志片段（grep AI-1003）---
+2026-10-19T14:55:32.567+08:00  WARN 29176 --- [shoppilot-ai] [io-18350-exec-4] c.s.a.infrastructure.ai.AiServiceClient  : AI 服务返回错误：path=/internal/v1/analysis/runs http=404 aiCode=AI-1003 known=true externalCode=ANL-7002 requestId=req_50d6c58604a4a7807a2763ff8b9de9c0 detail=Internal path not found
+-------------------------------------------------------------
+RB15_CHECK_TOTAL=20
+RB15_FAIL_COUNT=0
+RB15_RESULT=ALL PASS

@@ -32,5 +32,13 @@
             <groupId>com.shoppilot</groupId>
             <artifactId>shoppilot-common</artifactId>
         </dependency>
+        <!-- 实体/DTO 的 getter/setter 与构造（与其它业务模块一致用 provided 作用域）。
+             ★ M4-B15：本模块此前只有 core 常量类、无 Lombok 依赖；B15 引入 @Data 实体后必须补齐，
+             否则注解处理器不生效、getter 全部缺失（编译期即暴露）。版本由 spring-boot-dependencies 管理。 -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 </project>
