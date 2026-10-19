@@ -8,6 +8,8 @@ import com.shoppilot.analysis.application.dto.CreateRunOutcome;
 import com.shoppilot.analysis.infrastructure.ai.AiServiceClient;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiRunCreateEnvelope;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiRunCreateRequest;
+import com.shoppilot.analysis.infrastructure.persistence.entity.AnalysisRunEntity;
+import com.shoppilot.analysis.infrastructure.persistence.mapper.AnalysisRunMapper;
 import com.shoppilot.app.ShopPilotApplication;
 import com.shoppilot.common.context.TeamContext;
 import com.shoppilot.common.error.ErrorCodes;
@@ -21,10 +23,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -36,6 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
 
@@ -79,6 +84,7 @@ class AnalysisAppServiceTest {
 
     private static final String ALGO = "avg-ma-3sigma-v1";
     private static final String PROMPT = "explain_risk.v1";
+    private static final String MODEL = "gpt-4o-mini";
     private static final LocalDate DATE_FROM = LocalDate.of(2026, 9, 16);
     private static final LocalDate DATE_TO = LocalDate.of(2026, 10, 13);
 
@@ -92,6 +98,10 @@ class AnalysisAppServiceTest {
 
     @MockitoBean
     private AiServiceClient aiServiceClient;
+
+    /** R108/A2：用于让 insert 抛 DuplicateKeyException，驱动「并发撞键后回查」分支。 */
+    @MockitoSpyBean
+    private AnalysisRunMapper runMapper;
 
     @Autowired
     private AnalysisAppService appService;
@@ -196,6 +206,153 @@ class AnalysisAppServiceTest {
 
         assertEquals(ErrorCodes.COM_0010, ex.getErrorCode());
         assertEquals(0L, countRuns());
+    }
+
+    // =====================================================================
+    // R108（B15.1）：幂等体比对必须覆盖 §6.3 的全部请求字段
+    // =====================================================================
+
+    @Test
+    @DisplayName("R108-改 date_from：同键 → 409 COM-0009，不新建")
+    void sameKeyDifferentDateFromRejected() {
+        appService.createRun(request(DATE_FROM, DATE_TO, PROMPT, MODEL), "r108-from");
+
+        BizException ex = assertThrows(BizException.class, () ->
+                appService.createRun(request(DATE_FROM.plusDays(1), DATE_TO, PROMPT, MODEL), "r108-from"));
+
+        assertEquals(ErrorCodes.COM_0009, ex.getErrorCode());
+        assertEquals(1L, countRuns(), "异体不得新建");
+    }
+
+    @Test
+    @DisplayName("R108-改 date_to：同键 → 409 COM-0009")
+    void sameKeyDifferentDateToRejected() {
+        appService.createRun(request(DATE_FROM, DATE_TO, PROMPT, MODEL), "r108-to");
+
+        BizException ex = assertThrows(BizException.class, () ->
+                appService.createRun(request(DATE_FROM, DATE_TO.minusDays(1), PROMPT, MODEL), "r108-to"));
+
+        assertEquals(ErrorCodes.COM_0009, ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("R108-改 prompt_version：同键 → 409 COM-0009")
+    void sameKeyDifferentPromptVersionRejected() {
+        appService.createRun(request(DATE_FROM, DATE_TO, PROMPT, MODEL), "r108-prompt");
+
+        BizException ex = assertThrows(BizException.class, () ->
+                appService.createRun(request(DATE_FROM, DATE_TO, "explain_risk.v2", MODEL), "r108-prompt"));
+
+        assertEquals(ErrorCodes.COM_0009, ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("R108-改 model_name：同键 → 409 COM-0009")
+    void sameKeyDifferentModelNameRejected() {
+        appService.createRun(request(DATE_FROM, DATE_TO, PROMPT, MODEL), "r108-model");
+
+        BizException ex = assertThrows(BizException.class, () ->
+                appService.createRun(request(DATE_FROM, DATE_TO, PROMPT, "gpt-4o"), "r108-model"));
+
+        assertEquals(ErrorCodes.COM_0009, ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("R108-仅改日期也必须落库可比对（data_start_date/data_end_date 为载体）")
+    void requestWindowIsPersistedForComparison() {
+        CreateRunOutcome outcome = appService.createRun(
+                request(DATE_FROM, DATE_TO, PROMPT, MODEL), "r108-window");
+
+        assertEquals(DATE_FROM, jdbc.queryForObject(
+                "SELECT data_start_date FROM analysis_runs WHERE id=?", LocalDate.class,
+                outcome.data().runId()));
+        assertEquals(DATE_TO, jdbc.queryForObject(
+                "SELECT data_end_date FROM analysis_runs WHERE id=?", LocalDate.class,
+                outcome.data().runId()));
+    }
+
+    @Test
+    @DisplayName("R108/A2：insert 撞键后回查到异体 → COM-0009（禁止直接返回 concurrent）")
+    void concurrentIdempotentHitIsReconciled() {
+        // 先落一条同键 run（scope = SKU_A），作为「并发窗口里抢先落库」的那一行
+        CreateRunOutcome first = appService.createRun(
+                selectedSkus(List.of(SKU_A)), "r108-race");
+        AnalysisRunEntity existing = runMapper.selectById(first.data().runId());
+        assertNotNull(existing);
+
+        // c 步查不到（空）、d 步无进行中（空）、catch 回查命中既有 → 必须走 reconcile
+        doReturn(List.of())
+                .doReturn(List.of())
+                .doReturn(List.of(existing))
+                .when(runMapper).selectList(any());
+        doThrow(new DuplicateKeyException(
+                "Duplicate entry 'r108-race' for key 'analysis_runs.uk_run_team_idem'"))
+                .when(runMapper).insert(any(AnalysisRunEntity.class));
+
+        BizException ex = assertThrows(BizException.class,
+                () -> appService.createRun(selectedSkus(List.of(SKU_B)), "r108-race"));
+
+        assertEquals(ErrorCodes.COM_0009, ex.getErrorCode(),
+                "并发同键的异体必须报 COM-0009，不得把既有 run 直接当重放返回");
+        assertEquals(1L, countRuns());
+    }
+
+    // =====================================================================
+    // R109（B15.1）：scope_json 必须由 JSON 序列化生成（含引号/反斜杠不炸）
+    // =====================================================================
+
+    @Test
+    @DisplayName("R109-CATEGORY 含双引号：202 落库为合法 JSON，category 保留原值")
+    void categoryWithQuoteIsEscaped() throws Exception {
+        String category = "A\"B";
+
+        CreateRunOutcome outcome = appService.createRun(category(category), "r109-quote");
+
+        String scopeJson = jdbc.queryForObject(
+                "SELECT scope_json FROM analysis_runs WHERE id=?", String.class, outcome.data().runId());
+        JsonNode parsed = json.readTree(scopeJson); // 非法 JSON 会在此抛异常
+        assertEquals(category, parsed.get("category").asText());
+    }
+
+    @Test
+    @DisplayName("R109-CATEGORY 含反斜杠与换行：同样落库为合法 JSON 且值不丢失")
+    void categoryWithBackslashIsEscaped() throws Exception {
+        String category = "A\\B\nC";
+
+        CreateRunOutcome outcome = appService.createRun(category(category), "r109-backslash");
+
+        String scopeJson = jdbc.queryForObject(
+                "SELECT scope_json FROM analysis_runs WHERE id=?", String.class, outcome.data().runId());
+        assertEquals(category, json.readTree(scopeJson).get("category").asText());
+    }
+
+    @Test
+    @DisplayName("R109-含引号的 CATEGORY：同键同体 → 重放；改类目 → COM-0009")
+    void categoryQuoteIdempotency() {
+        CreateRunOutcome first = appService.createRun(category("A\"B"), "r109-idem");
+        assertFalse(first.replayed());
+
+        CreateRunOutcome replay = appService.createRun(category("A\"B"), "r109-idem");
+        assertTrue(replay.replayed(), "同键同体（含转义）必须判重放");
+        assertEquals(first.data().runId(), replay.data().runId());
+
+        BizException ex = assertThrows(BizException.class,
+                () -> appService.createRun(category("A\"C"), "r109-idem"));
+        assertEquals(ErrorCodes.COM_0009, ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("R109 回归：SELECTED_SKUS 的 scope_json 结构不变（sku_ids 保序、不去重）")
+    void selectedSkusScopeJsonShapeUnchanged() throws Exception {
+        CreateRunOutcome outcome = appService.createRun(
+                selectedSkus(List.of(SKU_B, SKU_A)), "r109-skus");
+
+        String scopeJson = jdbc.queryForObject(
+                "SELECT scope_json FROM analysis_runs WHERE id=?", String.class, outcome.data().runId());
+        JsonNode parsed = json.readTree(scopeJson);
+        assertEquals(2, parsed.get("sku_ids").size());
+        assertEquals(SKU_B, parsed.get("sku_ids").get(0).asLong(), "数组必须保序");
+        assertEquals(SKU_A, parsed.get("sku_ids").get(1).asLong());
     }
 
     // =====================================================================
@@ -471,6 +628,13 @@ class AnalysisAppServiceTest {
         return selectedSkus(skuIds, null, WAREHOUSE_ID);
     }
 
+    /** R108 用：固定 SKU_A，仅变日期 / prompt / model 的请求。 */
+    private CreateAnalysisRunRequest request(LocalDate from, LocalDate to, String prompt, String model) {
+        return new CreateAnalysisRunRequest(
+                "SELECTED_SKUS", skuIdsJson(List.of(SKU_A)), WAREHOUSE_ID,
+                from, to, null, ALGO, prompt, model);
+    }
+
     private CreateAnalysisRunRequest selectedSkus(List<Long> skuIds, JsonNode params) {
         return selectedSkus(skuIds, params, WAREHOUSE_ID);
     }
@@ -487,9 +651,12 @@ class AnalysisAppServiceTest {
     }
 
     private CreateAnalysisRunRequest category(String category) {
+        // ★ 夹具也必须走 JSON 序列化：手工拼接 "{category:\"A\"B\"}" 会在测试侧就抛 JsonParseException，
+        //   掩盖真正的实现缺陷（R109 首轮 3 error 即此因，已自纠）
+        com.fasterxml.jackson.databind.node.ObjectNode scope = json.createObjectNode();
+        scope.put("category", category);
         return new CreateAnalysisRunRequest(
-                "CATEGORY", jsonNode("{\"category\":\"" + category + "\"}"), WAREHOUSE_ID,
-                DATE_FROM, DATE_TO, null, ALGO, PROMPT, null);
+                "CATEGORY", scope, WAREHOUSE_ID, DATE_FROM, DATE_TO, null, ALGO, PROMPT, null);
     }
 
     private JsonNode skuIdsJson(List<Long> skuIds) {

@@ -136,7 +136,14 @@ public class AnalysisAppService {
         assertNoConflictingRun(scope, request.warehouseId());
 
         // e. 落库（PENDING 快照；run_no 撞键重取序列，上限 3 次）
-        AnalysisRunEntity saved = insertPending(snapshot, request, scope, params, key);
+        //    ★ R108/A2：撞键后若回查到同键 run（并发窗口），必须回到 c 的幂等判定——
+        //    同体返回既有（replayed=true），异体 COM-0009；禁止直接返回 concurrent 跳过比对。
+        AnalysisRunEntity saved;
+        try {
+            saved = insertPending(snapshot, request, scope, params, key);
+        } catch (IdempotentRace race) {
+            return reconcile(race.existing(), request, scope, params);
+        }
 
         // f/g. 发起；失败置 FAILED（不留 PENDING 悬挂）后原样上抛
         try {
@@ -225,7 +232,22 @@ public class AnalysisAppService {
         return rows.isEmpty() ? null : rows.get(0);
     }
 
-    /** 同键同体 → 返回既有 run（{@code replayed=true}）；异体 → {@code COM-0009}。 */
+    /**
+     * 同键同体 → 返回既有 run（{@code replayed=true}）；异体 → {@code COM-0009}。
+     *
+     * <p><b>★ R108（B15.1）：比对范围必须覆盖 {@code API_CONTRACT §6.3} 的全部请求字段</b>，
+     * 顺序：{@code scope_type → scope_json → warehouse_id → date_from → date_to →
+     * params_json → algorithm_version → prompt_version → model_name}。
+     * B15 只比了其中 5 项，导致「同键仅改日期」返回 202 静默重放旧 run（客户端完全无法察觉）。
+     *
+     * <p>口径：
+     * <ul>
+     *   <li>日期用 {@link Objects#equals}（{@code LocalDate} 值相等）；</li>
+     *   <li>{@code prompt_version} / {@code model_name} 两侧先「空白 → null」再比（与
+     *       {@code insertPending} 的落库口径一致，避免 {@code ""} 与 {@code null} 造成的假异体）；</li>
+     *   <li>JSON 两列仍走 {@link CanonicalJson#jsonEquals}（键序/数值归一），不弱化。</li>
+     * </ul>
+     */
     private static CreateRunOutcome reconcile(AnalysisRunEntity existing,
                                               CreateAnalysisRunRequest request,
                                               AnalysisScope scope,
@@ -234,13 +256,42 @@ public class AnalysisAppService {
                 && CanonicalJson.jsonEquals(CanonicalJson.parseOrNull(existing.getScopeJson()),
                         CanonicalJson.parseOrNull(scope.canonicalJson()))
                 && Objects.equals(existing.getWarehouseId(), request.warehouseId())
+                // ★ date_from / date_to 的落库载体：data_start_date / data_end_date
+                //   （DATABASE_DESIGN §5.14 定义即「输入销售数据最早/最晚日期」= 请求窗口；
+                //   表无独立 date_from/date_to 列，且本批禁新增迁移）
+                && Objects.equals(existing.getDataStartDate(), request.dateFrom())
+                && Objects.equals(existing.getDataEndDate(), request.dateTo())
                 && CanonicalJson.jsonEquals(CanonicalJson.parseOrNull(existing.getParamsJson()),
                         CanonicalJson.parseOrNull(params.canonicalJson()))
-                && Objects.equals(existing.getAlgorithmVersion(), request.algorithmVersion());
+                && Objects.equals(existing.getAlgorithmVersion(), request.algorithmVersion())
+                && Objects.equals(blankToNull(existing.getPromptVersion()),
+                        blankToNull(request.promptVersion()))
+                && Objects.equals(blankToNull(existing.getModelName()),
+                        blankToNull(request.modelName()));
         if (!sameBody) {
             throw new BizException(ErrorCodes.COM_0009, "相同的幂等键已用于另一笔请求，请更换幂等键");
         }
         return new CreateRunOutcome(CreateRunResponse.from(existing), true);
+    }
+
+    /**
+     * 撞键后回查到同键 run 的内部信号（{@code R108/A2}）。
+     *
+     * <p>用异常而非返回值：{@code insertPending} 正常只返回「刚插入的实体」，
+     * 把「并发命中」塞进返回类型会让调用方多一个 {@code null} 分支、也容易再次漏掉比对。
+     */
+    private static final class IdempotentRace extends RuntimeException {
+
+        private final transient AnalysisRunEntity existing;
+
+        private IdempotentRace(AnalysisRunEntity existing) {
+            super("idempotent-key race", null, false, false);
+            this.existing = existing;
+        }
+
+        private AnalysisRunEntity existing() {
+            return existing;
+        }
     }
 
     // =====================================================================
@@ -309,6 +360,11 @@ public class AnalysisAppService {
         entity.setPromptVersion(blankToNull(request.promptVersion()));
         entity.setModelName(blankToNull(request.modelName()));
         entity.setLlmStatus(LlmStatus.NOT_REQUESTED.name());
+        // ★ R108：请求窗口落 data_start_date/data_end_date——这两列是幂等比对里
+        //   date_from/date_to 的唯一载体（表无独立列，本批禁新增迁移）。
+        //   B19/B20 回写结果时不得覆盖已有值，否则重放判定会漂移。
+        entity.setDataStartDate(request.dateFrom());
+        entity.setDataEndDate(request.dateTo());
         entity.setTotalSkus(scope.plannedSkuCount());
         entity.setProcessedSkus(0);
         entity.setProgress(0);
@@ -329,10 +385,10 @@ public class AnalysisAppService {
                 AnalysisRunEntity saved = runMapper.selectById(entity.getId());
                 return saved == null ? entity : saved;
             } catch (DuplicateKeyException ex) {
-                // 并发同键：另一请求已抢先落库 → 回到 c 的幂等语义
+                // 并发同键：另一请求已抢先落库 → 交给 createRun 走 c 的幂等判定（R108/A2）
                 AnalysisRunEntity concurrent = findByIdempotencyKey(idempotencyKey);
                 if (concurrent != null) {
-                    return concurrent;
+                    throw new IdempotentRace(concurrent);
                 }
                 log.warn("run_no 撞唯一键，重取序列：attempt={}/{} runNo={}",
                         attempt, MAX_RUN_NO_ATTEMPTS, entity.getRunNo());

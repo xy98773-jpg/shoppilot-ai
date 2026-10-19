@@ -1,0 +1,66 @@
+JAR=shoppilot-app-0.1.0.jar
+JAR_SHA256=3722b0a4748475069bff2408d43e807faa371e9cedf2a52bddf0ea5a224109f5
+=== 端口自检 ===
+PORT_FREE 3392
+PORT_FREE 18370
+PORT_FREE 18260
+=== 起契约级假对端（18260）===
+FAKE_AI_UP=1
+=== 起独立 MySQL（rb-b151-mysql，3392:3306）===
+MYSQL_READY=1
+JAVA_UP=1 (after 4s)
+SEED_DONE
+[PASS] 登录 => 1
+-------------------------------------------------------------
+=== T1 同键同体 → 202 + Idempotent-Replayed ===
+R1_STATUS=202 R1_REPLAY=[] R1_BODY={"code":"OK","message":"success","data":{"run_id":1,"run_no":"RUN-20261019-0001","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T08:33:43.535Z","created_at":"2026-10-19T08:28:43.557Z"},"requestId":"req_587631a6008b99bd2f58292f86681217","timestamp":"2026-10-19T08:28:43.655Z"}
+R2_STATUS=202 R2_REPLAY=[true] R2_BODY={"code":"OK","message":"success","data":{"run_id":1,"run_no":"RUN-20261019-0001","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T08:33:43.535Z","created_at":"2026-10-19T08:28:43.557Z"},"requestId":"req_b144983912c3f15df55e71e410102a7b","timestamp":"2026-10-19T08:28:45.550Z"}
+[PASS] T1 首次 HTTP => 202
+[PASS] T1 首次无重放头 => 
+[PASS] T1 重放 HTTP => 202
+[PASS] T1 重放头 => true
+[PASS] T1 同一 run_id => 1
+[PASS] T1 库内 1 行 => 1
+-------------------------------------------------------------
+=== T2 同键仅改 date_from → 409 COM-0009（R108）===
+R3_STATUS=409 R3_BODY={"code":"COM-0009","message":"相同的幂等键已用于另一笔请求，请更换幂等键","data":null,"requestId":"req_7dedde295aa0498bc8bc14d3e304a30a","timestamp":"2026-10-19T08:28:51.155Z"}
+[PASS] T2 HTTP => 409
+[PASS] T2 code => COM-0009
+[PASS] T2 未新建 => 1
+-------------------------------------------------------------
+=== T3 CATEGORY category=A"B → 202 + 合法 JSON（R109）===
+R4_STATUS=202 R4_BODY={"code":"OK","message":"success","data":{"run_id":2,"run_no":"RUN-20261019-0002","status":"RUNNING","scope_type":"CATEGORY","total_skus":0,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"PENDING","timeout_at":"2026-10-19T08:33:55.694Z","created_at":"2026-10-19T08:28:55.701Z"},"requestId":"req_329d68a80757840ecaa6e786b87b7e5c","timestamp":"2026-10-19T08:28:55.734Z"}
+[PASS] T3 HTTP => 202
+[PASS] T3 scope_json JSON_VALID => 1
+[PASS] T3 category 原值 => A"B
+[PASS] T3 响应无 AI- 码 => 0
+[PASS] T3 同键同体重放 => true
+R6_STATUS=409 R6_BODY={"code":"COM-0009","message":"相同的幂等键已用于另一笔请求，请更换幂等键","data":null,"requestId":"req_a08d3b8dc70ab9246d880df18bd1e348","timestamp":"2026-10-19T08:29:02.798Z"}
+[PASS] T3 改类目 HTTP => 409
+[PASS] T3 改类目 code => COM-0009
+-------------------------------------------------------------
+=== T4 同范围不同键 → 409 ANL-7001（回归）===
+R7_STATUS=409 R7_BODY={"code":"ANL-7001","message":"该 SKU 范围已有正在运行的分析任务，请稍后或取消后重试","data":null,"requestId":"req_716f0068e6274d6d1de5116c2f3e43b2","timestamp":"2026-10-19T08:29:05.724Z"}
+[PASS] T4 HTTP => 409
+[PASS] T4 code => ANL-7001
+-------------------------------------------------------------
+=== T5 假对端 AI-6002 → 409 ANL-7012 + run FAILED（回归）===
+R8_STATUS=409 R8_BODY={"code":"ANL-7012","message":"分析结果尚未生成，请等待任务完成","data":null,"requestId":"req_8f589211993c63182aa4926ad3ac8146","timestamp":"2026-10-19T08:29:08.593Z"}
+[PASS] T5 HTTP => 409
+[PASS] T5 code => ANL-7012
+[PASS] T5 响应无 AI- 码 => 0
+[PASS] T5 run 状态 => FAILED
+[PASS] T5 run error_code => ANL-7012
+[PASS] T5 0 条 PENDING 悬挂 => 0
+[PASS] T5 失败审计 => FAILURE
+-------------------------------------------------------------
+=== 假对端收包与日志 ===
+FAKE_AI_REQUESTS=3
+[PASS] 假对端收到 3 次发起（T1 + T3 + T5） => 3
+[PASS] 日志记录 AI-6002 原码 => 1
+--- 日志片段（AI-6002）---
+2026-10-19T16:29:08.568+08:00  WARN 27072 --- [shoppilot-ai] [io-18370-exec-8] c.s.a.infrastructure.ai.AiServiceClient  : AI 服务返回错误：path=/internal/v1/analysis/runs http=409 aiCode=AI-6002 known=true externalCode=ANL-7012 requestId=req_8f589211993c63182aa4926ad3ac8146 detail=task status not allowed
+-------------------------------------------------------------
+RB151_CHECK_TOTAL=28
+RB151_FAIL_COUNT=0
+RB151_RESULT=ALL PASS

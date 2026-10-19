@@ -193,24 +193,35 @@ class AiServiceClientTest {
     // =====================================================================
 
     @Test
-    @DisplayName("create 连接失败：重试 1 次（连接次数 = validate 基线 × 2），最终 ANL-7002")
+    @DisplayName("create 连接失败：客户端重试 1 次（1s 退避），最终 ANL-7002；validate 0 重试")
     void createRetriesNetworkFailureOnce() {
-        int validateAttempts = connectionAttemptsOf(() -> {
+        // ★ B15.1 自纠：B15 用「create 连接数 = validate 连接数 × 2」的比值断言，
+        //   全量 verify 下实测 validate=2 / create=3（JDK HttpURLConnection 自身也会内部重试一次，
+        //   两次探测的内部重试次数并不一致）⇒ 比值不稳定。改为三条确定性证据：
+        //   ① create 的尝试数严格大于 validate；② create 实际经历 ≥900ms 固定退避；
+        //   ③ validate 无退避。三者共同证明「客户端对 create 重试了 1 次」，
+        //   且对 JDK 内部是否重试不敏感。
+        Probe validate = probe(() -> {
             AiServiceClient client = new AiServiceClient(restClientBuilder(), properties, 300, 300);
             BizException ex = assertThrows(BizException.class, () -> client.validate(validateRequest()));
             assertEquals("ANL-7002", ex.getErrorCode(), "连接失败（非超时）应映射 7002");
         });
 
-        int createAttempts = connectionAttemptsOf(() -> {
+        Probe create = probe(() -> {
             AiServiceClient client = new AiServiceClient(restClientBuilder(), properties, 300, 300);
             BizException ex = assertThrows(BizException.class,
                     () -> client.createAnalysisRun(createRequest(30003L)));
             assertEquals("ANL-7002", ex.getErrorCode());
         });
 
-        assertEquals(2, createAttempts / validateAttempts,
-                "create 的重试次数必须是 validate 的 2 倍（validate 0 次 + create 1 次）；"
-                        + "validate=" + validateAttempts + " create=" + createAttempts);
+        assertTrue(create.attempts() > validate.attempts(),
+                "create 必须比 validate 多尝试（网络错误重试 1 次）：" + create + " vs " + validate);
+        assertTrue(create.elapsedMs() >= 900L,
+                "create 必须经历固定 1s 退避（客户端重试的直接证据）：" + create);
+        assertTrue(create.elapsedMs() < 2500L,
+                "create 只允许一次退避（若重试 2 次会 ≥2000ms）：" + create);
+        assertTrue(validate.elapsedMs() < 900L,
+                "validate 0 重试（不得出现退避）：" + validate);
     }
 
     @Test
@@ -403,14 +414,16 @@ class AiServiceClientTest {
     }
 
     /**
-     * 用「接受后立即 RST」的裸 ServerSocket 计量连接次数。
+     * 用「接受后立即 RST」的裸 ServerSocket 计量连接次数与耗时。
      *
      * <p>为什么不用 {@link HttpServer}：它无法在不写响应的情况下断开连接，
-     * 而「连接类 IOException → ResourceAccessException」正是重试分支的输入。
+     * 而「连接类 IOException」正是重试分支的输入。
      *
-     * @return 本次调用期间被接受的连接数（JDK 可能内部重试，故以 validate 为基线做比值断言）
+     * <p>★ 只暴露「尝试次数 + 耗时」，不做「次数 = 2」的硬编码：JDK {@code HttpURLConnection}
+     * 自身也会对失败连接内部重试一次，且不同请求形态下次数不一致；判定客户端是否重试，
+     * 用「相对次数 + 是否发生 1s 退避」更稳（见 {@code createRetriesNetworkFailureOnce}）。
      */
-    private int connectionAttemptsOf(Runnable action) {
+    private Probe probe(Runnable action) {
         try (ServerSocket socket = new ServerSocket(0)) {
             AtomicInteger accepted = new AtomicInteger();
             Thread acceptor = new Thread(() -> {
@@ -428,9 +441,11 @@ class AiServiceClientTest {
 
             String originalBaseUrl = properties.getBaseUrl();
             properties.setBaseUrl("http://127.0.0.1:" + socket.getLocalPort());
+            long startedAt = System.nanoTime();
             try {
                 action.run();
             } finally {
+                // ★ 只做清理，绝不在 finally 里 return——那会吞掉 action 抛出的 AssertionError
                 properties.setBaseUrl(originalBaseUrl);
                 try {
                     socket.close();
@@ -438,10 +453,15 @@ class AiServiceClientTest {
                     // 关闭失败不影响断言
                 }
             }
-            return accepted.get();
+            long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L;
+            return new Probe(accepted.get(), elapsedMs);
         } catch (IOException ex) {
             throw new IllegalStateException("无法创建假对端 ServerSocket", ex);
         }
+    }
+
+    /** 一次连接探测结果：被接受的连接数 + 调用总耗时。 */
+    private record Probe(int attempts, long elapsedMs) {
     }
 
     private static AiRunCreateRequest createRequest(long runId) {

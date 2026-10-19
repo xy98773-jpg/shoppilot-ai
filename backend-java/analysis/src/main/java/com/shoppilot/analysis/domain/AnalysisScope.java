@@ -1,6 +1,9 @@
 package com.shoppilot.analysis.domain;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
@@ -35,6 +38,9 @@ public record AnalysisScope(AnalysisScopeType scopeType, List<Long> skuIds, Stri
 
     /** SKU 数量上限（{@code DESIGN_BASIS.md §10.6}：{@code MAX_ANALYSIS_SKUS}）。 */
     public static final int MAX_SKUS = 2000;
+
+    /** 仅用于构造 {@code scope_json} 的节点树（不参与结构比较，比较走 {@link CanonicalJson}）。 */
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     /**
      * 从外部请求构造合法范围。
@@ -77,13 +83,28 @@ public record AnalysisScope(AnalysisScopeType scopeType, List<Long> skuIds, Stri
      *
      * <p>键序固定（单键无排序问题）；数组保序（客户端原序，重复项<b>不去重</b>——输入即事实，
      * 去重会改变幂等体比对语义）。
+     *
+     * <p><b>★ R109（B15.1）：必须经 JSON 序列化，禁止字符串拼接。</b>
+     * {@code CATEGORY} 的类目名是用户输入（契约允许任意 1..128 字符串），含 {@code "} 或 {@code \} 时
+     * 手工拼接会产出非法 JSON，落 MySQL {@code JSON} 列直接 3140 → 500 {@code COM-0002}。
+     * 这里先构造 {@code JsonNode} 再交给 {@link CanonicalJson#canonicalize}，
+     * 与幂等比对基准<b>同源</b>（同一套转义与数值归一），不会出现「落库文本 ≠ 比对基准」。
      */
     public String canonicalJson() {
         return switch (scopeType) {
             case ALL_ACTIVE -> null;
-            case SELECTED_SKUS -> "{\"sku_ids\":[" + skuIds.stream()
-                    .map(String::valueOf).reduce((a, b) -> a + "," + b).orElse("") + "]}";
-            case CATEGORY -> "{\"category\":\"" + category + "\"}";
+            case SELECTED_SKUS -> {
+                ArrayNode ids = JSON.createArrayNode();
+                skuIds.forEach(ids::add);
+                ObjectNode node = JSON.createObjectNode();
+                node.set("sku_ids", ids);
+                yield CanonicalJson.canonicalize(node);
+            }
+            case CATEGORY -> {
+                ObjectNode node = JSON.createObjectNode();
+                node.put("category", category);
+                yield CanonicalJson.canonicalize(node);
+            }
         };
     }
 

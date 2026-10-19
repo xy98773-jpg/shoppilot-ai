@@ -243,6 +243,28 @@ class AnalysisApiIntegrationTest {
     }
 
     // =====================================================================
+    // R109（B15.1）：CATEGORY 含引号
+    // =====================================================================
+
+    @Test
+    @DisplayName("R109：CATEGORY 的 category=A\"B → 202，DB scope_json 是合法 JSON 且保留原值")
+    void categoryWithQuoteAccepted() throws Exception {
+        String body = "{\"scope_type\":\"CATEGORY\",\"scope_json\":{\"category\":\"A\\\"B\"},"
+                + "\"warehouse_id\":" + WAREHOUSE_ID + ",\"date_from\":\"2026-09-16\","
+                + "\"date_to\":\"2026-10-13\",\"algorithm_version\":\"avg-ma-3sigma-v1\","
+                + "\"prompt_version\":\"explain_risk.v1\"}";
+
+        ResponseEntity<String> resp = postRun(operatorToken(), "r109-api", body);
+
+        assertEquals(HttpStatus.ACCEPTED, resp.getStatusCode(), "含引号的类目必须被接受：" + resp.getBody());
+        long runId = json.readTree(resp.getBody()).get("data").get("run_id").asLong();
+        String scopeJson = jdbc.queryForObject(
+                "SELECT scope_json FROM analysis_runs WHERE id=?", String.class, runId);
+        assertEquals("A\"B", json.readTree(scopeJson).get("category").asText(),
+                "落库 JSON 必须可解析且类目原值不丢：" + scopeJson);
+    }
+
+    // =====================================================================
     // 工具
     // =====================================================================
 
