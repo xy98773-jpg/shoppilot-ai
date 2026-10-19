@@ -1,0 +1,12 @@
+app.log
+run-stdout.log
+stub.out
+mode.txt
+headers.txt
+body.json
+stub-requests.jsonl
+storage/
+c_*.json
+c_*.hdr
+c_*.status
+__pycache__/

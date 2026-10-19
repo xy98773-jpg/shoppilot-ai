@@ -1,0 +1,60 @@
+JAR_SHA256=4fa1cc1e2f149c2b23b0fe20e86648ff2f1766e335cd034267850546d71c51cb
+PORTS_FREE 3394/18380/18381
+MYSQL_READY=1
+STUB_UP=1
+APP_UP=1
+[PASS] operator01 登录 => 1
+-------------------------------------------------------------
+=== A1 基线建（202）+ 请求窗口载体 ===
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":1,"run_no":"RUN-20261019-0001","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T10:11:15.053Z","created_at":"2026-10-19T10:06:15.083Z"},"requestId":"req_b151r_a1","timestamp":"2026-10-19T10:06:15.206Z"}
+[PASS] A1 HTTP => 202
+[PASS] A1 data_start_date = date_from => 2026-09-16
+[PASS] A1 data_end_date = date_to => 2026-10-13
+[PASS] A2 同键同体重放 => 202:true:1
+-------------------------------------------------------------
+=== B R108：同键仅改 date_to → COM-0009 ===
+STATUS=409 BODY={"code":"COM-0009","message":"相同的幂等键已用于另一笔请求，请更换幂等键","data":null,"requestId":"req_b151r_b","timestamp":"2026-10-19T10:06:23.032Z"}
+[PASS] B 期望 COM-0009/409 => COM-0009:409
+-------------------------------------------------------------
+=== C R108：prompt_version / model_name 变体 ===
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":2,"run_no":"RUN-20261019-0002","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"PENDING","timeout_at":"2026-10-19T10:11:25.745Z","created_at":"2026-10-19T10:06:25.755Z"},"requestId":"req_b151r_c1","timestamp":"2026-10-19T10:06:25.807Z"}
+[PASS] C1 基线 202 => 202
+STATUS=409 BODY={"code":"COM-0009","message":"相同的幂等键已用于另一笔请求，请更换幂等键","data":null,"requestId":"req_b151r_c2","timestamp":"2026-10-19T10:06:27.097Z"}
+[PASS] C2 改 prompt_version → COM-0009 => COM-0009:409
+STATUS=409 BODY={"code":"COM-0009","message":"相同的幂等键已用于另一笔请求，请更换幂等键","data":null,"requestId":"req_b151r_c3","timestamp":"2026-10-19T10:06:29.196Z"}
+[PASS] C3 改 model_name → COM-0009 => COM-0009:409
+-------------------------------------------------------------
+=== D 空白归一：prompt_version="" 与缺省视为同体 ===
+[PASS] D1 基线 202 => 202
+STATUS=202 REPLAYED=true BODY={"code":"OK","message":"success","data":{"run_id":3,"run_no":"RUN-20261019-0003","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T10:11:31.793Z","created_at":"2026-10-19T10:06:31.801Z"},"requestId":"req_b151r_d2","timestamp":"2026-10-19T10:06:32.531Z"}
+[PASS] D2 缺省 vs 空白 → 重放 202 => 202:true
+-------------------------------------------------------------
+=== E R109：反斜杠 / 内嵌换行 ===
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":4,"run_no":"RUN-20261019-0004","status":"RUNNING","scope_type":"CATEGORY","total_skus":0,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T10:11:35.099Z","created_at":"2026-10-19T10:06:35.107Z"},"requestId":"req_b151r_e1","timestamp":"2026-10-19T10:06:35.166Z"}
+[PASS] E1 反斜杠 202 => 202
+[PASS] E1 scope_json 合法 => 1
+[PASS] E1 category 原值（hex 415C42） => 415C42
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":5,"run_no":"RUN-20261019-0005","status":"RUNNING","scope_type":"CATEGORY","total_skus":0,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T10:11:40.500Z","created_at":"2026-10-19T10:06:40.509Z"},"requestId":"req_b151r_e2","timestamp":"2026-10-19T10:06:40.557Z"}
+[PASS] E2 换行 202 => 202
+[PASS] E2 category 原值（hex 410A42） => 410A42
+-------------------------------------------------------------
+=== F 并发同键（4 路 × 6 轮）：同一 run、库内 1 行、不得误报 ANL-7001 ===
+ROUND 1: distinct_run_ids=1 codes=[OK] rows=1
+ROUND 2: distinct_run_ids=1 codes=[OK] rows=1
+ROUND 3: distinct_run_ids=1 codes=[OK] rows=1
+ROUND 4: distinct_run_ids=1 codes=[OK] rows=1
+ROUND 5: distinct_run_ids=1 codes=[OK] rows=1
+ROUND 6: distinct_run_ids=1 codes=[OK] rows=1
+[PASS] F1 每轮 distinct run_id 恰 1 => 0
+[PASS] F2 每轮库内恰 1 行 => 0
+[PASS] F3 同键并发不得报 ANL-7001 的轮数 => 0
+-------------------------------------------------------------
+=== G 回归：ANL-7001 / 失败补偿 ===
+[PASS] G1 同范围不同键 → ANL-7001/409 => ANL-7001:409
+STATUS=409 BODY={"code":"ANL-7012","message":"分析结果尚未生成，请等待任务完成","data":null,"requestId":"req_b151r_g2","timestamp":"2026-10-19T10:08:07.562Z"}
+[PASS] G2 AI-6002 → ANL-7012/409 => ANL-7012:409
+[PASS] G2 run FAILED 且无 PENDING => 0
+-------------------------------------------------------------
+RB151R_TOTAL=22
+RB151R_PASS=22 FAIL=0 PROBE_NOTE=0
+RB151R_RESULT=ALL PASS
