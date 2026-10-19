@@ -3,6 +3,7 @@ package com.shoppilot.analysis;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shoppilot.analysis.application.AnalysisAppService;
+import com.shoppilot.analysis.domain.AnalysisRunStatus;
 import com.shoppilot.analysis.application.dto.CreateAnalysisRunRequest;
 import com.shoppilot.analysis.application.dto.CreateRunOutcome;
 import com.shoppilot.analysis.infrastructure.ai.AiServiceClient;
@@ -81,6 +82,13 @@ class AnalysisAppServiceTest {
     private static final long SKU_A = 9002L;
     private static final long SKU_B = 9003L;
     private static final long WAREHOUSE_ID = 9004L;
+    /** M4-B20.1 装配种子用（{@code skus.product_id} 有真实外键，必须先有商品行）。 */
+    private static final long PRODUCT_A = 9101L;
+    private static final long PRODUCT_B = 9102L;
+    /** Q14：{@code OTHER_TEAM_ID} 的 SKU（切团队后创建 run 必须用本团队 SKU）。 */
+    private static final long SKU_OTHER = 9005L;
+    private static final long PRODUCT_OTHER = 9103L;
+    private static final long WAREHOUSE_OTHER = 9006L;
 
     private static final String ALGO = "avg-ma-3sigma-v1";
     private static final String PROMPT = "explain_risk.v1";
@@ -124,6 +132,9 @@ class AnalysisAppServiceTest {
                         + "(?, 'T-HX', '星海优选', 'ACTIVE', 'Asia/Shanghai'), "
                         + "(?, 'T-OTHER', '别的团队', 'ACTIVE', 'Asia/Shanghai')",
                 TEAM_ID, OTHER_TEAM_ID);
+
+        // ★ M4-B20.1：items 装配所需主数据种子（仅新增，不断言）
+        seedCatalogForAssembly();
 
         TeamContext.set(TeamContext.Snapshot.of(TEAM_ID, List.of("OPERATOR"), OPERATOR_ID, "operator01"));
 
@@ -430,14 +441,42 @@ class AnalysisAppServiceTest {
         assertFalse(other.replayed());
     }
 
+    /**
+     * ★ Q13①：保留 B15 原意图——「比较对 NULL 安全」。
+     *
+     * <p>用 {@code insertRun(..., warehouseId=null, ...)} 造一条 {@code warehouse_id IS NULL} 的
+     * 进行中行（模拟 B20.1 之前的历史数据：默认仓是<b>后来</b>才解析并落库的），
+     * 再发一个<b>指定 9004</b> 的请求 ⇒ 两者不是同一仓库范围，必须放行。
+     */
     @Test
-    @DisplayName("并发-未指定仓库（NULL）与指定仓库视为不同范围 → 放行（null 安全比较）")
-    void nullWarehouseIsNotEqualToConcreteWarehouse() {
-        appService.createRun(selectedSkus(List.of(SKU_A), null, WAREHOUSE_ID), "wh-a");
+    @DisplayName("并发-历史 NULL 仓库行与指定仓库视为不同范围 → 放行（null 安全比较）")
+    void nullWarehouseRowIsNotEqualToConcreteWarehouse() {
+        insertRun(TEAM_ID, "RUN-20200101-0001", AnalysisRunStatus.RUNNING.name(),
+                "SELECTED_SKUS", skuIdsJson(List.of(SKU_A)).toString(), null, "legacy-null-wh");
 
-        CreateRunOutcome outcome = appService.createRun(selectedSkus(List.of(SKU_A), null, null), "wh-b");
+        CreateRunOutcome outcome = appService.createRun(
+                selectedSkus(List.of(SKU_A), null, WAREHOUSE_ID), "wh-a");
 
         assertFalse(outcome.replayed(), "仓库不同（NULL vs 9004）不应判冲突");
+    }
+
+    /**
+     * ★ Q13②：Q3 的正向语义——请求不指定仓时解析为默认仓 9004，
+     * 与「仓库=9004 的进行中 run」是<b>同一范围</b> ⇒ 必须 {@code ANL-7001}（409）。
+     *
+     * <p>这正是 B20.1 之前那条测试的前提被推翻的地方：旧断言认为「NULL ≠ 9004 ⇒ 放行」，
+     * 而解析默认仓之后二者本就是同一个仓。
+     */
+    @Test
+    @DisplayName("并发-Q3：未指定仓库解析为默认仓 9004，与 9004 的进行中 run 同范围 ⇒ ANL-7001")
+    void resolvedDefaultWarehouseConflictsWithSameWarehouse() {
+        insertRun(TEAM_ID, "RUN-20200101-0002", AnalysisRunStatus.RUNNING.name(),
+                "SELECTED_SKUS", skuIdsJson(List.of(SKU_A)).toString(), WAREHOUSE_ID, "wh-c");
+
+        BizException ex = assertThrows(BizException.class,
+                () -> appService.createRun(selectedSkus(List.of(SKU_A), null, null), "wh-d"));
+
+        assertEquals(ErrorCodes.ANL_7001, ex.getErrorCode());
     }
 
     // =====================================================================
@@ -590,7 +629,8 @@ class AnalysisAppServiceTest {
 
         TeamContext.set(TeamContext.Snapshot.of(
                 OTHER_TEAM_ID, List.of("OPERATOR"), OTHER_OPERATOR_ID, "operator8"));
-        appService.createRun(selectedSkus(List.of(SKU_A)), "team-2");
+        // ★ Q14：切到团队 8 后必须用**该团队**的 SKU（裁定 #3：SELECTED_SKUS 逐个校验归属）
+        appService.createRun(selectedSkus(List.of(SKU_OTHER)), "team-2");
 
         assertEquals(OTHER_TEAM_ID, jdbc.queryForObject(
                 "SELECT team_id FROM analysis_runs WHERE idempotency_key='team-2'", Long.class));
@@ -614,6 +654,44 @@ class AnalysisAppServiceTest {
         Long value = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM audit_logs WHERE action=?", Long.class, action);
         return value == null ? 0L : value;
+    }
+
+    /**
+     * ★ M4-B20.1（{@code §5.36} Q2 授权）：补<b>最小主数据种子</b>，让 {@code createRun} 的
+     * items 装配能找到 SKU / 仓库。<b>本方法只增数据，不改任何既有断言</b>。
+     *
+     * <p>为什么需要：装配新增了「SELECTED_SKUS 必须属本团队且 ACTIVE」「默认仓必须存在」
+     * 两道校验，而本类此前只种了 {@code teams}（SKU 9002/9003、仓库 9004 是<b>凭空写进请求</b>的），
+     * 不补种子就会全部落 {@code COM-0001}。
+     */
+    private void seedCatalogForAssembly() {
+        jdbc.update("DELETE FROM inventory_balances WHERE warehouse_id IN (?, ?)", WAREHOUSE_ID, WAREHOUSE_OTHER);
+        // ★ 顺序要紧：skus.product_id 有真实外键（RESTRICT），必须先删 SKU 再删 product
+        jdbc.update("DELETE FROM skus WHERE id IN (?, ?, ?)", SKU_A, SKU_B, SKU_OTHER);
+        jdbc.update("DELETE FROM warehouses WHERE id IN (?, ?)", WAREHOUSE_ID, WAREHOUSE_OTHER);
+        jdbc.update("DELETE FROM products WHERE id IN (?, ?, ?)", PRODUCT_A, PRODUCT_B, PRODUCT_OTHER);
+        jdbc.update("INSERT INTO products (id, team_id, product_code, name, category, status) VALUES "
+                        + "(?, ?, 'P-A', '商品A', 'CAT-01', 'ACTIVE'), "
+                        + "(?, ?, 'P-B', '商品B', 'CAT-02', 'ACTIVE'), "
+                        + "(?, ?, 'P-X', '他团队商品', 'CAT-01', 'ACTIVE')",
+                PRODUCT_A, TEAM_ID, PRODUCT_B, TEAM_ID, PRODUCT_OTHER, OTHER_TEAM_ID);
+        jdbc.update("INSERT INTO warehouses (id, team_id, code, name, status, is_default) "
+                        + "VALUES (?, ?, 'WH-MAIN', '主仓', 'ACTIVE', 1)",
+                WAREHOUSE_ID, TEAM_ID);
+        jdbc.update("INSERT INTO skus (id, team_id, product_id, sku_code, name, status) VALUES "
+                        + "(?, ?, ?, 'SKU-A', '规格A', 'ACTIVE'), "
+                        + "(?, ?, ?, 'SKU-B', '规格B', 'ACTIVE')",
+                SKU_A, TEAM_ID, PRODUCT_A, SKU_B, TEAM_ID, PRODUCT_B);
+        jdbc.update("INSERT INTO warehouses (id, team_id, code, name, status, is_default) "
+                        + "VALUES (?, ?, 'WH-OTHER', '他团队仓', 'ACTIVE', 1)",
+                WAREHOUSE_OTHER, OTHER_TEAM_ID);
+        jdbc.update("INSERT INTO skus (id, team_id, product_id, sku_code, name, status) "
+                        + "VALUES (?, ?, ?, 'SKU-X', '他团队规格', 'ACTIVE')",
+                SKU_OTHER, OTHER_TEAM_ID, PRODUCT_OTHER);
+        jdbc.update("INSERT INTO inventory_balances (team_id, warehouse_id, sku_id, on_hand_qty, "
+                        + "in_transit_qty, committed_qty) VALUES (?, ?, ?, 10.000, 0.000, 0.000), "
+                        + "(?, ?, ?, 10.000, 0.000, 0.000)",
+                TEAM_ID, WAREHOUSE_ID, SKU_A, TEAM_ID, WAREHOUSE_ID, SKU_B);
     }
 
     private void insertRun(long teamId, String runNo, String status, String scopeType,

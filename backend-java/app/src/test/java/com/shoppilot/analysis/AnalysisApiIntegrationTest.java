@@ -67,6 +67,9 @@ class AnalysisApiIntegrationTest {
     private static final long SKU_A = 9002L;
     private static final long SKU_B = 9003L;
     private static final long WAREHOUSE_ID = 9004L;
+    /** M4-B20.1 装配种子用（{@code skus.product_id} 有真实外键，必须先有商品行）。 */
+    private static final long PRODUCT_A = 9101L;
+    private static final long PRODUCT_B = 9102L;
 
     @DynamicPropertySource
     static void datasourceAndJwt(DynamicPropertyRegistry registry) {
@@ -103,6 +106,9 @@ class AnalysisApiIntegrationTest {
         jdbc.update("INSERT INTO team_members (team_id, user_id, role, status) VALUES "
                         + "(?, ?, 'OPERATOR', 'ACTIVE'), (?, ?, 'VIEWER', 'ACTIVE')",
                 TEAM_ID, OPERATOR_ID, TEAM_ID, VIEWER_ID);
+        // ★ M4-B20.1：items 装配所需主数据种子（仅新增，不断言）
+        seedCatalogForAssembly();
+
 
         when(aiServiceClient.createAnalysisRun(any())).thenAnswer(invocation -> {
             com.shoppilot.analysis.infrastructure.ai.dto.AiRunCreateRequest request =
@@ -267,6 +273,36 @@ class AnalysisApiIntegrationTest {
     // =====================================================================
     // 工具
     // =====================================================================
+
+    /**
+     * ★ M4-B20.1（{@code §5.36} Q2 授权）：补<b>最小主数据种子</b>，让 {@code createRun} 的
+     * items 装配能找到 SKU / 仓库。<b>本方法只增数据，不改任何既有断言</b>。
+     *
+     * <p>为什么需要：装配新增了「SELECTED_SKUS 必须属本团队且 ACTIVE」「默认仓必须存在」
+     * 两道校验，而本类此前只种了 {@code teams}（SKU 9002/9003、仓库 9004 是<b>凭空写进请求</b>的），
+     * 不补种子就会全部落 {@code COM-0001}。
+     */
+    private void seedCatalogForAssembly() {
+        jdbc.update("DELETE FROM inventory_balances WHERE warehouse_id = ?", WAREHOUSE_ID);
+        jdbc.update("DELETE FROM skus WHERE id IN (?, ?)", SKU_A, SKU_B);
+        jdbc.update("DELETE FROM warehouses WHERE id = ?", WAREHOUSE_ID);
+        jdbc.update("DELETE FROM products WHERE id IN (?, ?)", PRODUCT_A, PRODUCT_B);
+        jdbc.update("INSERT INTO products (id, team_id, product_code, name, category, status) VALUES "
+                        + "(?, ?, 'P-A', '商品A', 'CAT-01', 'ACTIVE'), "
+                        + "(?, ?, 'P-B', '商品B', 'CAT-02', 'ACTIVE')",
+                PRODUCT_A, TEAM_ID, PRODUCT_B, TEAM_ID);
+        jdbc.update("INSERT INTO warehouses (id, team_id, code, name, status, is_default) "
+                        + "VALUES (?, ?, 'WH-MAIN', '主仓', 'ACTIVE', 1)",
+                WAREHOUSE_ID, TEAM_ID);
+        jdbc.update("INSERT INTO skus (id, team_id, product_id, sku_code, name, status) VALUES "
+                        + "(?, ?, ?, 'SKU-A', '规格A', 'ACTIVE'), "
+                        + "(?, ?, ?, 'SKU-B', '规格B', 'ACTIVE')",
+                SKU_A, TEAM_ID, PRODUCT_A, SKU_B, TEAM_ID, PRODUCT_B);
+        jdbc.update("INSERT INTO inventory_balances (team_id, warehouse_id, sku_id, on_hand_qty, "
+                        + "in_transit_qty, committed_qty) VALUES (?, ?, ?, 10.000, 0.000, 0.000), "
+                        + "(?, ?, ?, 10.000, 0.000, 0.000)",
+                TEAM_ID, WAREHOUSE_ID, SKU_A, TEAM_ID, WAREHOUSE_ID, SKU_B);
+    }
 
     private String selectedSkusBody(List<Long> skuIds, String marker) {
         StringBuilder sb = new StringBuilder("{\"scope_type\":\"SELECTED_SKUS\",\"scope_json\":{\"sku_ids\":[");

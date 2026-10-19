@@ -14,9 +14,12 @@ import com.shoppilot.analysis.domain.LlmStatus;
 import com.shoppilot.analysis.infrastructure.ai.AiServiceClient;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiParams;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiRunCreateRequest;
+import com.shoppilot.analysis.infrastructure.ai.dto.AiRunItem;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiScope;
+import com.shoppilot.analysis.infrastructure.ai.dto.AiValidateRequest;
 import com.shoppilot.analysis.infrastructure.persistence.entity.AnalysisRunEntity;
 import com.shoppilot.analysis.infrastructure.persistence.mapper.AnalysisRunMapper;
+import com.shoppilot.analysis.infrastructure.sampling.AnalysisItemAssembler;
 import com.shoppilot.audit.application.AuditWriteService;
 import com.shoppilot.audit.domain.model.AuditAction;
 import com.shoppilot.audit.domain.model.AuditEvent;
@@ -26,6 +29,7 @@ import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
 import com.shoppilot.common.web.RequestIdContext;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -95,13 +99,17 @@ public class AnalysisAppService {
     private final AnalysisRunMapper runMapper;
     private final AiServiceClient aiServiceClient;
     private final AuditWriteService auditWriteService;
+    /** 只读装配器（M4-B20.1：解除 {@code R120} / {@code R123}；application 不直连 Mapper）。 */
+    private final AnalysisItemAssembler itemAssembler;
 
     public AnalysisAppService(AnalysisRunMapper runMapper,
                               AiServiceClient aiServiceClient,
-                              AuditWriteService auditWriteService) {
+                              AuditWriteService auditWriteService,
+                              AnalysisItemAssembler itemAssembler) {
         this.runMapper = runMapper;
         this.aiServiceClient = aiServiceClient;
         this.auditWriteService = auditWriteService;
+        this.itemAssembler = itemAssembler;
     }
 
     /**
@@ -126,28 +134,39 @@ public class AnalysisAppService {
         validateDateRange(request);
         validatePromptVersion(request, params);
 
+        // b2. 默认仓解析（§5.36 Q3/Q4）：请求未指定仓时解析团队默认仓，**解析结果贯穿三处**
+        //     （落库 / 幂等比对 / 并发保护）。★ 若比对仍用请求原值，首次回填后再用同一
+        //     Idempotency-Key 重投（请求依旧不带仓）会被判成「异体」→ 误报 COM-0009。
+        Long resolvedWarehouseId = itemAssembler.resolveWarehouseId(snapshot.teamId(), request.warehouseId());
+
         // c. 幂等：命中槽位 → 比对；一致直接返回既有 run
         AnalysisRunEntity existing = findByIdempotencyKey(key);
         if (existing != null) {
-            return reconcile(existing, request, scope, params);
+            return reconcile(existing, request, scope, params, resolvedWarehouseId);
         }
 
         // d. 并发保护 ANL-7001（同团队 + 同 scope_type + 仓库相等 + 范围相交 + 进行中）
-        assertNoConflictingRun(scope, request.warehouseId());
+        assertNoConflictingRun(scope, resolvedWarehouseId);
+
+        // e0. 装配 items（§5.36 Q5）：**必须在 insertPending 之前**——
+        //     跨团队/非 ACTIVE SKU、无默认仓、SKU 超限都是纯客户端校验错误，
+        //     它们不应留下一个 FAILED 的 run 与一条 FINISH 审计。
+        List<AiRunItem> items = itemAssembler.assemble(snapshot.teamId(), resolvedWarehouseId,
+                scope, request.dateFrom(), request.dateTo());
 
         // e. 落库（PENDING 快照；run_no 撞键重取序列，上限 3 次）
         //    ★ R108/A2：撞键后若回查到同键 run（并发窗口），必须回到 c 的幂等判定——
         //    同体返回既有（replayed=true），异体 COM-0009；禁止直接返回 concurrent 跳过比对。
         AnalysisRunEntity saved;
         try {
-            saved = insertPending(snapshot, request, scope, params, key);
+            saved = insertPending(snapshot, request, scope, params, key, resolvedWarehouseId);
         } catch (IdempotentRace race) {
-            return reconcile(race.existing(), request, scope, params);
+            return reconcile(race.existing(), request, scope, params, resolvedWarehouseId);
         }
 
         // f/g. 发起；失败置 FAILED（不留 PENDING 悬挂）后原样上抛
         try {
-            aiServiceClient.createAnalysisRun(toAiRequest(saved, scope, params, request));
+            aiServiceClient.createAnalysisRun(toAiRequest(saved, scope, params, request, items));
         } catch (BizException ex) {
             markFailed(saved, ex.getErrorCode(), ex.getMessage());
             auditFinish(snapshot, saved, AuditResult.FAILURE,
@@ -251,11 +270,13 @@ public class AnalysisAppService {
     private static CreateRunOutcome reconcile(AnalysisRunEntity existing,
                                               CreateAnalysisRunRequest request,
                                               AnalysisScope scope,
-                                              AnalysisParams params) {
+                                              AnalysisParams params,
+                                              Long resolvedWarehouseId) {
         boolean sameBody = Objects.equals(existing.getScopeType(), scope.scopeType().name())
                 && CanonicalJson.jsonEquals(CanonicalJson.parseOrNull(existing.getScopeJson()),
                         CanonicalJson.parseOrNull(scope.canonicalJson()))
-                && Objects.equals(existing.getWarehouseId(), request.warehouseId())
+                // ★ Q3：比对用**解析后**的仓库，而非请求原值（请求可为 null = 默认仓）
+                && Objects.equals(existing.getWarehouseId(), resolvedWarehouseId)
                 // ★ date_from / date_to 的落库载体：data_start_date / data_end_date
                 //   （DATABASE_DESIGN §5.14 定义即「输入销售数据最早/最晚日期」= 请求窗口；
                 //   表无独立 date_from/date_to 列，且本批禁新增迁移）
@@ -346,7 +367,8 @@ public class AnalysisAppService {
                                             CreateAnalysisRunRequest request,
                                             AnalysisScope scope,
                                             AnalysisParams params,
-                                            String idempotencyKey) {
+                                            String idempotencyKey,
+                                            Long resolvedWarehouseId) {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         String dayPrefix = RUN_NO_PREFIX + RUN_NO_DATE.format(now) + "-";
 
@@ -354,7 +376,9 @@ public class AnalysisAppService {
         entity.setStatus(AnalysisRunStatus.PENDING.name());
         entity.setScopeType(scope.scopeType().name());
         entity.setScopeJson(scope.canonicalJson());
-        entity.setWarehouseId(request.warehouseId());
+        // ★ Q4：insert 直接写解析值（不做二次 UPDATE 回填）；列虽标注「不可变」，
+        //   但这是**初始化**而非变更——请求没带仓时这里写的就是该 run 的默认仓。
+        entity.setWarehouseId(resolvedWarehouseId);
         entity.setParamsJson(params.canonicalJson());
         entity.setAlgorithmVersion(request.algorithmVersion());
         entity.setPromptVersion(blankToNull(request.promptVersion()));
@@ -489,15 +513,39 @@ public class AnalysisAppService {
                 .build());
     }
 
+    /**
+     * 构造数据质量预检的出站请求（{@code AI_SERVICE_CONTRACT §3.1}；解除 {@code R123}）。
+     *
+     * <p>与 {@link #createRun} <b>共用</b> {@link AnalysisItemAssembler}：预检若仍发空
+     * {@code items}，Python 侧 {@code assess} 恒判 {@code analyzable=false}，
+     * 用户永远看不到「哪些 SKU 够分析」。
+     *
+     * <p>★ 本批不落 run、不写审计、不调 Python（{@code §5.36} 裁定 #5）；
+     * 供 {@code B20.2} 把预检接进对外链路时调用。
+     *
+     * @param warehouseId 限定仓库（{@code null} ⇒ 解析团队默认仓，与 runs 同口径）
+     */
+    public AiValidateRequest buildValidateRequest(AnalysisScope scope,
+                                                  AnalysisParams params,
+                                                  LocalDate dateFrom,
+                                                  LocalDate dateTo,
+                                                  Long warehouseId) {
+        Long teamId = TeamContext.require().teamId();
+        Long resolvedWarehouseId = itemAssembler.resolveWarehouseId(teamId, warehouseId);
+        List<AiRunItem> items = itemAssembler.assemble(teamId, resolvedWarehouseId, scope, dateFrom, dateTo);
+        return AiValidateRequest.of(teamId, resolvedWarehouseId, scope, dateFrom, dateTo, params, items);
+    }
+
     // =====================================================================
     // 内部：内部契约请求构造与工具
     // =====================================================================
 
-    /** 领域模型 → 内部契约请求（{@code items} 按裁定②恒空数组）。 */
+    /** 领域模型 + 装配结果 → 内部契约请求（{@code items} 由 {@code AnalysisItemAssembler} 给出）。 */
     private static AiRunCreateRequest toAiRequest(AnalysisRunEntity run,
                                                   AnalysisScope scope,
                                                   AnalysisParams params,
-                                                  CreateAnalysisRunRequest request) {
+                                                  CreateAnalysisRunRequest request,
+                                                  List<AiRunItem> items) {
         return new AiRunCreateRequest(
                 run.getId(),
                 run.getTeamId(),
@@ -509,7 +557,7 @@ public class AnalysisAppService {
                 run.getAlgorithmVersion(),
                 run.getPromptVersion(),
                 run.getModelName(),
-                List.of());
+                items);
     }
 
     private static String primaryRole(TeamContext.Snapshot snapshot) {
