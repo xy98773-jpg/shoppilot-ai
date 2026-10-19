@@ -8,7 +8,10 @@ import com.shoppilot.analysis.core.AiProperties;
 import com.shoppilot.analysis.infrastructure.ai.AiServiceClient;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiParams;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiRunCreateEnvelope;
+import com.shoppilot.analysis.infrastructure.ai.dto.AiResultItem;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiRunCreateRequest;
+import com.shoppilot.analysis.infrastructure.ai.dto.AiRunResultData;
+import com.shoppilot.analysis.infrastructure.ai.dto.AiRunStatusData;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiScope;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiValidateParams;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiValidateRequest;
@@ -381,6 +384,142 @@ class AiServiceClientTest {
 
         assertEquals("ANL-7002", ex.getErrorCode());
         assertEquals(0, recorded.size());
+    }
+
+    // =====================================================================
+    // M4-B20.2：状态查询（3s）与结果查询（10s）
+    // =====================================================================
+
+    @Test
+    @DisplayName("fetchStatus：GET 状态端点、透写头、按契约字段解析；超时取契约常量 3000")
+    void fetchStatusReadsStatusEndpoint() {
+        responseStatus = 200;
+        responseBody = """
+                {"code":"OK","request_id":"req_b202_status",
+                 "data":{"analysis_run_id":30001,"execution_status":"RUNNING","progress":40,
+                         "current_step":"RISK_RULES","total_skus":3,"processed_skus":2,
+                         "llm_status":"PENDING","started_at":"2026-10-19T08:00:01.000Z",
+                         "finished_at":null,"error":null}}
+                """;
+
+        AiServiceClient client = newClient();
+        AiRunStatusData data = client.fetchStatus(30001L);
+
+        assertEquals(30001L, data.analysisRunId());
+        assertEquals("RUNNING", data.executionStatus());
+        assertEquals(40, data.progress());
+        assertEquals("RISK_RULES", data.currentStep());
+        assertEquals("PENDING", data.llmStatus());
+        assertEquals(3000, client.getStatusTimeoutMs(), "§13.4：状态查询 3s");
+
+        Recorded last = recorded.get(recorded.size() - 1);
+        assertEquals("GET", last.method());
+        assertEquals("/internal/v1/analysis/runs/30001", last.path());
+        assertEquals(TOKEN, last.headers().getFirst("X-Internal-Token"));
+        assertEquals("req_b15_client_0001", last.headers().getFirst("X-Request-Id"), "链路头须透传");
+    }
+
+    @Test
+    @DisplayName("fetchResult：取结果端点、28 字段 item、超时取契约常量 10000")
+    void fetchResultReadsResultEndpoint() {
+        responseBody = """
+                {"code":"OK","request_id":"req_b202_result",
+                 "data":{"analysis_run_id":30001,"execution_status":"COMPLETED",
+                         "algorithm_version":"avg-ma-3sigma-v1","prompt_version":"explain_risk.v1",
+                         "model_name":"gpt-4o-mini","llm_status":"TIMEOUT",
+                         "data_start_date":"2026-09-16","data_end_date":"2026-10-13",
+                         "summary":{"total_skus":1,"risk_sku_count":1,"suggestion_count":1,
+                                    "truncated_count":0,"by_risk_level":{"HIGH":1}},
+                         "items":[{"sku_id":5001,"warehouse_id":100,"avg_daily_sales":"6.250",
+                                   "sales_qty_total":"162.500","valid_days":26,"data_quality":"GOOD",
+                                   "risk_level":"HIGH","risk_types":["STOCKOUT","LOW_STOCK"],
+                                   "risk_findings":[{"rule_code":"R-LOWSTOCK",
+                                                     "inputs":{"IP":"8.000"},
+                                                     "threshold":"IP < D * (L + R) = 87.500",
+                                                     "result":"MEDIUM"}],
+                                   "on_hand_qty":"8.000","effective_in_transit_qty":"0.000",
+                                   "committed_qty":"0.000","inventory_position":"-5.000",
+                                   "safety_stock":"25.000","lead_time_days":7,"lead_time_source":"SKU",
+                                   "coverage_days":7,"cv":"0.4200","volatility_adjusted":false,
+                                   "q_base":"104.500","moq_applied":"50.000",
+                                   "order_multiple_applied":"10.000","q_suggest":"110.000",
+                                   "truncated_by_budget":false,"llm_explanation":null,
+                                   "llm_evidence":[],"llm_status":"TIMEOUT","warnings":[]}]}}
+                """;
+
+        AiServiceClient client = newClient();
+        AiRunResultData data = client.fetchResult(30001L);
+
+        assertEquals(30001L, data.analysisRunId());
+        assertEquals("TIMEOUT", data.llmStatus());
+        assertEquals(10000, client.getResultTimeoutMs(), "§3.5：结果 10s（结果可能较大）");
+        assertEquals(1, data.itemsOrEmpty().size());
+        AiResultItem item = data.itemsOrEmpty().get(0);
+        assertEquals("-5.000", item.inventoryPosition(), "★ IP 允许负值（R118），解析层不得截断/拒绝");
+        assertEquals("0.4200", item.cv(), "cv 保持 4 位字符串，不得被 float 化");
+        assertEquals(List.of("STOCKOUT", "LOW_STOCK"), item.riskTypesOrEmpty());
+        assertEquals("R-LOWSTOCK", item.riskFindingsOrEmpty().get(0).ruleCode());
+        assertEquals("/internal/v1/analysis/runs/30001/result",
+                recorded.get(recorded.size() - 1).path());
+    }
+
+    @Test
+    @DisplayName("AI-6001（任务不存在）→ ANL-7005；AI-6002（结果未就绪）→ ANL-7012；均不外泄 AI- 前缀")
+    void statusAndResultErrorsMapToExternalCodes() {
+        responseStatus = 404;
+        responseBody = """
+                {"code":"AI-6001","message":"Internal run not found","detail":{},"request_id":"r1"}
+                """;
+        BizException notFound = assertThrows(BizException.class, () -> newClient().fetchStatus(30001L));
+        assertEquals("ANL-7005", notFound.getErrorCode());
+
+        responseStatus = 409;
+        responseBody = """
+                {"code":"AI-6002","message":"Result not ready","detail":{},"request_id":"r2"}
+                """;
+        BizException notReady = assertThrows(BizException.class, () -> newClient().fetchResult(30001L));
+        assertEquals("ANL-7012", notReady.getErrorCode());
+
+        assertFalse(notFound.getMessage().contains("AI-"),
+                "对外文案不得含 AI- 前缀（§12 不变量）");
+        assertFalse(notReady.getMessage().contains("AI-"));
+    }
+
+    @Test
+    @DisplayName("状态/结果：2xx 但无 data ⇒ ANL-7004；判空 ⇒ ANL-7002 且零请求")
+    void unreadableOrUnconfiguredStatusIsRejected() {
+        responseStatus = 200;
+        responseBody = """
+                {"code":"OK","request_id":"r","data":null}
+                """;
+        assertEquals("ANL-7004",
+                assertThrows(BizException.class, () -> newClient().fetchStatus(30001L)).getErrorCode());
+
+        recorded.clear();
+        properties.setInternalToken("");
+        assertEquals("ANL-7002",
+                assertThrows(BizException.class, () -> newClient().fetchResult(30001L)).getErrorCode());
+        assertEquals(0, recorded.size(), "判空时不得发请求（R92）");
+    }
+
+    @Test
+    @DisplayName("cancelBestEffort：失败只返回 false、不抛（超时兜底不得被远端失败拖垮）")
+    void cancelIsBestEffort() {
+        responseStatus = 409;
+        responseBody = """
+                {"code":"AI-6002","message":"already terminal","detail":{},"request_id":"r"}
+                """;
+        assertFalse(newClient().cancelBestEffort(30001L));
+
+        responseStatus = 200;
+        responseBody = """
+                {"code":"OK","data":{"analysis_run_id":30001,"execution_status":"CANCELLED",
+                 "cancelled_at":"2026-10-19T08:00:00Z"},"request_id":"r"}
+                """;
+        assertTrue(newClient().cancelBestEffort(30001L));
+        assertEquals("POST", recorded.get(recorded.size() - 1).method());
+        assertEquals("/internal/v1/analysis/runs/30001:cancel",
+                recorded.get(recorded.size() - 1).path(), "★ 冒号动作后缀（R93）");
     }
 
     // =====================================================================

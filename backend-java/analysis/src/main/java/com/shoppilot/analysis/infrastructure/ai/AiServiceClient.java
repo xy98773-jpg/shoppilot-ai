@@ -8,6 +8,10 @@ import com.shoppilot.analysis.core.AiProperties;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiErrorEnvelope;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiRunCreateEnvelope;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiRunCreateRequest;
+import com.shoppilot.analysis.infrastructure.ai.dto.AiRunResultData;
+import com.shoppilot.analysis.infrastructure.ai.dto.AiRunResultEnvelope;
+import com.shoppilot.analysis.infrastructure.ai.dto.AiRunStatusData;
+import com.shoppilot.analysis.infrastructure.ai.dto.AiRunStatusEnvelope;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiValidateEnvelope;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiValidateRequest;
 import com.shoppilot.common.error.ErrorCodes;
@@ -93,38 +97,65 @@ public class AiServiceClient {
     private final AiProperties aiProperties;
     private final RestClient validateClient;
     private final RestClient createClient;
+    private final RestClient statusClient;
+    private final RestClient resultClient;
     private final int validateTimeoutMs;
     private final int createTimeoutMs;
+    private final int statusTimeoutMs;
+    private final int resultTimeoutMs;
 
     /**
-     * Spring 装配用构造器：读契约常量超时（5s / 10s）。
+     * Spring 装配用构造器：读契约常量超时（5s / 10s / 3s / 10s）。
      *
-     * <p>{@code @Autowired} 标在此处而非四参构造器：Spring 需要的是一个「全部入参可由容器提供」的构造器，
-     * 两个 {@code int} 只能由测试显式传入。
+     * <p>{@code @Autowired} 标在此处而非多参构造器：Spring 需要的是一个「全部入参可由容器提供」的
+     * 构造器，几个 {@code int} 只能由测试显式传入。
      */
     @Autowired
     public AiServiceClient(RestClient.Builder builder, AiProperties aiProperties) {
-        this(builder, aiProperties, AiContract.TIMEOUT_VALIDATE_MS, AiContract.TIMEOUT_CREATE_MS);
+        this(builder, aiProperties,
+                AiContract.TIMEOUT_VALIDATE_MS, AiContract.TIMEOUT_CREATE_MS,
+                AiContract.TIMEOUT_STATUS_MS, AiContract.TIMEOUT_RESULT_MS);
     }
 
     /**
      * 可注入超时的构造器（供单测缩短等待）。
      *
-     * @param builder          Spring Boot 自动配置的 {@code RestClient.Builder}（clone 后各建一个客户端）
-     * @param aiProperties     AI 服务地址与令牌
+     * @param builder           Spring Boot 自动配置的 {@code RestClient.Builder}（clone 后各建一个客户端）
+     * @param aiProperties      AI 服务地址与令牌
      * @param validateTimeoutMs 预检超时（毫秒）
      * @param createTimeoutMs   发起超时（毫秒）
      */
     public AiServiceClient(RestClient.Builder builder, AiProperties aiProperties,
                            int validateTimeoutMs, int createTimeoutMs) {
+        this(builder, aiProperties, validateTimeoutMs, createTimeoutMs,
+                AiContract.TIMEOUT_STATUS_MS, AiContract.TIMEOUT_RESULT_MS);
+    }
+
+    /**
+     * 六参构造器（M4-B20.2：把状态 3s / 结果 10s 也做成可注入，便于超时单测）。
+     *
+     * <p>四参构造器保留：{@code AiServiceClientTest} 的既有用例按 4 参构造，
+     * 状态/结果超时走契约常量即可，<b>不必</b>让每个既有用例都多传两个数。
+     */
+    public AiServiceClient(RestClient.Builder builder, AiProperties aiProperties,
+                           int validateTimeoutMs, int createTimeoutMs,
+                           int statusTimeoutMs, int resultTimeoutMs) {
         this.aiProperties = aiProperties;
         this.validateTimeoutMs = validateTimeoutMs;
         this.createTimeoutMs = createTimeoutMs;
+        this.statusTimeoutMs = statusTimeoutMs;
+        this.resultTimeoutMs = resultTimeoutMs;
         this.validateClient = builder.clone()
                 .requestFactory(requestFactory(validateTimeoutMs))
                 .build();
         this.createClient = builder.clone()
                 .requestFactory(requestFactory(createTimeoutMs))
+                .build();
+        this.statusClient = builder.clone()
+                .requestFactory(requestFactory(statusTimeoutMs))
+                .build();
+        this.resultClient = builder.clone()
+                .requestFactory(requestFactory(resultTimeoutMs))
                 .build();
     }
 
@@ -136,6 +167,16 @@ public class AiServiceClient {
     /** 发起读/连超时（毫秒）；供测试断言契约常量。 */
     public int getCreateTimeoutMs() {
         return createTimeoutMs;
+    }
+
+    /** 状态查询读/连超时（毫秒）；供测试断言契约常量 {@code TIMEOUT_STATUS_MS=3000}。 */
+    public int getStatusTimeoutMs() {
+        return statusTimeoutMs;
+    }
+
+    /** 结果查询读/连超时（毫秒）；供测试断言契约常量 {@code TIMEOUT_RESULT_MS=10000}。 */
+    public int getResultTimeoutMs() {
+        return resultTimeoutMs;
     }
 
     // =====================================================================
@@ -273,6 +314,154 @@ public class AiServiceClient {
     }
 
     // =====================================================================
+    // 状态查询（GET /internal/v1/analysis/runs/{id}，3s，仅网络错误重试 1 次）
+    // =====================================================================
+
+    /**
+     * 查询分析任务状态（{@code AI_SERVICE_CONTRACT.md §3.4}）。
+     *
+     * <p>调用方：{@code AnalysisRunSyncService}（定时扫描与 {@code GET /runs/{id}} 读时同步共用）。
+     *
+     * <p>★ 返回值<b>不</b>做业务判定：{@code execution_status} 是 Python 的执行态，
+     * 映射成 Java 的 {@code AnalysisRunStatus} 是应用层的职责（{@code §13.2} Java 是权威）。
+     * 本方法只负责「拿到结构化状态」与「把 HTTP 层失败翻译成对外码」。
+     *
+     * @throws BizException {@code ANL-7005}（{@code AI-6001} 任务不存在）、
+     *                      {@code ANL-7003}（读超时）、{@code ANL-7002}（未配置/连接失败 2 次/HTTP 错误）、
+     *                      {@code ANL-7004}（2xx 但响应体不可解析或无 data）
+     */
+    public AiRunStatusData fetchStatus(long analysisRunId) {
+        requireConfigured("fetchStatus");
+        String path = AiContract.PATH_RUN.replace("{analysisRunId}", Long.toString(analysisRunId));
+        try {
+            AiRunStatusEnvelope envelope = getWithRetry(statusClient, path, "fetchStatus",
+                    AiRunStatusEnvelope.class);
+            if (envelope == null || envelope.data() == null) {
+                throw unreadableResponse("fetchStatus", null);
+            }
+            return envelope.data();
+        } catch (RestClientException ex) {
+            if (isReadTimeout(ex)) {
+                throw transportFailure(ex, "fetchStatus", true);
+            }
+            if (isTransportFailure(ex)) {
+                throw transportFailure(ex, "fetchStatus", false);
+            }
+            throw unreadableResponse("fetchStatus", ex);
+        }
+    }
+
+    // =====================================================================
+    // 结果查询（GET /internal/v1/analysis/runs/{id}/result，10s，仅网络错误重试 1 次）
+    // =====================================================================
+
+    /**
+     * 拉取分析结果（{@code AI_SERVICE_CONTRACT.md §3.5}）。
+     *
+     * <p>★ 只在 {@code execution_status=COMPLETED} 后调用；本方法<b>不</b>二次校验，
+     * 校验在 {@code AnalysisResultWriteService}（18 项，{@code §7}）。
+     *
+     * @throws BizException {@code ANL-7012}（{@code AI-6002} 结果未就绪）、{@code ANL-7005}
+     *                      （{@code AI-6001} 任务不存在）、{@code ANL-7003}（读超时）、
+     *                      {@code ANL-7002}（未配置/连接失败/HTTP 错误）、{@code ANL-7004}（响应不可解析）
+     */
+    public AiRunResultData fetchResult(long analysisRunId) {
+        requireConfigured("fetchResult");
+        String path = AiContract.PATH_RUN_RESULT.replace("{analysisRunId}", Long.toString(analysisRunId));
+        try {
+            AiRunResultEnvelope envelope = getWithRetry(resultClient, path, "fetchResult",
+                    AiRunResultEnvelope.class);
+            if (envelope == null || envelope.data() == null) {
+                throw unreadableResponse("fetchResult", null);
+            }
+            return envelope.data();
+        } catch (RestClientException ex) {
+            if (isReadTimeout(ex)) {
+                throw transportFailure(ex, "fetchResult", true);
+            }
+            if (isTransportFailure(ex)) {
+                throw transportFailure(ex, "fetchResult", false);
+            }
+            throw unreadableResponse("fetchResult", ex);
+        }
+    }
+
+    /**
+     * 取消分析任务（{@code AI_SERVICE_CONTRACT.md §3.6}），<b>尽力而为</b>。
+     *
+     * <p>★ 只在超时兜底路径调用（{@code §5.38} 裁定 #5）：本地已置 {@code TIMEOUT}，
+     * Python 侧的任务若还在跑会白白占额度。取消失败<b>只 WARN</b>、不抛异常、
+     * 不影响本地终态——本地 {@code TIMEOUT} 是权威（{@code §13.2}），远端取消只是资源回收的善意尝试。
+     *
+     * @return 是否取消成功（供调用方记日志；失败不抛）
+     */
+    public boolean cancelBestEffort(long analysisRunId) {
+        if (!aiProperties.isConfigured()) {
+            return false;
+        }
+        String path = AiContract.PATH_RUN_CANCEL.replace("{analysisRunId}", Long.toString(analysisRunId));
+        try {
+            createClient.post()
+                    .uri(uri(path))
+                    .headers(headers -> headers.setAll(outboundHeaders()))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of())
+                    .retrieve()
+                    .onStatus(HttpStatusCode::isError, (req, res) -> {
+                        throw translateError(res.getStatusCode().value(), res, path);
+                    })
+                    .toBodilessEntity();
+            return true;
+        } catch (BizException ex) {
+            log.warn("取消分析任务失败（不影响本地终态）：runId={} code={}", analysisRunId, ex.getErrorCode());
+            return false;
+        } catch (RuntimeException ex) {
+            log.warn("取消分析任务异常（不影响本地终态）：runId={} err={}", analysisRunId, ex.toString());
+            return false;
+        }
+    }
+
+    /**
+     * GET + 仅网络错误重试 1 次（状态/结果两个读端点共用）。
+     *
+     * <p>与 POST 的 {@link #createWithRetry} 同构：HTTP 4xx/5xx 与解析失败都<b>不</b>重试
+     * （重试必然同样失败），只有「连接类 I/O 失败」重试 1 次；读超时直接转 {@code ANL-7003}
+     * （{@code §13.4}：状态 3s / 结果 10s 都是端到端预算，重试会把它放大一倍）。
+     */
+    private <T> T getWithRetry(RestClient client, String path, String operation, Class<T> bodyType) {
+        RestClientException lastFailure = null;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                return client.get()
+                        .uri(uri(path))
+                        .headers(headers -> headers.setAll(outboundHeaders()))
+                        .accept(MediaType.APPLICATION_JSON)
+                        .retrieve()
+                        .onStatus(HttpStatusCode::isError, (req, res) -> {
+                            throw translateError(res.getStatusCode().value(), res, path);
+                        })
+                        .body(bodyType);
+            } catch (RestClientException ex) {
+                if (!isTransportFailure(ex)) {
+                    throw ex;
+                }
+                if (isReadTimeout(ex)) {
+                    throw transportFailure(ex, operation, true);
+                }
+                lastFailure = ex;
+                log.warn("AI 服务连接失败（第 {}/{} 次）：path={} err={}",
+                        attempt, MAX_ATTEMPTS, path, ex.toString());
+                if (attempt < MAX_ATTEMPTS) {
+                    backoff();
+                }
+            }
+        }
+        throw lastFailure == null
+                ? new BizException(ErrorCodes.ANL_7002, userMessage(ErrorCodes.ANL_7002))
+                : lastFailure;
+    }
+
+    // =====================================================================
     // 内部：配置判空 / 传输异常归类 / 错误体映射
     // =====================================================================
 
@@ -388,7 +577,12 @@ public class AiServiceClient {
     }
 
     private int timeoutOf(String operation) {
-        return "validate".equals(operation) ? validateTimeoutMs : createTimeoutMs;
+        return switch (operation) {
+            case "validate" -> validateTimeoutMs;
+            case "create" -> createTimeoutMs;
+            case "fetchStatus" -> statusTimeoutMs;
+            default -> resultTimeoutMs;
+        };
     }
 
     /**

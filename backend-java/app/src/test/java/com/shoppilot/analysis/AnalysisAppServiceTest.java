@@ -613,7 +613,12 @@ class AnalysisAppServiceTest {
 
         assertNull(jdbc.queryForObject("SELECT scope_json FROM analysis_runs WHERE id=?",
                 String.class, outcome.data().runId()));
-        assertEquals(0, outcome.data().totalSkus(), "非 SELECTED_SKUS 的 total_skus 为 0");
+        // ★ R135（§5.38 裁定 #14，M4-B20.2）：total_skus 的语义由「请求声明数」改为
+        //   「装配后实际数」。旧断言「非 SELECTED_SKUS 的 total_skus 为 0」的前提
+        //   （ALL_ACTIVE 无法从请求推出数量）已不成立——本类夹具里有 2 个 ACTIVE SKU。
+        assertEquals(2, outcome.data().totalSkus(),
+                "R135：ALL_ACTIVE 的 total_skus 是装配后的实际 SKU 数（团队 7 有 SKU_A/SKU_B "
+                        + "两个 ACTIVE；SKU_OTHER 属团队 8 不计），不再是 0");
     }
 
     // =====================================================================
@@ -630,7 +635,9 @@ class AnalysisAppServiceTest {
         TeamContext.set(TeamContext.Snapshot.of(
                 OTHER_TEAM_ID, List.of("OPERATOR"), OTHER_OPERATOR_ID, "operator8"));
         // ★ Q14：切到团队 8 后必须用**该团队**的 SKU（裁定 #3：SELECTED_SKUS 逐个校验归属）
-        appService.createRun(selectedSkus(List.of(SKU_OTHER)), "team-2");
+        // ★ R128（§5.38 第四节，M4-B20.2）：同时不得显式传**他团队**的仓——那会 COM-0001
+        //   （details.reason=仓库不属于当前团队）。故第二个 run 不传仓，走团队 8 的默认仓解析。
+        appService.createRun(selectedSkus(List.of(SKU_OTHER), null, null), "team-2");
 
         assertEquals(OTHER_TEAM_ID, jdbc.queryForObject(
                 "SELECT team_id FROM analysis_runs WHERE idempotency_key='team-2'", Long.class));

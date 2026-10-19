@@ -29,6 +29,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -39,6 +40,14 @@ import org.springframework.stereotype.Component;
  * <p><b>职责</b>：把「范围」解析成一组 {@link AiRunItem}（内部契约 {@code items[]}），
  * 供 {@code AnalysisAppService.toAiRequest} 与预检 {@code buildValidateRequest} 共用。
  * <b>纯只读</b>：不写库、不写审计、不调外部服务。
+ *
+ * <h2>★ 定位升级：analysis 对 catalog / inventory 的只读查询门面（§5.38 裁定 #12）</h2>
+ * <p>M4-B20.2 起本类除「装配」外，还承载<b>结果二次校验所需的主数据回读</b>（{@code R132}）：
+ * {@link #loadSkuRefs} / {@link #warehouseTeamId} / {@link #loadInTransitQty}。
+ * 之所以仍走本类而不是 application 直连 Mapper：{@code §5.36} 裁定 #1
+ * <b>禁止 application 直连 Mapper</b>，而这些查询要跨 catalog / inventory 两个模块。
+ * 这三个方法全部<b>带租户线</b>（{@code BaseMapper} + LambdaQuery），
+ * 因此<b>不需要</b>新增任何 {@code @InterceptorIgnore} 受控例外。
  *
  * <h2>★ 装配位置与依赖（§5.36 裁定 #1/#2）</h2>
  * <p>放在 {@code infrastructure} 层是因为它要直连各模块的 <b>只读</b> Mapper；
@@ -128,6 +137,16 @@ public class AnalysisItemAssembler {
      */
     public Long resolveWarehouseId(Long teamId, Long requestedWarehouseId) {
         if (requestedWarehouseId != null) {
+            // ★ R128（§5.38 第四节，2026-10-19 顺手补）：显式传入的仓库若**不属于本团队**
+            //   ⇒ COM-0001，而不是「装配全 0 → Python 判 AI-2002」。后者对用户是误导：
+            //   他以为自己选了一个仓，实际上什么都没算。
+            //   只针对**显式传入**；默认仓解析路径本来就带 team_id 条件，不受影响。
+            Long ownerTeamId = warehouseMapper.selectTeamIdById(requestedWarehouseId);
+            if (ownerTeamId == null || !Objects.equals(ownerTeamId, teamId)) {
+                throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                        List.of(new ApiErrorDetail("warehouse_id", "仓库不属于当前团队",
+                                requestedWarehouseId)));
+            }
             return requestedWarehouseId;
         }
         List<WarehouseEntity> defaults = warehouseMapper.selectList(
@@ -191,6 +210,81 @@ public class AnalysisItemAssembler {
                     sku.getSupplierId() == null ? null : suppliers.get(sku.getSupplierId())));
         }
         return List.copyOf(items);
+    }
+
+    // =====================================================================
+    // 结果二次校验所需的主数据回读（M4-T12 / §5.38 裁定 #12 / R132）
+    // =====================================================================
+
+    /**
+     * 回读 SKU 的团队 / 状态 / 商品（{@code AI_SERVICE_CONTRACT §7} 第 2 项 + {@code R132} 的
+     * {@code product_id} 来源）。
+     *
+     * <p><b>带租户线</b>：查不到 = 不存在<b>或</b>属他团队，两者在业务上同为「拒绝」，
+     * 不做区分（避免向调用方泄露他团队 SKU 是否存在）。
+     *
+     * @return {@code sku_id -> SkuRef}；查不到的 sku_id <b>不在 map 中</b>（调用方按缺失判定）
+     */
+    public Map<Long, SkuRef> loadSkuRefs(Collection<Long> skuIds) {
+        Map<Long, SkuRef> byId = new LinkedHashMap<>();
+        for (List<Long> chunk : chunks(skuIds)) {
+            for (SkuEntity sku : skuMapper.selectList(Wrappers.<SkuEntity>lambdaQuery()
+                    .in(SkuEntity::getId, chunk)
+                    .select(SkuEntity::getId, SkuEntity::getTeamId, SkuEntity::getStatus,
+                            SkuEntity::getProductId))) {
+                byId.put(sku.getId(), new SkuRef(sku.getTeamId(), sku.getStatus(), sku.getProductId()));
+            }
+        }
+        return byId;
+    }
+
+    /**
+     * 跨团队探测：给定仓库取其 {@code team_id}（{@code §7} 第 3 项「仓库属于该团队」）。
+     *
+     * <p>复用 catalog 已登记的受控例外 {@code WarehouseMapper#selectTeamIdById}
+     * （仅取 {@code team_id} 单列，{@code API_CONTRACT §5.6}），<b>analysis 不新增例外</b>。
+     *
+     * @return 该仓库的团队；仓库不存在返回 {@code null}
+     */
+    public Long warehouseTeamId(Long warehouseId) {
+        return warehouseId == null ? null : warehouseMapper.selectTeamIdById(warehouseId);
+    }
+
+    /**
+     * 回读在途库存余额（{@code R132}：Python 的 {@code ResultItem} <b>不回显</b>
+     * {@code in_transit_qty}，而该列 {@code NOT NULL}）。
+     *
+     * <p>★ 与出站的 {@code effective_in_transit_qty} <b>口径不同</b>：本方法给的是
+     * 「快照当时的余额列原值」，出站给的是「本次分析使用的有效在途」（R124 临时口径下两者相等，
+     * M6 换回 {@code §10.4} 后会产生差异）。缺行不报错，由调用方兜 {@code 0}。
+     *
+     * @return {@code sku_id -> in_transit_qty}；缺余额行的 sku <b>不在 map 中</b>
+     */
+    public Map<Long, BigDecimal> loadInTransitQty(Collection<Long> skuIds, Long warehouseId) {
+        Map<Long, BigDecimal> bySku = new LinkedHashMap<>();
+        if (warehouseId == null) {
+            return bySku;
+        }
+        for (List<Long> chunk : chunks(skuIds)) {
+            for (InventoryBalanceEntity balance : inventoryBalanceMapper.selectList(
+                    Wrappers.<InventoryBalanceEntity>lambdaQuery()
+                            .in(InventoryBalanceEntity::getSkuId, chunk)
+                            .eq(InventoryBalanceEntity::getWarehouseId, warehouseId)
+                            .select(InventoryBalanceEntity::getSkuId, InventoryBalanceEntity::getInTransitQty))) {
+                bySku.put(balance.getSkuId(), balance.getInTransitQty());
+            }
+        }
+        return bySku;
+    }
+
+    /**
+     * SKU 的最小主数据投影（团队 / 状态 / 所属商品）。
+     *
+     * @param teamId    所属团队（租户线已保证等于当前团队，保留字段便于日志与断言）
+     * @param status    主数据状态（{@code ACTIVE} / 其它）
+     * @param productId 所属商品（落库 {@code analysis_items.product_id} 用；R132）
+     */
+    public record SkuRef(Long teamId, String status, Long productId) {
     }
 
     // =====================================================================

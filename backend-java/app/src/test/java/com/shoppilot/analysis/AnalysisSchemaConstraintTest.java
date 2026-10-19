@@ -5,7 +5,15 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.sql.DataSource;
+import com.shoppilot.analysis.domain.DataQualityGrade;
+import com.shoppilot.analysis.domain.LeadTimeSource;
+import com.shoppilot.analysis.domain.RiskLevel;
+import com.shoppilot.analysis.domain.RiskType;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -543,6 +551,69 @@ class AnalysisSchemaConstraintTest {
     private static String queryString(String sql) throws Exception {
         List<String> out = queryStrings(sql);
         return out.isEmpty() ? null : out.get(0);
+    }
+
+    // =====================================================================
+    // T10（M4-B20.2）：CHECK 取值集合 == Java 枚举（防两边各自演进）
+    // =====================================================================
+
+    @Test
+    @DisplayName("T10 ck_ai_risk_level / ck_ai_lead_time_source 的取值集合与 Java 枚举完全一致")
+    void enumValuesMatchJavaEnums() throws Exception {
+        Set<String> riskLevelCheck = quotedLiterals(checkClause("analysis_items", "ck_ai_risk_level"));
+        assertEquals(new TreeSet<>(RiskLevel.codes()), riskLevelCheck,
+                "ck_ai_risk_level 的取值集合必须与 RiskLevel.codes() 完全一致（DESIGN_BASIS §9.9）");
+
+        Set<String> leadTimeCheck = quotedLiterals(checkClause("analysis_items", "ck_ai_lead_time_source"));
+        assertEquals(new TreeSet<>(LeadTimeSource.codes()), leadTimeCheck,
+                "ck_ai_lead_time_source 的取值集合必须与 LeadTimeSource.codes() 完全一致（§10.2）");
+
+        // 无 CHECK 的两枚举：断言它们与 Python 侧 Literal 同名同值（§7 第 5/6 项的判定依据）
+        assertEquals(Set.of("STOCKOUT", "LOW_STOCK", "OVERSTOCK", "SLOW_MOVING",
+                "SALES_ANOMALY", "DATA_INSUFFICIENT"), new TreeSet<>(RiskType.codes()),
+                "RiskType 必须是 6 值（LOWSTOCK 是 RuleCode，不是 RiskType —— R115）");
+        assertEquals(Set.of("GOOD", "FAIR", "POOR", "INSUFFICIENT"),
+                new TreeSet<>(DataQualityGrade.codes()),
+                "DataQualityGrade 必须是 4 值（ANALYSIS_CONTRACT §4.2）");
+
+        // fail-closed：未知取值必须解析为 null，而不是「就近映射」成一个合法枚举
+        assertNull(RiskLevel.fromCode("CRITICAL"));
+        assertNull(RiskLevel.fromCode("LOWSTOCK"));
+        assertNull(LeadTimeSource.fromCode("MAGIC"));
+        assertNull(RiskType.fromCode("LOWSTOCK"));
+        assertNull(DataQualityGrade.fromCode("EXCELLENT"));
+    }
+
+    /** 读 {@code information_schema.check_constraints} 里该 CHECK 的表达式。 */
+    private static String checkClause(String table, String constraint) throws Exception {
+        // table 仅用于失败信息定位；CHECK 表达式本身不含表名
+        List<String> clauses = queryStrings(
+                "SELECT check_clause FROM information_schema.check_constraints "
+                        + "WHERE constraint_schema = DATABASE() AND constraint_name = '"
+                        + constraint + "'");
+        assertEquals(1, clauses.size(), "CHECK " + constraint + " 应恰好存在一条，实测 " + clauses.size());
+        return clauses.get(0);
+    }
+
+    /**
+     * 从 CHECK 表达式里抽出全部单引号字面量。
+     *
+     * <p>★ MySQL 8 在 {@code information_schema.check_constraints} 里返回的是
+     * <b>反序列化后的源码文本</b>，字符集 introducer 与引号都被转义，实际形如
+     * {@code (`risk_level` in (_utf8mb4\'NONE\',_utf8mb4\'LOW\',...))}。
+     * 因此解析必须做两件事：容忍 {@code _utf8mb4} 前缀、剥掉字面量<b>首尾</b>的反斜杠
+     * （Java 字符串里写作 {@code \\'} 的那个转义序列）。
+     *
+     * <p>另：CHECK 表达式只含<b>列名</b>、不含表名，故不做「提及表名」的断言
+     * （表名归属已由 {@code T8} 的负向插入断言覆盖）。
+     */
+    private static Set<String> quotedLiterals(String clause) {
+        Set<String> out = new TreeSet<>();
+        Matcher matcher = Pattern.compile("(?:_[a-zA-Z0-9]+)?\\\\'([^']*)\\\\'").matcher(clause);
+        while (matcher.find()) {
+            out.add(matcher.group(1));
+        }
+        return out;
     }
 
     private static List<String> queryStrings(String sql) throws Exception {

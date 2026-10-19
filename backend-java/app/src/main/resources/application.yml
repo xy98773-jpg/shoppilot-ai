@@ -71,6 +71,20 @@ shoppilot:
     internal-token: ${AI_INTERNAL_TOKEN:}
     base-url: ${AI_SERVICE_BASE_URL:http://service-ai:8000}
 
+  # M4-B20.2：分析运行的轮询/超时扫描（DESIGN_REVIEW §5.38 裁定 #8）。
+  # ★ enabled 默认 false 是**硬要求**：本仓 34+ 个 @SpringBootTest 都会加载本文件，
+  #   一旦开启会在后台真打 Python，表现为随机超时与端口占用（测试红但本地复现不了）。
+  #   真栈/生产由部署侧注入 ANALYSIS_POLL_ENABLED=true 打开。
+  # ★ 与 AnalysisRunPollTask / AnalysisSchedulingConfiguration 共用同一开关。
+  analysis:
+    poll:
+      enabled: ${ANALYSIS_POLL_ENABLED:false}
+      # 轮询间隔 5s；首次延迟 10s（给 service-ai 容器留启动时间）
+      fixed-delay-ms: 5000
+      initial-delay-ms: 10000
+      # 单轮最多处理 50 条进行中运行（idx_run_timeout 走 (status, timeout_at)）
+      scan-limit: 50
+
 # M3-T02：导入原始文件落盘根目录（本地存储；不引入 MinIO/S3 等对象存储，见 IMPORT_WORKFLOW §4）。
 # 实际路径 = {storage-dir}/{teamId}/{yyyyMM}/{batchNo}_{消毒后文件名}。
 app:

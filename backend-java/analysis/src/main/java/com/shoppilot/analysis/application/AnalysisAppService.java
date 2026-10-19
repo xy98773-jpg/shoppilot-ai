@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.shoppilot.analysis.application.dto.CreateAnalysisRunRequest;
 import com.shoppilot.analysis.application.dto.CreateRunOutcome;
+import com.shoppilot.analysis.application.dto.AnalysisRunStatusResponse;
 import com.shoppilot.analysis.application.dto.CreateRunResponse;
 import com.shoppilot.analysis.domain.AnalysisParams;
 import com.shoppilot.analysis.domain.AnalysisRunStatus;
@@ -101,15 +102,19 @@ public class AnalysisAppService {
     private final AuditWriteService auditWriteService;
     /** 只读装配器（M4-B20.1：解除 {@code R120} / {@code R123}；application 不直连 Mapper）。 */
     private final AnalysisItemAssembler itemAssembler;
+    /** 状态同步（M4-B20.2：轮询 / 超时兜底；{@code GET /runs/{id}} 的读时同步也走它）。 */
+    private final AnalysisRunSyncService syncService;
 
     public AnalysisAppService(AnalysisRunMapper runMapper,
                               AiServiceClient aiServiceClient,
                               AuditWriteService auditWriteService,
-                              AnalysisItemAssembler itemAssembler) {
+                              AnalysisItemAssembler itemAssembler,
+                              AnalysisRunSyncService syncService) {
         this.runMapper = runMapper;
         this.aiServiceClient = aiServiceClient;
         this.auditWriteService = auditWriteService;
         this.itemAssembler = itemAssembler;
+        this.syncService = syncService;
     }
 
     /**
@@ -159,7 +164,7 @@ public class AnalysisAppService {
         //    同体返回既有（replayed=true），异体 COM-0009；禁止直接返回 concurrent 跳过比对。
         AnalysisRunEntity saved;
         try {
-            saved = insertPending(snapshot, request, scope, params, key, resolvedWarehouseId);
+            saved = insertPending(snapshot, request, scope, params, key, resolvedWarehouseId, items.size());
         } catch (IdempotentRace race) {
             return reconcile(race.existing(), request, scope, params, resolvedWarehouseId);
         }
@@ -184,6 +189,39 @@ public class AnalysisAppService {
         log.info("分析任务已创建：runId={} runNo={} teamId={} scopeType={} totalSkus={}",
                 saved.getId(), saved.getRunNo(), snapshot.teamId(), saved.getScopeType(), saved.getTotalSkus());
         return new CreateRunOutcome(CreateRunResponse.from(saved), false);
+    }
+
+    /**
+     * 查询分析运行状态（{@code GET /api/v1/analysis/runs/{id}}；M4-T05 的<b>读时同步</b>通道）。
+     *
+     * <p>★ 读时同步：仅当 {@code status ∈ {PENDING, RUNNING}} 时先向 Python 拉一次状态再回响应
+     * （{@code §5.38} 裁定 #2 的双通道：定时扫描 + 读时同步）。终态<b>不</b>触发——
+     * Java 已是权威，没有理由为一个已完成的 run 再打扰对端。
+     *
+     * <p>★ 静默降级（{@code R134}）：Python 超时 / 5xx / 未配置时，只记 WARN 并返回<b>库内现状</b>，
+     * <b>不抛异常</b>。理由：3s 的对端超时若变成用户看到的 500，轮询页就完全不可用；
+     * 用户看到的进度可能滞后于真实进度，但前端轮询会自愈（R134 的前端约定）。
+     *
+     * @param runId 运行 ID
+     * @return 状态响应（同步失败时是库内快照，可能滞后）
+     * @throws BizException {@code ANL-7005}（不存在或跨团队——租户线使两者同表现，不泄漏他团队是否存在）
+     */
+    public AnalysisRunStatusResponse getRunStatus(Long runId) {
+        AnalysisRunEntity run = runMapper.selectById(runId);
+        if (run == null) {
+            throw new BizException(ErrorCodes.ANL_7005, "分析任务不存在");
+        }
+        if (run.getStatus() == AnalysisRunStatus.PENDING.name()
+                || run.getStatus() == AnalysisRunStatus.RUNNING.name()) {
+            // ★ 同步失败不外抛：syncFromPython 内部已 try/catch 并记 WARN
+            syncService.syncFromPython(run);
+            // 同步可能已推进状态（COMPLETED → 落库 → 终态），必须重新读回
+            AnalysisRunEntity refreshed = runMapper.selectById(runId);
+            if (refreshed != null) {
+                run = refreshed;
+            }
+        }
+        return AnalysisRunStatusResponse.from(run);
     }
 
     // =====================================================================
@@ -368,7 +406,8 @@ public class AnalysisAppService {
                                             AnalysisScope scope,
                                             AnalysisParams params,
                                             String idempotencyKey,
-                                            Long resolvedWarehouseId) {
+                                            Long resolvedWarehouseId,
+                                            int assembledCount) {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         String dayPrefix = RUN_NO_PREFIX + RUN_NO_DATE.format(now) + "-";
 
@@ -389,7 +428,11 @@ public class AnalysisAppService {
         //   B19/B20 回写结果时不得覆盖已有值，否则重放判定会漂移。
         entity.setDataStartDate(request.dateFrom());
         entity.setDataEndDate(request.dateTo());
-        entity.setTotalSkus(scope.plannedSkuCount());
+        // ★ R135（§5.38 裁定 #14）：total_skus 的语义由「请求声明数」改为「装配后实际数」。
+        //   B20.1 之前用 scope.plannedSkuCount()，对 ALL_ACTIVE/CATEGORY 恒为 0——
+        //   用户看到「计划 0 个 SKU」而 Python 实际算了 N 个。装配已在 insertPending 之前完成，
+        //   因此直接写 items.size()，无需二次 UPDATE。
+        entity.setTotalSkus(assembledCount);
         entity.setProcessedSkus(0);
         entity.setProgress(0);
         entity.setRequestId(RequestIdContext.get());

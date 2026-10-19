@@ -3,6 +3,7 @@ package com.shoppilot.analysis.api;
 import com.shoppilot.analysis.application.AnalysisAppService;
 import com.shoppilot.analysis.application.dto.CreateAnalysisRunRequest;
 import com.shoppilot.analysis.application.dto.CreateRunOutcome;
+import com.shoppilot.analysis.application.dto.AnalysisRunStatusResponse;
 import com.shoppilot.analysis.application.dto.CreateRunResponse;
 import com.shoppilot.common.annotation.RequireRole;
 import com.shoppilot.common.error.ErrorCodes;
@@ -13,6 +14,8 @@ import jakarta.validation.Valid;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -25,9 +28,10 @@ import org.springframework.web.bind.annotation.RestController;
  * <h2>本批端点清单</h2>
  * <ul>
  *   <li>{@code POST /api/v1/analysis/runs} —— 创建分析任务（{@code OPERATOR+}，202）。</li>
+ *   <li>{@code GET /api/v1/analysis/runs/{id}} —— 运行状态与进度（<b>任何已登录成员，含 VIEWER</b>，200）。</li>
  * </ul>
  *
- * <p><b>不做</b>（留给 B20/B22）：轮询 {@code GET /runs/{id}}、取消、结果查询、明细、导出。
+ * <p><b>不做</b>（留给 B20.3/B22）：取消（M4-T14）、结果明细（M4-T13）、列表、导出。
  *
  * <h2>★ 三个边界</h2>
  * <ol>
@@ -80,6 +84,24 @@ public class AnalysisController {
             builder.header(HEADER_IDEMPOTENT_REPLAYED, "true");
         }
         return builder.body(ApiResponse.success(outcome.data()));
+    }
+
+    /**
+     * 查询分析运行状态（{@code GET /api/v1/analysis/runs/{id}}）。
+     *
+     * <p>★ 权限：<b>任何已登录成员（含 VIEWER）</b>——只读状态，不改任何业务数据
+     * （{@code API_CONTRACT §11.5} 的端点表与 {@code §9} 权限矩阵均如此规定）。
+     * 因此<b>不加</b> {@code @RequireRole}：那是给「OPERATOR+」的写操作用的，
+     * 加了会把 VIEWER 挡在轮询页外面。
+     *
+     * <p>★ 读时同步：中间态会先向 Python 拉一次状态；同步失败<b>静默降级</b>返回库内现状
+     * （{@code R134}），本方法不抛异常。
+     *
+     * @param runId 运行 ID；不存在或跨团队均取 {@code ANL-7005}（404，不区分两者）
+     */
+    @GetMapping("/runs/{id}")
+    public ResponseEntity<ApiResponse<AnalysisRunStatusResponse>> getRunStatus(@PathVariable("id") Long runId) {
+        return ResponseEntity.ok(ApiResponse.success(analysisAppService.getRunStatus(runId)));
     }
 
     /** 幂等键必填校验（缺失/空白/超长 → {@code COM-0010}，400）。 */

@@ -85,8 +85,13 @@ class M2_TenantIsolationDbIntegrationTest {
             "SkuMapper#selectTeamIdByCode",
             "AuditLogMapper#insert",                        // 无上下文（登录失败）也要能写：显式 team_id
             "AuditLogMapper#selectRecentByBiz",             // 显式 team_id 条件
-            "InventoryBalanceMapper#insertIfAbsent"         // 并发首次建行：ON DUPLICATE KEY UPDATE
+            "InventoryBalanceMapper#insertIfAbsent",        // 并发首次建行：ON DUPLICATE KEY UPDATE
                                                             //   （自带 team_id 列 + 解析兼容性，见其 Javadoc）
+            "AnalysisRunMapper#selectInFlightAcrossTeams"    // 系统级超时扫描（R133，M4-B20.2）：
+                                                            //   跑在无 TeamContext 的后台线程里，带租户线会退化成
+                                                            //   「拒绝查询」；显式 @Select 只取 id/team_id/status/timeout_at，
+                                                            //   逐条按 team_id 处理，不泄漏跨团队数据
+                                                            //   （与 idx_run_timeout 的 status 最左例外同源）
     );
 
     @DynamicPropertySource
@@ -232,7 +237,7 @@ class M2_TenantIsolationDbIntegrationTest {
     // =====================================================================
 
     @Test
-    @DisplayName("T-5.1-b 反射扫描全部 BaseMapper：绕过租户线的方法恰为 8 处白名单，且每处都有显式 SQL")
+    @DisplayName("T-5.1-b 反射扫描全部 BaseMapper：绕过租户线的方法恰为白名单，且每处都有显式 SQL")
     void tenantLineExceptionsAreExactlyTheWhitelist() throws Exception {
         ClassPathScanningCandidateComponentProvider scanner =
                 new ClassPathScanningCandidateComponentProvider(false) {

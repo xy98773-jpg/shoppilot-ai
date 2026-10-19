@@ -51,6 +51,14 @@ public final class AiContract {
     /** 状态查询读超时（{@code DESIGN_BASIS.md §13.4}：状态查询 3s）。 */
     public static final int TIMEOUT_STATUS_MS = 3000;
 
+    /**
+     * 结果查询读超时（{@code AI_SERVICE_CONTRACT.md §3.5}：结果可能较大，10s；仅网络错误重试 1 次）。
+     *
+     * <p>M4-B20.2 新增：{@code B15} 只需预检（5s）与发起（10s）两个超时，
+     * 状态/结果两个读端点由本批补齐，故在此固化第三个（第四个）超时常量。
+     */
+    public static final int TIMEOUT_RESULT_MS = 10000;
+
     /** 内部调用统一的内容类型（{@code AI_SERVICE_CONTRACT.md §2}：请求与响应均为 JSON）。 */
     public static final String CONTENT_TYPE_JSON = "application/json";
 
