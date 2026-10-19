@@ -127,8 +127,20 @@ Content-Type: application/json
     "min_days": 7
   },
   "items": [
-    { "sku_id": 5001, "sales_series": [{ "date": "2026-09-16", "qty": "6.000" }] },
-    { "sku_id": 5002, "sales_series": [] }
+    {
+      "sku_id": 5001,
+      "on_hand_qty": "8.000",
+      "committed_qty": "0.000",
+      "effective_in_transit_qty": "0.000",
+      "sales_series": [{ "date": "2026-09-16", "qty": "6.000" }]
+    },
+    {
+      "sku_id": 5002,
+      "on_hand_qty": "0.000",
+      "committed_qty": "0.000",
+      "effective_in_transit_qty": "0.000",
+      "sales_series": []
+    }
   ]
 }
 ```

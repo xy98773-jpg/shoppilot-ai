@@ -240,7 +240,7 @@
 | --- | --- | --- | --- | --- | --- |
 | `AI-0001` | 401 | 内部令牌缺失或无效 | `X-Internal-Token` 不匹配 `AI_INTERNAL_TOKEN` | `ANL-7002`（502），run `FAILED` | 否（配置问题） |
 | `AI-1001` | 400 | 请求 Schema 校验失败 | 请求体不合法/超 8MB | `ANL-7004`（422），run `FAILED` | 否 |
-| `AI-1002` | 400 | `analysis_run_id` 缺失或非法 | 未传/格式错；或幂等请求体不一致 | `ANL-7004`，run `FAILED` | 否 |
+| `AI-1002` | 400 | `analysis_run_id` 缺失或非法 | 未传/格式错；**幂等请求体不一致时按 `AI_SERVICE_CONTRACT §6.2` 返回 409**（同一码两场景、两种状态） | `ANL-7004`，run `FAILED` | 否 |
 | `AI-1003` | 404 | 内部路径不存在 | 请求了 `AI_SERVICE_CONTRACT.md §3` **未定义**的内部路径（Java 侧路径常量写错、或两端版本不匹配） | `ANL-7002`（502），run `FAILED` | 否（编程错误，重试必然同样失败） |
 | `AI-1004` | 405 | 内部方法不允许 | 路径存在但 HTTP 方法不匹配（如对 `analysis:validate` 发 `GET`） | `ANL-7002`（502），run `FAILED` | 否（编程错误） |
 | `AI-2001` | 422 | SKU 必需数据缺失 | `items[]` 缺 `sales_series`/`on_hand_qty` 等 | run `FAILED` | 否 |

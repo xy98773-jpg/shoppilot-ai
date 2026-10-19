@@ -1,0 +1,92 @@
+[PASS] T1 health 免令牌 200
+       EXPECT=[200, {'status': 'UP'}]
+       ACTUAL=[200, {'status': 'UP'}]
+[PASS] T2 validate 无令牌 ⇒ 401 AI-0001
+       EXPECT=[401, 'AI-0001']
+       ACTUAL=[401, 'AI-0001']
+[PASS] T3 validate 200 OK
+       EXPECT=[200, 'OK', True]
+       ACTUAL=[200, 'OK', True]
+[PASS] T3 validate total_skus=2 / analyzable_skus=1
+       EXPECT=[2, 1]
+       ACTUAL=[2, 1]
+[PASS] T3 request_id 体==响应头
+       EXPECT='req_rb192_t3'
+       ACTUAL='req_rb192_t3'
+[PASS] T4 create 无令牌 ⇒ 401 AI-0001
+       EXPECT=[401, 'AI-0001']
+       ACTUAL=[401, 'AI-0001']
+T5_RAW 202 {"code": "OK", "data": {"analysis_run_id": 7001, "execution_status": "ACCEPTED", "accepted_at": "2026-10-19T12:44:47.183848Z"}, "request_id": "req_rb192_t5"}
+[PASS] T5 create 202 ACCEPTED
+       EXPECT=[202, 'OK', 'ACCEPTED', 7001]
+       ACTUAL=[202, 'OK', 'ACCEPTED', 7001]
+[PASS] T5 accepted_at 带时区
+       EXPECT=True
+       ACTUAL=True
+[PASS] T5 request_id 体==响应头
+       EXPECT='req_rb192_t5'
+       ACTUAL='req_rb192_t5'
+[PASS] T6 终态 COMPLETED/100/DONE
+       EXPECT=['COMPLETED', 100, 'DONE']
+       ACTUAL=['COMPLETED', 100, 'DONE']
+T6_KEYS ['analysis_run_id', 'current_step', 'error', 'execution_status', 'finished_at', 'llm_status', 'processed_skus', 'progress', 'started_at', 'total_skus']
+[PASS] T6 字段齐备（契约 §3.4）
+       EXPECT=['analysis_run_id', 'current_step', 'error', 'execution_status', 'finished_at', 'llm_status', 'processed_skus', 'progress', 'started_at', 'total_skus']
+       ACTUAL=['analysis_run_id', 'current_step', 'error', 'execution_status', 'finished_at', 'llm_status', 'processed_skus', 'progress', 'started_at', 'total_skus']
+[PASS] T7 result 200 + summary
+       EXPECT=[200, 2, 1]
+       ACTUAL=[200, 2, 1]
+[PASS] T7 by_risk_level 只含有值的键
+       EXPECT={'HIGH': 1, 'NONE': 1}
+       ACTUAL={'HIGH': 1, 'NONE': 1}
+[PASS] T8 同体重发 ⇒ 202 + 当前状态
+       EXPECT=[202, 'COMPLETED']
+       ACTUAL=[202, 'COMPLETED']
+[PASS] T8 未重复执行（started_at/finished_at 未变）
+       EXPECT=True
+       ACTUAL=True
+T9_RAW 409 {"code": "AI-1002", "message": "Missing or invalid analysis_run_id", "detail": {"existing_hash": "08fc9956", "incoming_hash": "dce0a361", "analysis_run_id": 7001}, "request_id": "req_rb192_t9"}
+[PASS] T9 异体重发 ⇒ 409 AI-1002
+       EXPECT=[409, 'AI-1002']
+       ACTUAL=[409, 'AI-1002']
+[PASS] T9 detail 带两个哈希
+       EXPECT=True
+       ACTUAL=True
+[PASS] T10 状态端点未注册 ⇒ 404 AI-6001
+       EXPECT=[404, 'AI-6001']
+       ACTUAL=[404, 'AI-6001']
+[PASS] T10 结果端点未注册 ⇒ 404 AI-6001
+       EXPECT=[404, 'AI-6001']
+       ACTUAL=[404, 'AI-6001']
+[PASS] T11 GET :validate ⇒ 405 AI-1004
+       EXPECT=[405, 'AI-1004']
+       ACTUAL=[405, 'AI-1004']
+[PASS] T11 未定义路径 ⇒ 404 AI-1003
+       EXPECT=[404, 'AI-1003']
+       ACTUAL=[404, 'AI-1003']
+[PASS] T12 未注册取消 ⇒ 404 AI-6001
+       EXPECT=[404, 'AI-6001']
+       ACTUAL=[404, 'AI-6001']
+[PASS] T12 终态再取消 ⇒ 409 AI-6002
+       EXPECT=[409, 'AI-6002']
+       ACTUAL=[409, 'AI-6002']
+[PASS] T13 R120：空 items ⇒ 202 后编排 FAILED + AI-2002
+       EXPECT=[202, 'FAILED', 'AI-2002']
+       ACTUAL=[202, 'FAILED', 'AI-2002']
+[PASS] T14 R120：缺 warehouse_id ⇒ FAILED + AI-1001
+       EXPECT=[202, 'FAILED', 'AI-1001']
+       ACTUAL=[202, 'FAILED', 'AI-1001']
+T15_CANCEL_RAW 409 {"code": "AI-6002", "message": "Analysis run status does not allow this operation", "detail": {"analysis_run_id": 7004, "execution_status": "COMPLETED", "reason": "run 已终态，不能取消"}, "request_id": "req_rb192_t15b"}
+[PASS] T15a 执行太快时取消 ⇒ 409 AI-6002（终态不可取消）
+       EXPECT=[409, 'AI-6002']
+       ACTUAL=[409, 'AI-6002']
+[PASS] T15b run 终态为 COMPLETED 或 CANCELLED
+       EXPECT=True
+       ACTUAL=True
+[PASS] T15c 已完成取结果 ⇒ 200
+       EXPECT=[200, 2]
+       ACTUAL=[200, 2]
+
+=== SUMMARY ===
+PASS=28 FAIL=0
+RB192R_DONE
