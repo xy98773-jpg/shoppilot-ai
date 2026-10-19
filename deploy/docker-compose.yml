@@ -60,6 +60,9 @@ services:
     restart: unless-stopped
     environment:
       AI_INTERNAL_TOKEN: ${AI_INTERNAL_TOKEN:-changeme_internal_token}
+      # M4-B14（R100）：Python 回调 Java 的地址。与 backend-java 的 AI_SERVICE_BASE_URL
+      # 语义相反（后者是 Java 调 Python），故变量名刻意不同，不得混用。
+      JAVA_BACKEND_BASE_URL: ${JAVA_BACKEND_BASE_URL:-http://backend-java:8080}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-}
@@ -88,7 +91,7 @@ services:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-}
       JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx512m}
       AI_INTERNAL_TOKEN: ${AI_INTERNAL_TOKEN:-changeme_internal_token}
-      AI_BASE_URL: http://service-ai:8000
+      AI_SERVICE_BASE_URL: ${AI_SERVICE_BASE_URL:-http://service-ai:8000}
       # M2-T02：JWT 签名密钥（DESIGN_BASIS §15 D-01 / ADR-001-12 风险表：密钥绝不入业务代码）。
       # 集成交付必须通过环境变量注入真实密钥（此默认值仅为占位，禁止用于生产）。
       JWT_SECRET: ${JWT_SECRET:-CHANGE_ME_jwt_secret_min_32_chars}
