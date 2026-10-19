@@ -23,24 +23,17 @@
 from __future__ import annotations
 
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
-from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import BaseModel, ConfigDict
 
 from shoppilot_ai.app.analytics.sales_stats import SalesStats
-from shoppilot_ai.app.schemas.analysis_request import Decimal3Str, Item, Params
+from shoppilot_ai.app.schemas.analysis_request import (
+    Decimal3Str,
+    Item,
+    Params,
+    SignedDecimal3Str,
+)
 from shoppilot_ai.app.schemas.analysis_response import LeadTimeSourceValue
-
-#: 带符号的 3 位小数字符串。
-#:
-#: ★ 为什么不复用 `Decimal3Str`：`IP = on_hand + eff_in_transit − committed` **允许为负**
-#: （超卖/已承诺大于在手+在途，`§5.30` 补货口径 B2 明示；`ANALYSIS_CONTRACT §2.1` 对
-#: `inventory_position` 只要求「与三项一致」，**未**要求 `>= 0`）。
-#: 而 `schemas.analysis_response.Decimal3Str` 的正则不含负号——这是 B16 Schema 的收窄，
-#: 本批按 G6 不改 `schemas/`，故在规则层声明带符号类型并在交付汇报中申报，待项目负责人裁定。
-SignedDecimal3Str = Annotated[
-    str, StringConstraints(pattern=r"^-?(0|[1-9][0-9]*)(\.[0-9]{1,3})?$")
-]
 
 _QUANT_3 = Decimal("0.001")
 _ZERO = Decimal("0")
@@ -194,7 +187,6 @@ def _fmt(value: Decimal) -> str:
 
 __all__ = [
     "Replenishment",
-    "SignedDecimal3Str",
     "compute_replenishment",
     "resolve_lead_time",
 ]

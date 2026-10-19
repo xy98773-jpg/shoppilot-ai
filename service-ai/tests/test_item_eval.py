@@ -14,6 +14,7 @@ from decimal import Decimal
 
 from shoppilot_ai.app.analytics.evaluate import ItemEvaluation, evaluate_items
 from shoppilot_ai.app.schemas.analysis_request import Item, Params
+from shoppilot_ai.app.schemas.analysis_response import ResultItem
 
 START = date(2026, 1, 1)
 DATE_TO = START + timedelta(days=27)
@@ -320,3 +321,26 @@ def test_risk_findings_are_not_empty_for_adequate_data() -> None:
     evaluation = evaluate_one(make_item(["5.000"] * 28, on_hand="8.000"))
     assert len(evaluation.risk_findings) == 5
     assert all(finding.threshold for finding in evaluation.risk_findings)
+
+
+# --------------------------------------------------------------------------- #
+# R118：负 IP 的组装路径（`B19` 会用 ResultItem(**evaluation.model_dump())）
+# --------------------------------------------------------------------------- #
+def test_negative_ip_round_trips_into_result_item() -> None:
+    evaluation = evaluate_one(
+        make_item(["5.000"] * 28, on_hand="0.000", committed="5.000")
+    )
+    assert evaluation.inventory_position == "-5.000"
+    assert evaluation.q_base == "95.000"
+
+    result = ResultItem(
+        **evaluation.model_dump(),
+        llm_explanation=None,
+        llm_evidence=[],
+        llm_status="SKIPPED",
+    )
+
+    assert result.inventory_position == "-5.000"
+    assert result.q_base == "95.000"
+    assert result.q_suggest == "95.000"
+    assert result.llm_status == "SKIPPED"

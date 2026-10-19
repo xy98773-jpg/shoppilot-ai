@@ -46,6 +46,17 @@ Decimal3Str = Annotated[str, StringConstraints(pattern=r"^(0|[1-9][0-9]*)(\.[0-9
 #: 比率：非负十进制，最多 4 位小数（`ANALYSIS_CONTRACT §1.1` decimal4）。
 Decimal4Str = Annotated[str, StringConstraints(pattern=r"^(0|[1-9][0-9]*)(\.[0-9]{1,4})?$")]
 
+#: 带符号的数量：**仅用于 `inventory_position`（`IP`）**。
+#:
+#: `IP = on_hand + eff_in_transit − committed` 允许为负（超卖：`committed` 大于在手+在途），
+#: `analysis_items.inventory_position_qty` 是有符号 `DECIMAL(18,3)`，`ANALYSIS_CONTRACT §2.1`
+#: 对该字段只要求「与三项一致」、**未要求 ≥0**（`R118`）。
+#: ★ 不得用于 `on_hand_qty` / `committed_qty` / `effective_in_transit_qty` / `q_base` /
+#: `q_suggest` 等非负字段——Java 侧对这些字段有非负校验，放宽会与 Java 不一致。
+SignedDecimal3Str = Annotated[
+    str, StringConstraints(pattern=r"^-?(0|[1-9][0-9]*)(\.[0-9]{1,3})?$")
+]
+
 #: 算法版本：字母数字开头，允许 `._-`，总长 1..64（与 Java 侧 `@Pattern` 同一条正则）。
 ALGORITHM_VERSION_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
 
@@ -239,4 +250,5 @@ __all__ = [
     "SalesPoint",
     "Scope",
     "ScopeType",
+    "SignedDecimal3Str",
 ]

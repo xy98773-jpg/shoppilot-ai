@@ -20,7 +20,7 @@ from pydantic import ValidationError
 
 from shoppilot_ai.app.core.errors import AI_1001, AI_2001, AI_7002, ServiceAIBaseError
 from shoppilot_ai.app.schemas.analysis_request import AnalyzeRequest, Params
-from shoppilot_ai.app.schemas.analysis_response import RunResultResponse
+from shoppilot_ai.app.schemas.analysis_response import ResultItem, RunResultResponse
 
 # --------------------------------------------------------------------------- #
 # 契约 §3.2 请求示例（逐字抄自 AI_SERVICE_CONTRACT.md）
@@ -385,6 +385,48 @@ def test_negative_quantity_string_rejected() -> None:
 
     with pytest.raises(ValidationError):
         AnalyzeRequest.model_validate(payload)
+
+
+# --------------------------------------------------------------------------- #
+# R118：`inventory_position`（IP）允许为负，其余数量字段仍非负
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("value", ["-5.000", "-0.500", "0.000", "10.000"])
+def test_result_item_inventory_position_accepts_signed_decimal(value: str) -> None:
+    payload = deepcopy(RESULT_EXAMPLE["data"]["items"][0])
+    payload["inventory_position"] = value
+
+    item = ResultItem.model_validate(payload)
+
+    assert item.inventory_position == value
+
+
+@pytest.mark.parametrize("value", ["abc", "5.0000", "--5.000"])
+def test_result_item_inventory_position_rejects_invalid(value: str) -> None:
+    payload = deepcopy(RESULT_EXAMPLE["data"]["items"][0])
+    payload["inventory_position"] = value
+
+    with pytest.raises(ValidationError):
+        ResultItem.model_validate(payload)
+
+
+def test_only_inventory_position_accepts_negative() -> None:
+    # `R118` 只放宽 `IP`：其余数量字段若跟着放宽，会与 Java 侧非负校验不一致
+    payload = deepcopy(RESULT_EXAMPLE["data"]["items"][0])
+    payload["inventory_position"] = "-5.000"
+
+    non_negative_fields = (
+        "on_hand_qty",
+        "effective_in_transit_qty",
+        "committed_qty",
+        "safety_stock",
+        "q_base",
+        "q_suggest",
+    )
+    for field in non_negative_fields:
+        broken = deepcopy(payload)
+        broken[field] = "-1.000"
+        with pytest.raises(ValidationError):
+            ResultItem.model_validate(broken)
 
 
 # --------------------------------------------------------------------------- #

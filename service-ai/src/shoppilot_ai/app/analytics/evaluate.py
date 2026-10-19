@@ -29,9 +29,15 @@ from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from pydantic import BaseModel, ConfigDict
 
 from shoppilot_ai.app.analytics.sales_stats import compute_sales_stats
-from shoppilot_ai.app.rules.replenishment import SignedDecimal3Str, compute_replenishment
+from shoppilot_ai.app.rules.replenishment import compute_replenishment
 from shoppilot_ai.app.rules.risk_rules import evaluate_risks
-from shoppilot_ai.app.schemas.analysis_request import Decimal3Str, Decimal4Str, Item, Params
+from shoppilot_ai.app.schemas.analysis_request import (
+    Decimal3Str,
+    Decimal4Str,
+    Item,
+    Params,
+    SignedDecimal3Str,
+)
 from shoppilot_ai.app.schemas.analysis_response import (
     DataQuality,
     LeadTimeSourceValue,
@@ -49,9 +55,9 @@ _ONE = Decimal("1")
 class ItemEvaluation(BaseModel):
     """单 SKU 的确定性结果（`ResultItem` 的 25 个确定性字段，不含 `llm_*`）。
 
-    `inventory_position` 用带符号字符串：`IP` 允许为负（超卖），而
-    `schemas.analysis_response.ResultItem` 的 `Decimal3Str` 正则不含负号——
-    B19 构造 `ResultItem` 前需先由项目负责人裁定 Schema 是否放宽（本批已申报）。
+    `inventory_position` 用 `SignedDecimal3Str`：`IP` 允许为负（超卖）。
+    该类型已上移到 `schemas/analysis_request.py`（`R118`），与 `ResultItem` 同源，
+    因此 `ResultItem(**evaluation.model_dump())` 可直接组装（`B19` 的真实路径）。
     """
 
     model_config = ConfigDict(extra="ignore")

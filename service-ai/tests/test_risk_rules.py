@@ -335,7 +335,9 @@ def test_slowmoving_uses_min_of_thirty_and_window_days() -> None:
     assert finding is not None
     assert finding.result == "MEDIUM"
     assert finding.inputs["observed_days"] == 14
-    assert "14" in finding.threshold and "< 30" in finding.threshold
+    # `B18.1`：去双层括号，文案为「可用窗口 14 天 < 30」
+    assert "可用窗口 14 天 < 30" in finding.threshold
+    assert "（< 30）" not in finding.threshold
     assert any("14 天" in warning for warning in evaluation.warnings)
 
 

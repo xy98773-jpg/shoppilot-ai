@@ -351,7 +351,7 @@ def _slowmoving(
     )
 
     scope_text = (
-        f"近 {observed} 天（可用窗口 {observed} 天（< {SLOW_MOVING_DAYS}））"
+        f"近 {observed} 天（可用窗口 {observed} 天 < {SLOW_MOVING_DAYS}）"
         if observed < SLOW_MOVING_DAYS
         else f"近 {observed} 天"
     )

@@ -26,7 +26,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from shoppilot_ai.app.schemas.analysis_request import Decimal3Str, Decimal4Str
+from shoppilot_ai.app.schemas.analysis_request import (
+    Decimal3Str,
+    Decimal4Str,
+    SignedDecimal3Str,
+)
 from shoppilot_ai.app.schemas.common import Envelope
 
 DataQuality = Literal["GOOD", "FAIR", "POOR", "INSUFFICIENT"]
@@ -154,7 +158,8 @@ class ResultItem(BaseModel):
     on_hand_qty: Decimal3Str
     effective_in_transit_qty: Decimal3Str
     committed_qty: Decimal3Str
-    inventory_position: Decimal3Str
+    #: ★ `R118`：`IP` 允许为负（超卖），故用带符号类型；其余数量字段保持非负。
+    inventory_position: SignedDecimal3Str
     safety_stock: Decimal3Str | None = None
     lead_time_days: int | None = None
     lead_time_source: LeadTimeSourceValue
