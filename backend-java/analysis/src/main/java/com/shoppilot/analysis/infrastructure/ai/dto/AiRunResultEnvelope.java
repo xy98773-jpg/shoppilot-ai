@@ -13,6 +13,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param requestId 链路追踪 ID
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
-public record AiRunResultEnvelope(String code, AiRunResultData data,
+public record AiRunResultEnvelope(@JsonProperty("code") String code,
+                                  @JsonProperty("data") AiRunResultData data,
                                   @JsonProperty("request_id") String requestId) {
 }

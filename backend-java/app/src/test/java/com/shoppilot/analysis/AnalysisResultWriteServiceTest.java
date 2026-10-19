@@ -82,6 +82,19 @@ class AnalysisResultWriteServiceTest {
     private static final long SKU_B = 7402L;
     private static final long SKU_OTHER_TEAM = 7403L;
     private static final long SKU_INACTIVE = 7404L;
+    /**
+     * R138 用的两个同团队 ACTIVE SKU —— <b>刻意只在 {@code unknownRiskLevelIsNotCounted}
+     * 内插入，不进 {@code @BeforeEach} 的共享种子</b>。
+     *
+     * <p>为什么：{@code totalSkusIsAssembledCount} 断言「本夹具的 ACTIVE SKU 数 = 2」，
+     * 共享种子多一个 ACTIVE SKU 就会让它变红——而 C4 要求「其余既有测试一字不动」。
+     * 所以新增主数据必须<b>局部</b>于新用例。
+     *
+     * <p>{@code SKU_D} 承载 UNKNOWN（数据不足）条目，必须与 HIGH 条目的 SKU <b>不同</b>，
+     * 否则 {@code #13} 去重「保留首个」会把它吃掉（本条踩过）。
+     */
+    private static final long SKU_C = 7405L;
+    private static final long SKU_D = 7406L;
 
     private static final String ALGO = "avg-ma-3sigma-v1";
     private static final LocalDate DATE_FROM = LocalDate.of(2026, 9, 16);
@@ -281,6 +294,77 @@ class AnalysisResultWriteServiceTest {
         assertNotNull(row.get("summary_json"));
         assertNotNull(row.get("finished_at"));
         assertEquals(1L, finishAuditCount(runId));
+    }
+
+    // =====================================================================
+    // R138：risk_sku_count 与 Python RISK_LEVELS 同口径
+    // =====================================================================
+
+    /**
+     * R138 回归闸：{@code UNKNOWN}（数据不足、无从判风险）<b>不</b>计入 {@code risk_sku_count}。
+     *
+     * <p>★ 旧实现写的是 {@code risk_level != NONE}，会把 {@code UNKNOWN} 也算进去，
+     * 于是 {@code analysis_runs.risk_sku_count}（Java 自算）与同一行的
+     * {@code summary_json.risk_sku_count}（Python 回传）<b>互相矛盾</b>——
+     * 同一份数据给出两个答案。SSOT 是 Python
+     * {@code orchestration/pipeline.py:66} 的 {@code RISK_LEVELS = {HIGH, MEDIUM, LOW}}。
+     *
+     * <p>本用例刻意造「3 条 HIGH + 1 条 UNKNOWN」：若计数口径写回 {@code != NONE}，
+     * 结果会是 4，与 Python 的 3 不等。
+     */
+    @Test
+    @DisplayName("R138：UNKNOWN 不计入 risk_sku_count；且与 summary_json.risk_sku_count 相等")
+    void unknownRiskLevelIsNotCounted() {
+        // 局部主数据：共享种子只有 2 个 ACTIVE SKU，本用例需要 4 个
+        jdbc.update("INSERT INTO skus (id, team_id, product_id, sku_code, name, status) VALUES "
+                        + "(?, ?, ?, 'SKU-C', '规格C', 'ACTIVE'), "
+                        + "(?, ?, ?, 'SKU-D', '规格D', 'ACTIVE')",
+                SKU_C, TEAM_ID, PRODUCT_A, SKU_D, TEAM_ID, PRODUCT_A);
+        long runId = insertRunWithScope("RUN-R138", List.of(SKU_A, SKU_B, SKU_C, SKU_D),
+                4, "RUNNING", TEAM_ID);
+        when(aiServiceClient.fetchStatus(runId)).thenReturn(new AiRunStatusData(runId, "COMPLETED",
+                100, "DONE", 4, 4, null, null, null, null));
+        // summary.risk_sku_count = 3（Python 口径：只数 HIGH/MEDIUM/LOW）
+        when(aiServiceClient.fetchResult(runId)).thenReturn(new AiRunResultData(runId, "COMPLETED",
+                ALGO, "explain_risk.v1", "gpt-4o-mini", "SKIPPED",
+                DATE_FROM.toString(), DATE_TO.toString(),
+                new AiRunSummary(4, 3, 3, 0, Map.of("HIGH", 3, "UNKNOWN", 1)),
+                List.of(resultItem(SKU_A, WAREHOUSE),
+                        resultItem(SKU_B, WAREHOUSE),
+                        resultItem(SKU_C, WAREHOUSE),
+                        insufficientItem(SKU_D))));
+
+        syncService.syncFromPython(loadRun(runId));
+
+        Map<String, Object> row = runRow(runId);
+        assertEquals("SUCCEEDED", row.get("status"));
+        assertEquals(3L, num(row.get("risk_sku_count")),
+                "R138：3 条 HIGH + 1 条 UNKNOWN ⇒ 只计 3（UNKNOWN 不算有风险）");
+
+        // ★ 自测点：Java 自算的列与 Python 回传的 summary_json 必须给出同一个数。
+        //   summary_json 存的是**规范化**文本（键排序、带空格分隔），故按 "key": 3 匹配。
+        String summaryJson = String.valueOf(row.get("summary_json"));
+        assertTrue(summaryJson.contains("\"risk_sku_count\": 3"),
+                "summary_json.risk_sku_count 应为 3（Python 口径），实际：" + summaryJson);
+        assertEquals(num(row.get("risk_sku_count")),
+                summaryRiskSkuCount(summaryJson),
+                "★ analysis_runs.risk_sku_count（Java 自算）必须等于 summary_json 里的"
+                        + " Python 值（R138：同一份数据不能给出两个答案）");
+
+        // UNKNOWN 条目本身仍要落库（规则结果保留，§12 不变量）
+        assertEquals("UNKNOWN", itemRow(runId, SKU_D).get("risk_level"));
+        assertEquals(4L, count("analysis_items"), "UNKNOWN 条目照常落库，只是不计入风险数");
+    }
+
+    /** 数据不足条目：{@code risk_level=UNKNOWN}、{@code q_base/q_suggest} 为 null。 */
+    private AiResultItem insufficientItem(long skuId) {
+        return new AiResultItem(skuId, WAREHOUSE, null, "9.000", 3, "INSUFFICIENT", "UNKNOWN",
+                List.of("DATA_INSUFFICIENT"),
+                List.of(new AiRiskFinding("R-DATAINSUFFICIENT",
+                        Map.of("valid_days", 3, "min_days", 7), "n < MIN_DAYS(7)", "UNKNOWN")),
+                "0.000", "0.000", "0.000", "0.000", null, 7, "DEFAULT", 7, null,
+                false, null, null, null, null, false,
+                null, List.of(), "SKIPPED", List.of("有效销售天数不足，未产出补货建议"));
     }
 
     // =====================================================================
@@ -819,6 +903,14 @@ class AnalysisResultWriteServiceTest {
                 + "risk_sku_count, suggestion_count, error_code, error_message, llm_status, "
                 + "llm_error_message, started_at, finished_at, data_start_date, data_end_date, "
                 + "summary_json FROM analysis_runs WHERE id = ?", runId);
+    }
+
+    /** 从规范化 {@code summary_json} 文本里抠出 {@code risk_sku_count}（R138 自测点用）。 */
+    private static long summaryRiskSkuCount(String summaryJson) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("\"risk_sku_count\":\\s*(-?\\d+)").matcher(summaryJson);
+        assertTrue(matcher.find(), "summary_json 里应有 risk_sku_count：" + summaryJson);
+        return Long.parseLong(matcher.group(1));
     }
 
     private Map<String, Object> itemRow(long runId, long skuId) {

@@ -79,6 +79,23 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class AnalysisResultWriteService {
 
+    /**
+     * 计入 {@code risk_sku_count} 的 {@code risk_level} 三档（R138）。
+     *
+     * <p><b>依据</b>：{@code service-ai/src/shoppilot_ai/app/orchestration/pipeline.py:66}
+     * <pre>RISK_LEVELS: frozenset[str] = frozenset({"HIGH", "MEDIUM", "LOW"})</pre>
+     * 并由 {@code build_summary} 的 {@code risk_sku_count=sum(1 for item if item.risk_level in RISK_LEVELS)}
+     * 使用；{@code DESIGN_REVIEW §5.32} 裁定 #12。
+     *
+     * <p>★ <b>为什么不能写成 {@code != NONE}</b>：那会把 {@code UNKNOWN}
+     * （数据不足、无从判风险）也算成「有风险」，使 Java 自算的 {@code analysis_runs.risk_sku_count}
+     * 与 Python 回传的 {@code summary_json.risk_sku_count} <b>互相矛盾</b>——
+     * 同一份 {@code summary_json} 会与相邻列给出两个不同答案（R138）。
+     * {@code NONE}（无风险）与 {@code UNKNOWN}（未知）都<b>不</b>计入。
+     */
+    private static final Set<String> RISK_LEVELS_FOR_COUNT = Set.of("HIGH", "MEDIUM", "LOW");
+
+
     private static final Logger log = LoggerFactory.getLogger(AnalysisResultWriteService.class);
 
     /** 审计业务类型（{@code DATABASE_DESIGN §6-J.1}）。 */
@@ -247,7 +264,8 @@ public class AnalysisResultWriteService {
         int suggestionCount = 0;
         for (AiResultItem item : items) {
             AnalysisItemEntity row = validateAndMap(run, params, scope, item, skuRefs, inTransit);
-            if (RiskLevel.fromCode(item.riskLevel()) != RiskLevel.NONE) {
+            // ★ R138：只计 HIGH / MEDIUM / LOW（与 Python RISK_LEVELS 同口径）
+            if (RISK_LEVELS_FOR_COUNT.contains(item.riskLevel())) {
                 riskCount++;
             }
             if (row.getQtySuggest() != null && row.getQtySuggest().signum() > 0) {

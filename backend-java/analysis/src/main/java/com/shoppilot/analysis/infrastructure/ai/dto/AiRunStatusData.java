@@ -1,6 +1,7 @@
 package com.shoppilot.analysis.infrastructure.ai.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * {@code GET /internal/v1/analysis/runs/{id}} 的 {@code data}（{@code AI_SERVICE_CONTRACT.md §3.4}）。
@@ -15,6 +16,15 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  *
  * <p>{@code extra = "ignore"}：Python 可能新增非必填字段，Java 不应因此整包解析失败。
  *
+ *
+ * <p><b>★ {@code @JsonProperty} 逐字段绑定（R137，P1 端到端阻断）</b>：Python 回包键名是
+ * snake_case，而本记录是 Java record（组件名 camelCase）。二者<b>不会</b>自动互转，
+ * 且 Jackson2ObjectMapperBuilder 默认关闭 {@code FAIL_ON_UNKNOWN_PROPERTIES}
+ * ⇒ 未标注时 snake_case 键会<b>静默</b>绑定为 {@code null}（不报错），
+ * 表现为「状态永远停在 RUNNING、结果端点永不调用」。
+ * 因此<b>逐字段</b>标注；<b>禁止</b>改全局 {@code @JsonNaming} 或 ObjectMapper 配置
+ * （那是跨模块共享基建）。
+
  * @param analysisRunId    运行 ID（Java 生成并回显）
  * @param executionStatus  执行状态（ACCEPTED/RUNNING/COMPLETED/FAILED/CANCELLED，<b>非</b> Java 的 AnalysisRunStatus）
  * @param progress         进度档位（5/20/40/60/80/100，{@code R119}；Java 不自算）
@@ -28,14 +38,14 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record AiRunStatusData(
-        Long analysisRunId,
-        String executionStatus,
-        Integer progress,
-        String currentStep,
-        Integer totalSkus,
-        Integer processedSkus,
-        String llmStatus,
-        String startedAt,
-        String finishedAt,
-        AiErrorDetailData error) {
+        @JsonProperty("analysis_run_id") Long analysisRunId,
+        @JsonProperty("execution_status") String executionStatus,
+        @JsonProperty("progress") Integer progress,
+        @JsonProperty("current_step") String currentStep,
+        @JsonProperty("total_skus") Integer totalSkus,
+        @JsonProperty("processed_skus") Integer processedSkus,
+        @JsonProperty("llm_status") String llmStatus,
+        @JsonProperty("started_at") String startedAt,
+        @JsonProperty("finished_at") String finishedAt,
+        @JsonProperty("error") AiErrorDetailData error) {
 }

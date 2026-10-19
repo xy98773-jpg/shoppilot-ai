@@ -1,6 +1,7 @@
 package com.shoppilot.analysis.infrastructure.ai.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 
 /**
@@ -20,6 +21,13 @@ import java.util.List;
  * （← {@code inventory_balances.in_transit_qty}，与 {@code R124} 同源）、
  * {@code sales_window_days}（← 请求 {@code params.window_days}）。
  *
+ *
+ * <p><b>★ {@code @JsonProperty} 逐字段绑定（R137，P1 端到端阻断）</b>：Python 回包键名是
+ * snake_case，而本记录是 Java record（组件名 camelCase），二者<b>不会</b>自动互转；
+ * 又因 {@code FAIL_ON_UNKNOWN_PROPERTIES} 默认关闭，未标注的键<b>静默</b>变 {@code null}。
+ * 28 个字段<b>逐个</b>标注，键名以 {@code AI_SERVICE_CONTRACT §3.5} 与
+ * {@code service-ai/.../schemas/analysis_response.py::ResultItem} 为准。
+
  * @param skuId                  SKU ID
  * @param warehouseId            仓库 ID
  * @param avgDailySales          日均销量 D（数据不足为 null）
@@ -51,34 +59,34 @@ import java.util.List;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record AiResultItem(
-        Long skuId,
-        Long warehouseId,
-        String avgDailySales,
-        String salesQtyTotal,
-        Integer validDays,
-        String dataQuality,
-        String riskLevel,
-        List<String> riskTypes,
-        List<AiRiskFinding> riskFindings,
-        String onHandQty,
-        String effectiveInTransitQty,
-        String committedQty,
-        String inventoryPosition,
-        String safetyStock,
-        Integer leadTimeDays,
-        String leadTimeSource,
-        Integer coverageDays,
-        String cv,
-        Boolean volatilityAdjusted,
-        String qBase,
-        String moqApplied,
-        String orderMultipleApplied,
-        String qSuggest,
-        Boolean truncatedByBudget,
-        String llmExplanation,
-        List<String> llmEvidence,
-        String llmStatus,
-        List<String> warnings) {
+        @JsonProperty("sku_id") Long skuId,
+        @JsonProperty("warehouse_id") Long warehouseId,
+        @JsonProperty("avg_daily_sales") String avgDailySales,
+        @JsonProperty("sales_qty_total") String salesQtyTotal,
+        @JsonProperty("valid_days") Integer validDays,
+        @JsonProperty("data_quality") String dataQuality,
+        @JsonProperty("risk_level") String riskLevel,
+        @JsonProperty("risk_types") List<String> riskTypes,
+        @JsonProperty("risk_findings") List<AiRiskFinding> riskFindings,
+        @JsonProperty("on_hand_qty") String onHandQty,
+        @JsonProperty("effective_in_transit_qty") String effectiveInTransitQty,
+        @JsonProperty("committed_qty") String committedQty,
+        @JsonProperty("inventory_position") String inventoryPosition,
+        @JsonProperty("safety_stock") String safetyStock,
+        @JsonProperty("lead_time_days") Integer leadTimeDays,
+        @JsonProperty("lead_time_source") String leadTimeSource,
+        @JsonProperty("coverage_days") Integer coverageDays,
+        @JsonProperty("cv") String cv,
+        @JsonProperty("volatility_adjusted") Boolean volatilityAdjusted,
+        @JsonProperty("q_base") String qBase,
+        @JsonProperty("moq_applied") String moqApplied,
+        @JsonProperty("order_multiple_applied") String orderMultipleApplied,
+        @JsonProperty("q_suggest") String qSuggest,
+        @JsonProperty("truncated_by_budget") Boolean truncatedByBudget,
+        @JsonProperty("llm_explanation") String llmExplanation,
+        @JsonProperty("llm_evidence") List<String> llmEvidence,
+        @JsonProperty("llm_status") String llmStatus,
+        @JsonProperty("warnings") List<String> warnings) {
 
     /** {@code risk_types} 缺省按空数组（契约声明该字段非空，可为空数组）。 */
     public List<String> riskTypesOrEmpty() {
