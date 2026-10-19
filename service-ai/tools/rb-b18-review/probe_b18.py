@@ -281,10 +281,10 @@ ev = one(neg)
 chk("P17 IP=-5.000", "-5.000", ev.inventory_position)
 chk("P17 Q_base=95.000（-5 计入）", "95.000", ev.q_base)
 try:
-    ResultItem(**ev.model_dump())
-    note("P17 ResultItem 接受负 IP", "ACCEPTED")
+    built = ResultItem(**ev.model_dump(), llm_explanation=None, llm_evidence=[], llm_status="SKIPPED")
+    chk("P17 ResultItem 可组装负 IP（B19 真实路径）", "-5.000", built.inventory_position)
 except ValidationError as exc:
-    note("P17 ResultItem 拒绝负 IP（latent bug）", str(exc).splitlines()[0])
+    chk("P17 ResultItem 可组装负 IP（B19 真实路径）", "-5.000", f"ValidationError: {exc.errors()[0]['msg']}")
 
 # P18 预算截断为 0：q_suggest="0.000"（非 null）+ truncated + warning
 zero = mk_item(values=["5.000"] * 28, on_hand="0.000", step="10.000")
@@ -299,6 +299,25 @@ ev = one(mk_item(values=["5.000"] * 28, on_hand="17.000", mult="10.000"))
 chk("P19 Q_base=73.000", "73.000", ev.q_base)
 chk("P19 q_suggest=80.000（ceil(73/10)*10）", "80.000", ev.q_suggest)
 chk("P19 order_multiple_applied=10.000", "10.000", ev.order_multiple_applied)
+
+
+# P20 只有 inventory_position 放宽：其余数量字段仍拒绝负值
+dump = ev.model_dump()
+for field in ("on_hand_qty", "effective_in_transit_qty", "committed_qty",
+              "safety_stock", "q_base", "q_suggest"):
+    payload = dict(dump, llm_explanation=None, llm_evidence=[], llm_status="SKIPPED")
+    payload[field] = "-1.000"
+    try:
+        ResultItem(**payload)
+        chk(f"P20 {field} 仍拒绝负值", "REJECTED", "ACCEPTED")
+    except ValidationError:
+        chk(f"P20 {field} 仍拒绝负值", "REJECTED", "REJECTED")
+
+# P21 滞销 threshold 文案无双层括号（偏差 D）
+text = finding(one(mk_item(values=["0.000"] * 28, on_hand="5.000")), "R-SLOWMOVING").threshold
+chk("P21 滞销 threshold 含「可用窗口 28 天 < 30」", True, "可用窗口 28 天 < 30" in text)
+chk("P21 滞销 threshold 不再含双层括号", False, "（< 30）" in text)
+chk("P21 滞销 threshold 语义前缀不变", True, text.startswith("近 28 天（"))
 
 print("\n=== SUMMARY ===")
 print(f"PASS={PASS} FAIL={FAIL}")

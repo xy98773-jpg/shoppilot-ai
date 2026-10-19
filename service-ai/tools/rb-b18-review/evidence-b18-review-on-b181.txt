@@ -1,0 +1,211 @@
+
+=== A. §5.30 裁定口径 ===
+[PASS] P01 findings 条数 = 5（已判定五条，DATAINSUFFICIENT 不参与）
+       EXPECT=5
+       ACTUAL=5
+[PASS] P01 findings 顺序
+       EXPECT=['R-STOCKOUT', 'R-LOWSTOCK', 'R-OVERSTOCK', 'R-SLOWMOVING', 'R-SALESANOMALY']
+       ACTUAL=['R-STOCKOUT', 'R-LOWSTOCK', 'R-OVERSTOCK', 'R-SLOWMOVING', 'R-SALESANOMALY']
+[PASS] P01 未命中给 NOT_TRIGGERED（3 条）
+       EXPECT=3
+       ACTUAL=3
+[PASS] P01 SS=25.000（ceil(L*0.5)=4）
+       EXPECT='25.000'
+       ACTUAL='25.000'
+[PASS] P01 Q_base=104.500
+       EXPECT='104.500'
+       ACTUAL='104.500'
+[PASS] P01 q_suggest=110.000（MOQ50/倍数10）
+       EXPECT='110.000'
+       ACTUAL='110.000'
+[PASS] P01 risk_level=HIGH
+       EXPECT='HIGH'
+       ACTUAL='HIGH'
+[PASS] P01 risk_types 顺序
+       EXPECT=['STOCKOUT', 'LOW_STOCK']
+       ACTUAL=['STOCKOUT', 'LOW_STOCK']
+[PASS] P02 findings 条数 = 2（SLOW_MOVING + SALES_ANOMALY）
+       EXPECT=2
+       ACTUAL=2
+[PASS] P02 无 STOCKOUT finding（跳过≠未命中）
+       EXPECT=None
+       ACTUAL=None
+[PASS] P02 跳过 warning 数 = 4（三类库存 + 窗口<30）
+       EXPECT=4
+       ACTUAL=4
+[PASS] P02 SLOW_MOVING=MEDIUM
+       EXPECT='MEDIUM'
+       ACTUAL='MEDIUM'
+[PASS] P02 q_base=0.000
+       EXPECT='0.000'
+       ACTUAL='0.000'
+[PASS] P02 q_suggest=null
+       EXPECT=None
+       ACTUAL=None
+[PASS] P03 findings 条数 = 1
+       EXPECT=1
+       ACTUAL=1
+[PASS] P03 finding=DATAINSUFFICIENT/UNKNOWN
+       EXPECT=('R-DATAINSUFFICIENT', 'UNKNOWN')
+       ACTUAL=('R-DATAINSUFFICIENT', 'UNKNOWN')
+[PASS] P03 risk_level=UNKNOWN
+       EXPECT='UNKNOWN'
+       ACTUAL='UNKNOWN'
+[PASS] P03 risk_types=[DATA_INSUFFICIENT]
+       EXPECT=['DATA_INSUFFICIENT']
+       ACTUAL=['DATA_INSUFFICIENT']
+[PASS] P03 SS/Q_base/moq/multiple/q_suggest 全 null
+       EXPECT=[None, None, None, None, None]
+       ACTUAL=[None, None, None, None, None]
+[PASS] P03 IP 回显=10.000
+       EXPECT='10.000'
+       ACTUAL='10.000'
+[PASS] P03 L/R 回显=7/7
+       EXPECT=[7, 7]
+       ACTUAL=[7, 7]
+[PASS] P03 data_quality=INSUFFICIENT
+       EXPECT='INSUFFICIENT'
+       ACTUAL='INSUFFICIENT'
+[PASS] P04 volatility_adjusted=True
+       EXPECT=True
+       ACTUAL=True
+[PASS] P04 SS = D(7.143)*6
+       EXPECT='42.858'
+       ACTUAL='42.858'
+[PASS] P05 SS=100.000（覆盖）
+       EXPECT='100.000'
+       ACTUAL='100.000'
+[PASS] P05 volatility_adjusted=False（覆盖时不套公式）
+       EXPECT=False
+       ACTUAL=False
+[PASS] P06 Q_base=0.000
+       EXPECT='0.000'
+       ACTUAL='0.000'
+[PASS] P06 q_suggest=null
+       EXPECT=None
+       ACTUAL=None
+[PASS] P06 moq_applied=null（无建议则无生效约束）
+       EXPECT=None
+       ACTUAL=None
+[PASS] P06 order_multiple_applied=null
+       EXPECT=None
+       ACTUAL=None
+[PASS] P06 truncated_by_budget=False
+       EXPECT=False
+       ACTUAL=False
+[PASS] P07 Q_base=31.000
+       EXPECT='31.000'
+       ACTUAL='31.000'
+[PASS] P07 moq_applied=1.000（默认）
+       EXPECT='1.000'
+       ACTUAL='1.000'
+[PASS] P07 q_suggest=36.000（ceil(31/6)*6）
+       EXPECT='36.000'
+       ACTUAL='36.000'
+[PASS] P08 L=7（默认）
+       EXPECT=7
+       ACTUAL=7
+[PASS] P08 source=DEFAULT（忽略 item 的 POLICY）
+       EXPECT='DEFAULT'
+       ACTUAL='DEFAULT'
+
+=== B. SSOT 边界（开发未覆盖） ===
+[PASS] P09 变化率恰 50% ⇒ NOT_TRIGGERED
+       EXPECT='NOT_TRIGGERED'
+       ACTUAL='NOT_TRIGGERED'
+[PASS] P10 变化率 50.05% ⇒ LOW
+       EXPECT='LOW'
+       ACTUAL='LOW'
+[PASS] P11 补零后 last7_avg=1.000
+       EXPECT='1.000'
+       ACTUAL='1.000'
+[PASS] P11 变化率仍为 50% ⇒ NOT_TRIGGERED
+       EXPECT='NOT_TRIGGERED'
+       ACTUAL='NOT_TRIGGERED'
+[PASS] P12 基线记录不足 ⇒ 无 R-SALESANOMALY finding
+       EXPECT=None
+       ACTUAL=None
+[PASS] P12 有跳过 warning（含「基线窗口」）
+       EXPECT=1
+       ACTUAL=1
+[PASS] P13 on_hand/D==2.000 ⇒ HIGH
+       EXPECT='HIGH'
+       ACTUAL='HIGH'
+[PASS] P14 on_hand/D==90 ⇒ NOT_TRIGGERED
+       EXPECT='NOT_TRIGGERED'
+       ACTUAL='NOT_TRIGGERED'
+[PASS] P14 on_hand/D=90.001 ⇒ MEDIUM
+       EXPECT='MEDIUM'
+       ACTUAL='MEDIUM'
+
+=== C. 组合器 / 预算 / Schema ===
+[PASS] P15 data_quality 与 assess() 逐 SKU 一致
+       EXPECT={6001: 'GOOD', 6002: 'POOR', 6003: 'INSUFFICIENT'}
+       ACTUAL={6001: 'GOOD', 6002: 'POOR', 6003: 'INSUFFICIENT'}
+[PASS] P16 A 先：q_suggest=[20.000, 0.000]
+       EXPECT=['20.000', '0.000']
+       ACTUAL=['20.000', '0.000']
+[PASS] P16 A 先：truncated=[True, True]
+       EXPECT=[True, True]
+       ACTUAL=[True, True]
+[PASS] P16 B 先：q_suggest=[18.000, 2.000]
+       EXPECT=['18.000', '2.000']
+       ACTUAL=['18.000', '2.000']
+[PASS] P17 IP=-5.000
+       EXPECT='-5.000'
+       ACTUAL='-5.000'
+[PASS] P17 Q_base=95.000（-5 计入）
+       EXPECT='95.000'
+       ACTUAL='95.000'
+[PASS] P17 ResultItem 可组装负 IP（B19 真实路径）
+       EXPECT='-5.000'
+       ACTUAL='-5.000'
+[PASS] P18 截断为 0 ⇒ q_suggest=0.000
+       EXPECT='0.000'
+       ACTUAL='0.000'
+[PASS] P18 truncated_by_budget=True
+       EXPECT=True
+       ACTUAL=True
+[PASS] P18 有「截断为 0」warning
+       EXPECT=1
+       ACTUAL=1
+[PASS] P19 Q_base=73.000
+       EXPECT='73.000'
+       ACTUAL='73.000'
+[PASS] P19 q_suggest=80.000（ceil(73/10)*10）
+       EXPECT='80.000'
+       ACTUAL='80.000'
+[PASS] P19 order_multiple_applied=10.000
+       EXPECT='10.000'
+       ACTUAL='10.000'
+[PASS] P20 on_hand_qty 仍拒绝负值
+       EXPECT='REJECTED'
+       ACTUAL='REJECTED'
+[PASS] P20 effective_in_transit_qty 仍拒绝负值
+       EXPECT='REJECTED'
+       ACTUAL='REJECTED'
+[PASS] P20 committed_qty 仍拒绝负值
+       EXPECT='REJECTED'
+       ACTUAL='REJECTED'
+[PASS] P20 safety_stock 仍拒绝负值
+       EXPECT='REJECTED'
+       ACTUAL='REJECTED'
+[PASS] P20 q_base 仍拒绝负值
+       EXPECT='REJECTED'
+       ACTUAL='REJECTED'
+[PASS] P20 q_suggest 仍拒绝负值
+       EXPECT='REJECTED'
+       ACTUAL='REJECTED'
+[PASS] P21 滞销 threshold 含「可用窗口 28 天 < 30」
+       EXPECT=True
+       ACTUAL=True
+[PASS] P21 滞销 threshold 不再含双层括号
+       EXPECT=False
+       ACTUAL=False
+[PASS] P21 滞销 threshold 语义前缀不变
+       EXPECT=True
+       ACTUAL=True
+
+=== SUMMARY ===
+PASS=67 FAIL=0
+RB18R_DONE
