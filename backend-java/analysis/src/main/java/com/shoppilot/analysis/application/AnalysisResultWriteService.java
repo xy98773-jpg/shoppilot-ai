@@ -398,10 +398,10 @@ public class AnalysisResultWriteService {
         row.setRiskLevel(riskLevel.name());
         row.setRiskTypes(riskTypesJson(riskTypes));
         row.setRiskDetailJson(riskFindingsJson(item.riskFindingsOrEmpty()));
-        row.setDataQualityJson(dataQualityJson(grade.name(), item.warnings()));
+        row.setDataQualityJson(dataQualityJson(grade, item.validDays(), windowDays(params)));
         row.setLlmExplanation(truncateExplanation(item.llmExplanation()));
         // ★ §8 细化规则 2：LLM 明细单独一列，不得混进 risk/data_quality JSON
-        row.setLlmDetailJson(llmDetailJson(item.llmStatus(), item.llmEvidenceOrEmpty()));
+        row.setLlmDetailJson(llmDetailJson(run, item));
         row.setCreatedBy(run.getTriggeredBy());
         return row;
     }
@@ -674,8 +674,17 @@ public class AnalysisResultWriteService {
         return CanonicalJson.canonicalize(array);
     }
 
+    /**
+     * {@code risk_detail_json}（{@code ANALYSIS_CONTRACT §9.3}）：{@code {"findings":[...]}}。
+     *
+     * <p>★ {@code R139}：由<b>裸数组</b>改为 {@code findings} 键包裹的对象——{@code §9.3} 的
+     * 权威示例就是 {@code {"findings":[...], "warnings":[]}}，其中 {@code warnings} 经
+     * {@code §5.41} 裁定归 {@code llm_detail_json}（{@code R141}），本列<b>只放 findings</b>。
+     * finding 内部四键（{@code rule_code/inputs/threshold/result}）结构不变（A4）。
+     */
     private static String riskFindingsJson(List<AiRiskFinding> findings) {
-        ArrayNode array = JSON.createArrayNode();
+        ObjectNode root = JSON.createObjectNode();
+        ArrayNode array = root.putArray("findings");
         for (AiRiskFinding finding : findings) {
             ObjectNode node = array.addObject();
             node.put("rule_code", finding.ruleCode());
@@ -685,25 +694,60 @@ public class AnalysisResultWriteService {
             node.put("threshold", finding.threshold());
             node.put("result", finding.result());
         }
-        return CanonicalJson.canonicalize(array);
+        return CanonicalJson.canonicalize(root);
     }
 
-    private static String dataQualityJson(String grade, List<String> warnings) {
+    /**
+     * {@code data_quality_json}（{@code ANALYSIS_CONTRACT §9.1} 映射表 / {@code §11.6}）：
+     * {@code {"level":..., "valid_days":..., "missing_days":..., "outlier_days":null}}。
+     *
+     * <p>★ {@code R139}：由 {@code {"grade","warnings"}} 改为四键结构——{@code grade} 键名改为
+     * {@code level}（{@code §9.1} 原文用 {@code level}），{@code warnings} 迁出（归 {@code llm_detail_json}）。
+     *
+     * <p>★ {@code missing_days} 自算：{@code max(0, window_days − valid_days)}，与 Python
+     * {@code service-ai/.../validation/data_quality.py:67} 同口径；{@code valid_days} 可能大于
+     * {@code window_days} 的边界取 0（不写反）。
+     *
+     * <p>★ {@code outlier_days = null}（{@code R140}）：Python {@code ResultItem} <b>不回显</b>
+     * {@code outlier_count}，故无法落真实值；{@code null} 是「未知」而非 {@code 0} 的「无异常」，
+     * 二者语义不同，禁止图省事写 {@code 0}。
+     */
+    private static String dataQualityJson(DataQualityGrade grade, Integer validDays, Integer windowDays) {
         ObjectNode node = JSON.createObjectNode();
-        node.put("grade", grade);
-        ArrayNode array = node.putArray("warnings");
-        if (warnings != null) {
-            warnings.forEach(array::add);
+        node.put("level", grade.name());
+        node.put("valid_days", validDays);
+        node.put("missing_days", windowDays == null || validDays == null
+                ? 0 : Math.max(0, windowDays - validDays));
+        node.putNull("outlier_days");
+        return CanonicalJson.canonicalize(node);
+    }
+
+    /**
+     * {@code llm_detail_json}（{@code ANALYSIS_CONTRACT §9.1} 映射表 / {@code §9.3}）：
+     * {@code {"status":..., "evidence":[...], "warnings":[...], "prompt_version":..., "model_name":...}}。
+     *
+     * <p>★ {@code R139}/{@code R141}：{@code llm_status} 键名改为 {@code status}；{@code warnings}
+     * 经 {@code §5.41} 裁定<b>归入本列</b>（{@code §9.1} 映射表把 {@code llm_evidence/llm_status/warnings}
+     * 都归 {@code llm_detail_json}，{@code §9.3} 示例与映射表矛盾，以映射表为准）。
+     * {@code prompt_version}/{@code model_name} 从 {@code analysis_runs} 顶层回填（可空即 {@code null}）。
+     */
+    private static String llmDetailJson(AnalysisRunEntity run, AiResultItem item) {
+        ObjectNode node = JSON.createObjectNode();
+        node.put("status", item.llmStatus());
+        ArrayNode evidence = node.putArray("evidence");
+        item.llmEvidenceOrEmpty().forEach(evidence::add);
+        ArrayNode warnings = node.putArray("warnings");
+        if (item.warnings() != null) {
+            item.warnings().forEach(warnings::add);
         }
+        node.put("prompt_version", run.getPromptVersion());
+        node.put("model_name", run.getModelName());
         return CanonicalJson.canonicalize(node);
     }
 
-    private static String llmDetailJson(String llmStatus, List<String> evidence) {
-        ObjectNode node = JSON.createObjectNode();
-        node.put("llm_status", llmStatus);
-        ArrayNode array = node.putArray("evidence");
-        evidence.forEach(array::add);
-        return CanonicalJson.canonicalize(node);
+    /** {@code data_quality_json.missing_days} 自算用的窗口 N（取请求 {@code params.window_days}）。 */
+    private static Integer windowDays(AnalysisParams params) {
+        return params == null ? null : params.windowDays();
     }
 
     // =====================================================================

@@ -217,8 +217,8 @@ public class AnalysisItemAssembler {
     // =====================================================================
 
     /**
-     * 回读 SKU 的团队 / 状态 / 商品（{@code AI_SERVICE_CONTRACT §7} 第 2 项 + {@code R132} 的
-     * {@code product_id} 来源）。
+     * 回读 SKU 的团队 / 状态 / 商品 / 编码（{@code AI_SERVICE_CONTRACT §7} 第 2 项 + {@code R132} 的
+     * {@code product_id} 来源；{@code M4-T13} 快照查询的 {@code sku_code} 回填来源）。
      *
      * <p><b>带租户线</b>：查不到 = 不存在<b>或</b>属他团队，两者在业务上同为「拒绝」，
      * 不做区分（避免向调用方泄露他团队 SKU 是否存在）。
@@ -231,8 +231,9 @@ public class AnalysisItemAssembler {
             for (SkuEntity sku : skuMapper.selectList(Wrappers.<SkuEntity>lambdaQuery()
                     .in(SkuEntity::getId, chunk)
                     .select(SkuEntity::getId, SkuEntity::getTeamId, SkuEntity::getStatus,
-                            SkuEntity::getProductId))) {
-                byId.put(sku.getId(), new SkuRef(sku.getTeamId(), sku.getStatus(), sku.getProductId()));
+                            SkuEntity::getProductId, SkuEntity::getSkuCode))) {
+                byId.put(sku.getId(), new SkuRef(sku.getTeamId(), sku.getStatus(),
+                        sku.getProductId(), sku.getSkuCode()));
             }
         }
         return byId;
@@ -278,13 +279,14 @@ public class AnalysisItemAssembler {
     }
 
     /**
-     * SKU 的最小主数据投影（团队 / 状态 / 所属商品）。
+     * SKU 的最小主数据投影（团队 / 状态 / 所属商品 / 业务编码）。
      *
      * @param teamId    所属团队（租户线已保证等于当前团队，保留字段便于日志与断言）
      * @param status    主数据状态（{@code ACTIVE} / 其它）
      * @param productId 所属商品（落库 {@code analysis_items.product_id} 用；R132）
+     * @param skuCode   业务编码（{@code M4-T13} 快照查询回填 {@code sku_code} 用）
      */
-    public record SkuRef(Long teamId, String status, Long productId) {
+    public record SkuRef(Long teamId, String status, Long productId, String skuCode) {
     }
 
     // =====================================================================

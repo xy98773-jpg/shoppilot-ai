@@ -138,13 +138,13 @@ public class AnalysisItemEntity {
     /** 命中规则明细（JSON 列；{@code §8} 规则 2：不得混入 LLM 或数据质量内容）。 */
     private String riskDetailJson;
 
-    /** 数据质量检查结果（JSON 列：{@code {"grade":...,"warnings":[...]}）。 */
+    /** 数据质量检查结果（JSON 列：{@code {"level":...,"valid_days":...,"missing_days":...,"outlier_days":null}}；{@code R139}）。 */
     private String dataQualityJson;
 
     /** LLM 解释（降级为 {@code null}；落库前截断 2000 字符，见 {@code §7} 第 15 项）。 */
     private String llmExplanation;
 
-    /** 条目级 LLM 明细（JSON 列：{@code {"llm_status":...,"evidence":[...]}；降级可为 NULL）。 */
+    /** 条目级 LLM 明细（JSON 列：{@code {"status":...,"evidence":[...],"warnings":[...],"prompt_version":...,"model_name":...}}；{@code R139/R141}）。 */
     private String llmDetailJson;
 
     // ---- 审计字段（集合 B：DATA_DICTIONARY §4.1；★ 无 updated_* / version） ----

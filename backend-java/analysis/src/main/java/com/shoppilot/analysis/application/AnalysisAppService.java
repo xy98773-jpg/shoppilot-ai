@@ -1,17 +1,21 @@
 package com.shoppilot.analysis.application;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.fasterxml.jackson.databind.JsonNode;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.shoppilot.analysis.application.dto.AnalysisItemView;
 import com.shoppilot.analysis.application.dto.CreateAnalysisRunRequest;
 import com.shoppilot.analysis.application.dto.CreateRunOutcome;
 import com.shoppilot.analysis.application.dto.AnalysisRunStatusResponse;
 import com.shoppilot.analysis.application.dto.CreateRunResponse;
+import com.shoppilot.analysis.application.dto.RunItemsOutcome;
 import com.shoppilot.analysis.domain.AnalysisParams;
 import com.shoppilot.analysis.domain.AnalysisRunStatus;
 import com.shoppilot.analysis.domain.AnalysisScope;
 import com.shoppilot.analysis.domain.AnalysisScopeType;
 import com.shoppilot.analysis.domain.CanonicalJson;
 import com.shoppilot.analysis.domain.LlmStatus;
+import com.shoppilot.analysis.domain.RiskLevel;
 import com.shoppilot.analysis.infrastructure.ai.AiServiceClient;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiParams;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiRunCreateRequest;
@@ -20,7 +24,10 @@ import com.shoppilot.analysis.infrastructure.ai.dto.AiScope;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiValidateRequest;
 import com.shoppilot.analysis.infrastructure.persistence.entity.AnalysisRunEntity;
 import com.shoppilot.analysis.infrastructure.persistence.mapper.AnalysisRunMapper;
+import com.shoppilot.analysis.infrastructure.persistence.entity.AnalysisItemEntity;
+import com.shoppilot.analysis.infrastructure.persistence.mapper.AnalysisItemMapper;
 import com.shoppilot.analysis.infrastructure.sampling.AnalysisItemAssembler;
+import com.shoppilot.analysis.infrastructure.sampling.AnalysisItemAssembler.SkuRef;
 import com.shoppilot.audit.application.AuditWriteService;
 import com.shoppilot.audit.domain.model.AuditAction;
 import com.shoppilot.audit.domain.model.AuditEvent;
@@ -29,13 +36,16 @@ import com.shoppilot.common.context.TeamContext;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
+import com.shoppilot.common.web.PageResult;
 import com.shoppilot.common.web.RequestIdContext;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
@@ -97,6 +107,13 @@ public class AnalysisAppService {
     /** 失败原因列宽（{@code analysis_runs.error_message VARCHAR(500)}）。 */
     private static final int ERROR_MESSAGE_MAX_LENGTH = 500;
 
+    /** 快照查询每页上限（{@code API_CONTRACT §2.2} / {@code §11.6}：默认 20，上限 200）。 */
+    private static final int MAX_PAGE_SIZE = 200;
+
+    /** 快照查询排序白名单（{@code §11.6} B4：仅三字段 + asc/desc；白名单即防注入边界）。 */
+    private static final Set<String> ITEM_SORT_COLUMNS =
+            Set.of("avg_daily_sales", "risk_level", "created_at");
+
     private final AnalysisRunMapper runMapper;
     private final AiServiceClient aiServiceClient;
     private final AuditWriteService auditWriteService;
@@ -104,17 +121,21 @@ public class AnalysisAppService {
     private final AnalysisItemAssembler itemAssembler;
     /** 状态同步（M4-B20.2：轮询 / 超时兜底；{@code GET /runs/{id}} 的读时同步也走它）。 */
     private final AnalysisRunSyncService syncService;
+    /** 结果明细快照（M4-B20.3：{@code GET /runs/{id}/items} 分页查询；本模块自有 Mapper）。 */
+    private final AnalysisItemMapper itemMapper;
 
     public AnalysisAppService(AnalysisRunMapper runMapper,
                               AiServiceClient aiServiceClient,
                               AuditWriteService auditWriteService,
                               AnalysisItemAssembler itemAssembler,
-                              AnalysisRunSyncService syncService) {
+                              AnalysisRunSyncService syncService,
+                              AnalysisItemMapper itemMapper) {
         this.runMapper = runMapper;
         this.aiServiceClient = aiServiceClient;
         this.auditWriteService = auditWriteService;
         this.itemAssembler = itemAssembler;
         this.syncService = syncService;
+        this.itemMapper = itemMapper;
     }
 
     /**
@@ -222,6 +243,163 @@ public class AnalysisAppService {
             }
         }
         return AnalysisRunStatusResponse.from(run);
+    }
+
+    /**
+     * 查询分析结果明细（{@code GET /api/v1/analysis/runs/{id}/items}；M4-T13）。
+     *
+     * <p>★ 权限：<b>任何已登录成员（含 VIEWER）</b>——与 {@link #getRunStatus} 同口径，只读明细
+     * 不改任何业务数据，故<b>不加</b> {@code @RequireRole}（{@code API_CONTRACT §11.6} / {@code §9}）。
+     *
+     * <p>★ 就绪判定：只对 {@code progress == 100} 开放（{@code SUCCEEDED}/{@code DEGRADED}），
+     * 否则返回 {@link RunItemsOutcome#notReady}（{@code ANL-7012}，{@code §11.6} 建议的最简口径，
+     * 不按 {@code status} 枚举逐一判断）。
+     *
+     * <p>★ 排序白名单（防注入）：{@code avg_daily_sales / risk_level / created_at} + {@code asc/desc}，
+     * 映射到实体列（Lambda 方法引用），<b>禁止</b>把用户输入拼进 {@code ORDER BY}。
+     *
+     * @param runId     运行 ID；不存在/跨团队 ⇒ {@code ANL-7005}（404，租户线使两者同表现）
+     * @param riskLevel 可选过滤（{@code NONE/LOW/MEDIUM/HIGH/UNKNOWN}）；非法 ⇒ {@code COM-0001}
+     * @param page      页码（默认 1）
+     * @param pageSize  每页大小（默认 20，上限 200）
+     * @param sort      排序（{@code avg_daily_sales,desc}）；非法 ⇒ {@code COM-0001}
+     * @return 就绪则分页明细；未就绪则 {@code notReady}（由控制器转 {@code 409 ANL-7012}）
+     */
+    public RunItemsOutcome listRunItems(Long runId, String riskLevel, int page, int pageSize, String sort) {
+        AnalysisRunEntity run = runMapper.selectById(runId);
+        if (run == null) {
+            throw new BizException(ErrorCodes.ANL_7005, "分析任务不存在");
+        }
+        if (run.getProgress() == null || run.getProgress() < 100) {
+            return RunItemsOutcome.notReady(run);
+        }
+        validatePage(page, pageSize);
+        RiskLevel level = resolveRiskLevel(riskLevel);
+        SortSpec spec = parseSort(sort);
+
+        LambdaQueryWrapper<AnalysisItemEntity> wrapper = Wrappers.<AnalysisItemEntity>lambdaQuery()
+                .eq(AnalysisItemEntity::getRunId, runId);
+        if (level != null) {
+            wrapper.eq(AnalysisItemEntity::getRiskLevel, level.name());
+        }
+        applySort(wrapper, spec);
+
+        Page<AnalysisItemEntity> result = itemMapper.selectPage(new Page<>(page, pageSize), wrapper);
+
+        // sku_code 回填：走装配器只读门面（禁止 application 直连 catalog Mapper）
+        List<Long> skuIds = result.getRecords().stream()
+                .map(AnalysisItemEntity::getSkuId).distinct().toList();
+        Map<Long, SkuRef> skuRefs = itemAssembler.loadSkuRefs(skuIds);
+
+        List<AnalysisItemView> views = result.getRecords().stream()
+                .map(e -> AnalysisItemView.from(e, skuCodeOf(skuRefs, e.getSkuId())))
+                .toList();
+        return RunItemsOutcome.ready(PageResult.of(result.getTotal(), page, pageSize, views));
+    }
+
+    /** 分页参数校验（{@code page ≥ 1}、{@code pageSize ∈ 1..200}）；非法 ⇒ {@code COM-0001}。 */
+    private static void validatePage(int page, int pageSize) {
+        if (page < 1) {
+            throw badParam("page", "page 必须 ≥ 1", page);
+        }
+        if (pageSize < 1 || pageSize > MAX_PAGE_SIZE) {
+            throw badParam("pageSize", "pageSize 必须在 1.." + MAX_PAGE_SIZE + " 之间", pageSize);
+        }
+    }
+
+    /** {@code risk_level} 过滤值解析（可选；非法 ⇒ {@code COM-0001}）。 */
+    private static RiskLevel resolveRiskLevel(String riskLevel) {
+        if (riskLevel == null || riskLevel.isBlank()) {
+            return null;
+        }
+        RiskLevel level = RiskLevel.fromCode(riskLevel.trim());
+        if (level == null) {
+            throw badParam("risk_level", "必须是 NONE/LOW/MEDIUM/HIGH/UNKNOWN 之一", riskLevel);
+        }
+        return level;
+    }
+
+    /**
+     * {@code sort} 解析（白名单 + 方向；{@code null} = 无显式排序，由调用方套默认排序）。
+     *
+     * <p>★ 白名单即防注入边界：列名只从 {@link #ITEM_SORT_COLUMNS} 取，落到 {@code ORDER BY} 时
+     * 再经 {@link #applySort} 映射到实体 Lambda 方法引用，<b>用户输入绝不进 SQL 文本</b>。
+     */
+    private static SortSpec parseSort(String sort) {
+        if (sort == null || sort.isBlank()) {
+            return null;
+        }
+        String[] parts = sort.split(",", -1);
+        if (parts.length == 1) {
+            return new SortSpec(requireSortColumn(parts[0]), true);
+        }
+        if (parts.length == 2) {
+            String column = requireSortColumn(parts[0]);
+            String dir = parts[1].trim().toLowerCase();
+            if ("asc".equals(dir)) {
+                return new SortSpec(column, true);
+            }
+            if ("desc".equals(dir)) {
+                return new SortSpec(column, false);
+            }
+        }
+        throw badParam("sort", "排序参数必须是「字段,asc|desc」且字段在白名单内", sort);
+    }
+
+    private static String requireSortColumn(String raw) {
+        String column = raw.trim();
+        if (!ITEM_SORT_COLUMNS.contains(column)) {
+            throw badParam("sort", "排序字段不在白名单内（avg_daily_sales/risk_level/created_at）", raw);
+        }
+        return column;
+    }
+
+    /** 把已校验的排序片段落到实体列（Lambda 方法引用，杜绝 SQL 注入）。 */
+    private static void applySort(LambdaQueryWrapper<AnalysisItemEntity> wrapper, SortSpec spec) {
+        if (spec == null) {
+            // 默认排序：主键升序（稳定、可复现）
+            wrapper.orderByAsc(AnalysisItemEntity::getId);
+            return;
+        }
+        switch (spec.column) {
+            case "avg_daily_sales" -> {
+                if (spec.ascending) {
+                    wrapper.orderByAsc(AnalysisItemEntity::getAvgDailySales);
+                } else {
+                    wrapper.orderByDesc(AnalysisItemEntity::getAvgDailySales);
+                }
+            }
+            case "risk_level" -> {
+                if (spec.ascending) {
+                    wrapper.orderByAsc(AnalysisItemEntity::getRiskLevel);
+                } else {
+                    wrapper.orderByDesc(AnalysisItemEntity::getRiskLevel);
+                }
+            }
+            case "created_at" -> {
+                if (spec.ascending) {
+                    wrapper.orderByAsc(AnalysisItemEntity::getCreatedAt);
+                } else {
+                    wrapper.orderByDesc(AnalysisItemEntity::getCreatedAt);
+                }
+            }
+            default -> throw badParam("sort", "排序字段不在白名单内", spec.column);
+        }
+    }
+
+    /** {@code sku_code} 回填（查不到主数据 ⇒ {@code null}，契约不要求此列恒非空）。 */
+    private static String skuCodeOf(Map<Long, SkuRef> skuRefs, Long skuId) {
+        SkuRef ref = skuRefs.get(skuId);
+        return ref == null ? null : ref.skuCode();
+    }
+
+    private static BizException badParam(String field, String message, Object value) {
+        return BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                List.of(new ApiErrorDetail(field, message, value)));
+    }
+
+    /** 已校验的排序片段（列名已过白名单）。 */
+    private record SortSpec(String column, boolean ascending) {
     }
 
     // =====================================================================

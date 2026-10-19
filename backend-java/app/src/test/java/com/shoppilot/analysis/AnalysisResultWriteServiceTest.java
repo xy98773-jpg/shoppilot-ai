@@ -1,5 +1,6 @@
 package com.shoppilot.analysis;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.shoppilot.analysis.application.AnalysisAppService;
@@ -274,7 +275,8 @@ class AnalysisResultWriteServiceTest {
         assertNotNull(item.get("risk_detail_json"));
         assertNotNull(item.get("data_quality_json"));
         // §8 细化规则 2：LLM 明细单独一列，不混装进 risk/data_quality JSON
-        assertTrue(String.valueOf(item.get("llm_detail_json")).contains("llm_status"));
+        assertTrue(String.valueOf(item.get("llm_detail_json")).contains("\"status\""),
+                "R139：llm_detail_json 键名由 llm_status 改为 status");
         assertFalse(String.valueOf(item.get("risk_detail_json")).contains("llm_status"),
                 "risk_detail_json 不得混入 llm_status");
         assertFalse(String.valueOf(item.get("data_quality_json")).contains("llm_status"),
@@ -294,6 +296,58 @@ class AnalysisResultWriteServiceTest {
         assertNotNull(row.get("summary_json"));
         assertNotNull(row.get("finished_at"));
         assertEquals(1L, finishAuditCount(runId));
+    }
+
+    // =====================================================================
+    // R139：三个 JSON 列结构对齐 §9.1 / §9.3（C3）
+    // =====================================================================
+
+    /**
+     * R139 结构回归：直接断言三个 JSON 列落库后的结构——
+     * {@code data_quality_json} 为 {@code {level,...}}、{@code risk_detail_json} 为
+     * {@code {findings:[...]}}、{@code llm_detail_json} 为 {@code {status,...}}。
+     *
+     * <p>★ 旧结构是 {@code data_quality_json={grade,warnings}}、{@code risk_detail_json=[...]}（裸数组）、
+     * {@code llm_detail_json={llm_status,evidence}}——与 {@code ANALYSIS_CONTRACT §9.1/§9.3} 不符（R139）。
+     * 本用例对三个列逐一断言<b>新键名存在、旧键名不残留</b>。
+     */
+    @Test
+    @DisplayName("R139：三个 JSON 列结构对齐 §9.1/§9.3（level/findings/status）")
+    void jsonColumnsUseContractStructure() throws Exception {
+        long runId = insertRunningRun("RUN-R139", 1);
+        stubStatus(runId, "COMPLETED", 100, "DONE", 1, 1);
+        stubResult(runId, "SUCCEEDED", resultItem(SKU_A, WAREHOUSE));
+
+        assertTrue(syncService.syncFromPython(loadRun(runId)));
+
+        Map<String, Object> item = itemRow(runId, SKU_A);
+
+        // data_quality_json：{"level","valid_days","missing_days","outlier_days"}
+        JsonNode dq = json.readTree(String.valueOf(item.get("data_quality_json")));
+        assertEquals("GOOD", dq.get("level").asText(), "R139：grade → level");
+        assertEquals(28, dq.get("valid_days").asInt());
+        assertEquals(0, dq.get("missing_days").asInt(), "missing_days = max(0, window_days−valid_days) = 0");
+        assertTrue(dq.get("outlier_days").isNull(), "R140：outlier_days 落 null（未知，非 0）");
+        assertNull(dq.get("grade"), "旧键 grade 不得残留");
+        assertNull(dq.get("warnings"), "warnings 迁出 data_quality_json（R141）");
+
+        // risk_detail_json：{"findings":[...]}（不再是裸数组）
+        JsonNode risk = json.readTree(String.valueOf(item.get("risk_detail_json")));
+        assertTrue(risk.isObject() && risk.has("findings"),
+                "R139：risk_detail_json 外层是对象且含 findings，实际：" + risk);
+        JsonNode findings = risk.get("findings");
+        assertEquals(1, findings.size());
+        assertEquals("R-LOWSTOCK", findings.get(0).get("rule_code").asText());
+        assertEquals("MEDIUM", findings.get(0).get("result").asText());
+
+        // llm_detail_json：{"status","evidence","warnings","prompt_version","model_name"}
+        JsonNode llm = json.readTree(String.valueOf(item.get("llm_detail_json")));
+        assertEquals("SKIPPED", llm.get("status").asText(), "R139：llm_status → status");
+        assertTrue(llm.get("evidence").isArray(), "evidence 应为数组");
+        assertTrue(llm.get("warnings").isArray(), "R141：warnings 归 llm_detail_json");
+        assertEquals("explain_risk.v1", llm.get("prompt_version").asText(), "prompt_version 从 run 顶层回填");
+        assertEquals("gpt-4o-mini", llm.get("model_name").asText(), "model_name 从 run 顶层回填");
+        assertNull(llm.get("llm_status"), "旧键 llm_status 不得残留");
     }
 
     // =====================================================================
