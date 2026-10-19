@@ -1404,7 +1404,7 @@ X-Request-Id: req_anl_001
   "message": "success",
   "data": {
     "run_id": 30001,
-    "run_no": "ANL-20261014-000001",
+    "run_no": "RUN-20261014-0002",
     "status": "RUNNING",
     "scope_type": "SELECTED_SKUS",
     "total_skus": 3,
@@ -1428,7 +1428,7 @@ X-Request-Id: req_anl_001
   "message": "该 SKU 范围已有正在运行的分析任务，请等待完成或取消后再试",
   "data": {
     "existing_run_id": 30000,
-    "existing_run_no": "ANL-20261014-000000"
+    "existing_run_no": "RUN-20261014-0001"
   },
   "details": null,
   "requestId": "req_anl_001",
@@ -1485,7 +1485,7 @@ X-Request-Id: req_anl_002
   "message": "success",
   "data": {
     "run_id": 30001,
-    "run_no": "ANL-20261014-000001",
+    "run_no": "RUN-20261014-0002",
     "status": "RUNNING",
     "scope_type": "SELECTED_SKUS",
     "warehouse_id": 100,
@@ -1511,7 +1511,7 @@ X-Request-Id: req_anl_002
   "message": "success",
   "data": {
     "run_id": 30001,
-    "run_no": "ANL-20261014-000001",
+    "run_no": "RUN-20261014-0002",
     "status": "DEGRADED",
     "scope_type": "SELECTED_SKUS",
     "total_skus": 3,
