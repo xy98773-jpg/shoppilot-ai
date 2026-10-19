@@ -1,0 +1,11 @@
+*.log
+__pycache__/
+q.err
+seed.err
+body.json
+headers.txt
+proxy.out
+py-result.json
+gs.txt
+ai-captured.jsonl
+storage/
