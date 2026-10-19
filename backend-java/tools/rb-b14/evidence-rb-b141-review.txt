@@ -1,0 +1,172 @@
+=== 端口自检 ===
+PORT_FREE 3390
+PORT_FREE 18330
+=== 起独立 MySQL（rb-b141-review-mysql，3390:3306）===
+MYSQL_READY=1
+JAR=shoppilot-app-0.1.0.jar
+JAR_SHA256=9c10e852f45cbfd2b8edb4dda15ed5cdc415aae711d3a65b4ec6cdc78863aae4
+（开发证据里的 SHA256 是 2034937c…；两者不同属正常——本复核 jar 由本机 verify 重新打出， numerically 比对以本机为准）
+APP_PORT=18330
+JAVA_UP=1 (after 3s)
+=== flyway_schema_history（SELECT version, success ORDER BY installed_rank）===
+version	success
+1.0.0	1
+1.0.1	1
+1.0.2	1
+1.0.3	1
+1.0.4	1
+1.0.5	1
+1.0.6	1
+1.0.7	1
+1.0.8	1
+1.0.9	1
+[PASS] A1 V1.0.9 success=1 条数 => 1
+[PASS] A2 迁移总数 => 10
+[PASS] A3 success=1 条数 => 10
+[PASS] A4 version 按 installed_rank 顺序串 => 1.0.0,1.0.1,1.0.2,1.0.3,1.0.4,1.0.5,1.0.6,1.0.7,1.0.8,1.0.9
+=== SHOW CREATE TABLE analysis_runs ===
+*************************** 1. row ***************************
+       Table: analysis_runs
+Create Table: CREATE TABLE `analysis_runs` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键（业务 ID，由 Java 生成后传给 Python，§13.2）',
+  `team_id` bigint unsigned NOT NULL COMMENT '团队 ID（服务端注入，不接受客户端传入；不可变）',
+  `run_no` varchar(64) NOT NULL COMMENT '运行编号（团队内唯一；不可变）',
+  `status` varchar(32) NOT NULL DEFAULT 'PENDING' COMMENT '运行状态：PENDING/RUNNING/SUCCEEDED/DEGRADED/FAILED/TIMEOUT/CANCELLED（AnalysisRunStatus，§9.7；单向流转，终态不可变）',
+  `scope_type` varchar(32) NOT NULL COMMENT '分析范围类型：ALL_ACTIVE/SELECTED_SKUS/CATEGORY（AnalysisScopeType，§9.16；不可变）',
+  `scope_json` json DEFAULT NULL COMMENT '范围明细（SELECTED_SKUS 的 SKU 列表 / CATEGORY 的类目列表；不可变）',
+  `warehouse_id` bigint unsigned DEFAULT NULL COMMENT '限定仓库（NULL = 默认仓；逻辑关联 warehouses.id，不建外键；不可变）',
+  `params_json` json DEFAULT NULL COMMENT '运行参数（window_days/min_days/budget_limit 等，§10.6；不可变）',
+  `algorithm_version` varchar(64) NOT NULL COMMENT '算法版本，如 avg-ma-3sigma-v1（§10.1；追溯依据，不可变）',
+  `prompt_version` varchar(64) DEFAULT NULL COMMENT 'Prompt 模板版本（不可变）',
+  `model_name` varchar(128) DEFAULT NULL COMMENT 'LLM 模型名（来自配置，不写密钥；不可变）',
+  `llm_status` varchar(32) NOT NULL DEFAULT 'NOT_REQUESTED' COMMENT 'LLM 阶段状态：NOT_REQUESTED/PENDING/SUCCEEDED/FAILED/TIMEOUT/VALIDATION_FAILED/SKIPPED（LlmStatus，§9.8）',
+  `llm_error_message` varchar(500) DEFAULT NULL COMMENT 'LLM 失败原因（DEGRADED 时非空）',
+  `data_start_date` date DEFAULT NULL COMMENT '输入销售数据最早日期（执行期写入后固定）',
+  `data_end_date` date DEFAULT NULL COMMENT '输入销售数据最晚日期（执行期写入后固定）',
+  `summary_json` json DEFAULT NULL COMMENT '结果摘要（各风险等级 SKU 数、建议数、截断数；终态时写入）',
+  `total_skus` int unsigned NOT NULL DEFAULT '0' COMMENT '计划分析 SKU 数',
+  `processed_skus` int unsigned NOT NULL DEFAULT '0' COMMENT '已完成 SKU 数',
+  `risk_sku_count` int unsigned NOT NULL DEFAULT '0' COMMENT '存在风险的 SKU 数（终态时写入）',
+  `suggestion_count` int unsigned NOT NULL DEFAULT '0' COMMENT '生成补货建议数（终态时写入）',
+  `progress` tinyint unsigned NOT NULL DEFAULT '0' COMMENT '进度 0–100（§9.7）',
+  `current_step` varchar(64) DEFAULT NULL COMMENT '当前步骤名',
+  `error_code` varchar(32) DEFAULT NULL COMMENT '失败错误码（ANL-7002/ANL-7003/ANL-7004…）',
+  `error_message` varchar(500) DEFAULT NULL COMMENT '失败原因',
+  `request_id` varchar(64) DEFAULT NULL COMMENT '链路追踪 X-Request-Id（§13.3；不可变）',
+  `idempotency_key` varchar(128) DEFAULT NULL COMMENT '创建幂等键（可空 ⇒ 多行 NULL 合法，即未指定幂等键的请求不受幂等约束；不可变）',
+  `triggered_by` bigint unsigned DEFAULT NULL COMMENT '触发人（逻辑关联 users.id，不建外键；不可变）',
+  `started_at` datetime(3) DEFAULT NULL COMMENT '开始执行时间（RUNNING 时写入）',
+  `finished_at` datetime(3) DEFAULT NULL COMMENT '结束时间（终态时写入）',
+  `timeout_at` datetime(3) DEFAULT NULL COMMENT '超时截止（默认创建 + 300s，§13.4；不可变）',
+  `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间（UTC）',
+  `updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间（UTC）',
+  `created_by` bigint unsigned DEFAULT NULL COMMENT '创建人（逻辑关联 users.id）',
+  `updated_by` bigint unsigned DEFAULT NULL COMMENT '更新人（逻辑关联 users.id）',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_run_team_no` (`team_id`,`run_no`),
+  UNIQUE KEY `uk_run_team_idem` (`team_id`,`idempotency_key`),
+  KEY `idx_run_team_status` (`team_id`,`status`,`created_at`),
+  KEY `idx_run_team_created` (`team_id`,`created_at`),
+  KEY `idx_run_timeout` (`status`,`timeout_at`),
+  CONSTRAINT `ck_run_date_range` CHECK (((`data_start_date` is null) or (`data_end_date` is null) or (`data_start_date` <= `data_end_date`))),
+  CONSTRAINT `ck_run_llm_status` CHECK ((`llm_status` in (_utf8mb4'NOT_REQUESTED',_utf8mb4'PENDING',_utf8mb4'SUCCEEDED',_utf8mb4'FAILED',_utf8mb4'TIMEOUT',_utf8mb4'VALIDATION_FAILED',_utf8mb4'SKIPPED'))),
+  CONSTRAINT `ck_run_progress` CHECK ((`progress` <= 100)),
+  CONSTRAINT `ck_run_scope_type` CHECK ((`scope_type` in (_utf8mb4'ALL_ACTIVE',_utf8mb4'SELECTED_SKUS',_utf8mb4'CATEGORY'))),
+  CONSTRAINT `ck_run_status` CHECK ((`status` in (_utf8mb4'PENDING',_utf8mb4'RUNNING',_utf8mb4'SUCCEEDED',_utf8mb4'DEGRADED',_utf8mb4'FAILED',_utf8mb4'TIMEOUT',_utf8mb4'CANCELLED')))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='分析任务（analysis；一次运行的输入快照依据 + 状态机，无 version 用状态守卫）'
+[PASS] B1 uk_run_team_no 列序 => team_id,run_no
+[PASS] B2 uk_run_team_idem 列序 => team_id,idempotency_key
+[PASS] B3 idx_run_team_status 完整列序 => team_id,status,created_at
+[PASS] B4 idx_run_team_created 完整列序 => team_id,created_at
+[PASS] B5 idx_run_timeout 完整列序（R103：status 最左） => status,timeout_at
+[PASS] B6 runs 二级索引(idx_)数 => 3
+[PASS] B7 runs 外键数（§5.14 无外键） => 0
+[PASS] B8 runs.team_id NOT NULL => NO
+[PASS] B9 runs.team_id 无 DEFAULT => 
+[PASS] B10 runs 列数（30 业务 + 4 审计） => 34
+[PASS] B11 runs 有 updated_at/updated_by（集合 A） => 2
+[PASS] B12 runs.id AUTO_INCREMENT => auto_increment
+[PASS] B13 runs CHECK 数 => 5
+[PASS] B14 runs 唯一约束数 => 2
+[PASS] B15 runs 字符集 => utf8mb4
+[PASS] B16 runs 无 version 列 => 0
+=== SHOW CREATE TABLE analysis_items ===
+*************************** 1. row ***************************
+       Table: analysis_items
+Create Table: CREATE TABLE `analysis_items` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `team_id` bigint unsigned NOT NULL COMMENT '团队 ID（服务端注入；不可变）',
+  `run_id` bigint unsigned NOT NULL COMMENT '所属分析运行（fk_ai_run；不可变）',
+  `sku_id` bigint unsigned NOT NULL COMMENT 'SKU ID（fk_ai_sku；不可变）',
+  `product_id` bigint unsigned NOT NULL COMMENT '冗余商品 ID（类目聚合；逻辑关联 products.id，不建外键；不可变）',
+  `warehouse_id` bigint unsigned NOT NULL COMMENT '仓库 ID（fk_ai_warehouse；不可变）',
+  `on_hand_qty` decimal(18,3) NOT NULL COMMENT '快照：现有库存（无默认值，必须显式写入）',
+  `in_transit_qty` decimal(18,3) NOT NULL DEFAULT '0.000' COMMENT '快照：在途库存',
+  `effective_in_transit_qty` decimal(18,3) NOT NULL DEFAULT '0.000' COMMENT '快照：有效在途（§10.4 窗口过滤后）',
+  `committed_qty` decimal(18,3) NOT NULL DEFAULT '0.000' COMMENT '快照：已承诺库存',
+  `inventory_position_qty` decimal(18,3) NOT NULL DEFAULT '0.000' COMMENT '快照：IP = on_hand + effective_in_transit − committed（§3）',
+  `available_qty` decimal(18,3) NOT NULL DEFAULT '0.000' COMMENT '快照：available = on_hand − committed（展示口径）',
+  `avg_daily_sales` decimal(18,3) DEFAULT NULL COMMENT 'D（§10.1）；数据不足时为 NULL',
+  `sales_window_days` int unsigned DEFAULT NULL COMMENT '统计窗口 N（默认 28）',
+  `valid_days` int unsigned DEFAULT NULL COMMENT '有效销售天数 n（§10.1）',
+  `total_sales_qty` decimal(18,3) DEFAULT NULL COMMENT '窗口内总销量',
+  `cv` decimal(18,4) DEFAULT NULL COMMENT '波动率 CV（★ 精度 4 位，与其余数量列的 3 位不同；mean=0 时为 NULL）',
+  `lead_time_days` int unsigned DEFAULT NULL COMMENT '采用值 L',
+  `lead_time_source` varchar(32) DEFAULT NULL COMMENT 'L 来源：POLICY/SKU/SUPPLIER/DEFAULT（§10.2、§11.2）',
+  `coverage_days` int unsigned DEFAULT NULL COMMENT '采用值 R',
+  `safety_stock_qty` decimal(18,3) DEFAULT NULL COMMENT '采用值 SS（§10.3）',
+  `volatility_adjusted` tinyint(1) NOT NULL DEFAULT '0' COMMENT '是否因高波动上浮 50%（§10.3）',
+  `qty_base` decimal(18,3) DEFAULT NULL COMMENT 'Q_base（§10.2）',
+  `qty_suggest` decimal(18,3) DEFAULT NULL COMMENT 'Q_suggest（§10.5，套用 MOQ/倍数/预算后）',
+  `moq_applied` decimal(18,3) DEFAULT NULL COMMENT '实际生效的 MOQ',
+  `order_multiple_applied` decimal(18,3) DEFAULT NULL COMMENT '实际生效的采购倍数',
+  `truncated_by_budget` tinyint(1) NOT NULL DEFAULT '0' COMMENT '是否因预算被截断（§10.5）',
+  `risk_level` varchar(16) NOT NULL DEFAULT 'NONE' COMMENT '风险等级：NONE/LOW/MEDIUM/HIGH/UNKNOWN（RiskLevel，§9.9；MAX 合成，§11.1）',
+  `risk_types` json DEFAULT NULL COMMENT 'RiskType 数组（§9.10，如 ["STOCKOUT","LOW_STOCK"]）',
+  `risk_detail_json` json DEFAULT NULL COMMENT '命中规则明细（规则代码 → 判定值），用于解释与测试',
+  `data_quality_json` json DEFAULT NULL COMMENT '数据质量检查结果（缺口、异常值、样本量）',
+  `llm_explanation` text COMMENT 'LLM 生成的解释文本（降级时为 NULL）',
+  `llm_detail_json` json DEFAULT NULL COMMENT '条目级 LLM 结果明细：llm_status/置信度/不确定项/检查清单（DESIGN_BASIS §8）；降级时为 NULL',
+  `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间（UTC）',
+  `created_by` bigint unsigned DEFAULT NULL COMMENT '创建人（逻辑关联 users.id）',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_ai_run_sku_wh` (`run_id`,`sku_id`,`warehouse_id`),
+  KEY `idx_ai_team_run` (`team_id`,`run_id`,`risk_level`),
+  KEY `idx_ai_team_sku_time` (`team_id`,`sku_id`,`created_at`),
+  KEY `fk_ai_sku` (`sku_id`),
+  KEY `fk_ai_warehouse` (`warehouse_id`),
+  CONSTRAINT `fk_ai_run` FOREIGN KEY (`run_id`) REFERENCES `analysis_runs` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT `fk_ai_sku` FOREIGN KEY (`sku_id`) REFERENCES `skus` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT `fk_ai_warehouse` FOREIGN KEY (`warehouse_id`) REFERENCES `warehouses` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT `ck_ai_d` CHECK (((`avg_daily_sales` is null) or (`avg_daily_sales` >= 0))),
+  CONSTRAINT `ck_ai_lead_time_source` CHECK (((`lead_time_source` is null) or (`lead_time_source` in (_utf8mb4'POLICY',_utf8mb4'SKU',_utf8mb4'SUPPLIER',_utf8mb4'DEFAULT')))),
+  CONSTRAINT `ck_ai_qbase` CHECK (((`qty_base` is null) or (`qty_base` >= 0))),
+  CONSTRAINT `ck_ai_qsuggest` CHECK (((`qty_suggest` is null) or (`qty_suggest` >= 0))),
+  CONSTRAINT `ck_ai_risk_level` CHECK ((`risk_level` in (_utf8mb4'NONE',_utf8mb4'LOW',_utf8mb4'MEDIUM',_utf8mb4'HIGH',_utf8mb4'UNKNOWN'))),
+  CONSTRAINT `ck_ai_ss` CHECK (((`safety_stock_qty` is null) or (`safety_stock_qty` >= 0)))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='分析明细（analysis；SKU×仓库 计算事实快照，仅 INSERT 不可变，无 updated_*/version）'
+[PASS] C1 items 二级索引(idx_)数 => 2
+[PASS] C2 uk_ai_run_sku_wh 列序（R89 不带 team_id） => run_id,sku_id,warehouse_id
+[PASS] C3 idx_ai_team_run 完整列序 => team_id,run_id,risk_level
+[PASS] C4 idx_ai_team_sku_time 完整列序 => team_id,sku_id,created_at
+[PASS] C5 items 外键数 => 3
+[PASS] C6 items 外键 delete_rule 全 RESTRICT => 3
+[PASS] C7 items 外键 update_rule 全 RESTRICT => 3
+[PASS] C8 items 外键目标表集合 => analysis_runs,skus,warehouses
+[PASS] C9 items.team_id NOT NULL => NO
+[PASS] C10 items.cv 精度（★ 4 位） => decimal(18,4)
+[PASS] C11 items 无 updated_at/updated_by/version（合计 0） => 0
+[PASS] C12 items 列数（33 业务 + 2 审计） => 35
+[PASS] C13 items CHECK 数 => 6
+[PASS] C14 items.created_at NOT NULL + 默认 CURRENT_TIMESTAMP(3) => datetime(3)|NO|CURRENT_TIMESTAMP(3)
+[PASS] C15 InnoDB 外键自动索引（引擎行为，记录在案） => 2
+[PASS] C16 items.id AUTO_INCREMENT => auto_increment
+=== fat jar 内迁移文件命中 ===
+[PASS] D1 jar 内 db/migration/V1.0.9__analysis.sql 命中 => 1
+=== 全仓 DDL 级联口径（对库内全部表）===
+[PASS] E1 全库 DELETE CASCADE 外键（应恰 1：fk_rt_user） => 1
+[PASS] E2 库内 analysis 两表外键 CASCADE 数（应 0） => 0
+-------------------------------------------------------------
+RB141_CHECK_TOTAL=39
+RB141_FAIL_COUNT=0
+RB141_RESULT=ALL PASS
