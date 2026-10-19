@@ -77,6 +77,23 @@ def assess(request: AnalyzeRequest) -> ValidateData:
         )
 
     total_skus = len(per_sku)
+    if total_skus == 0:
+        # ★ R113（B16.1）：空 items 合法（Java `toAiRequest` 在逐 SKU 装配落地前恒传空数组）。
+        #   返回零值汇总 + 专用中文提示，由端点/Java 决定业务语义（`analyzable=false` ⇒
+        #   Java 侧 `ANL-7008`）。此分支**不得**复用其它档位文案。
+        return ValidateData(
+            analyzable=False,
+            window_days=window_days,
+            total_skus=0,
+            analyzable_skus=0,
+            insufficient_skus=0,
+            valid_days_avg=0.0,
+            missing_days_total=0,
+            outlier_count_total=0,
+            per_sku=[],
+            warnings=["未提供可分析的 SKU"],
+        )
+
     insufficient_skus = sum(1 for row in per_sku if row.quality == INSUFFICIENT)
     analyzable_skus = total_skus - insufficient_skus
 
@@ -153,11 +170,18 @@ def _grade_by_ratio(
 
 
 def _average_valid_days(per_sku: list[PerSkuQuality]) -> float:
-    """平均有效天数，`ROUND_HALF_UP` 保留 1 位（`§3.1` 允许 1 位小数）。"""
+    """平均有效天数，`ROUND_HALF_UP` 保留 1 位（`§3.1` 允许 1 位小数）。
+
+    ★ R114（B16.1）：必须**先在 Decimal 域做除法**再 `quantize`。
+    B16 的写法 `Decimal(total / len(...))` 会先把除法落成 float：`3 / 20 == 0.15` 在二进制里
+    是 `0.1499999…`，`ROUND_HALF_UP` 于是给出 `0.1`（应为 `0.2`）。
+    这是「构造 Decimal 的时机」错误，不是舍入模式错误。
+    """
     if not per_sku:
         return 0.0
     total = sum(row.valid_days for row in per_sku)
-    return float(Decimal(total / len(per_sku)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
+    average = Decimal(total) / Decimal(len(per_sku))
+    return float(average.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
 
 
 def _warnings(per_sku: list[PerSkuQuality]) -> list[str]:

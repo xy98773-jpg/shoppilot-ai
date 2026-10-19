@@ -14,10 +14,10 @@
 `llm_status`（7 值，`DESIGN_BASIS §9.8`）、`lead_time_source`（4 值，`DESIGN_BASIS §10.2`）、
 `execution_status`（5 值，`§3.4`）。
 
-★ `risk_types` 保持 `list[str]` 而非 `Literal`：`ANALYSIS_CONTRACT §2.1` 说元素取自
-`RiskType`（`DESIGN_BASIS §11` 的 `LOWSTOCK`），但 `§3.5` 示例里写的是 `LOW_STOCK`。
-文档内部不一致，Schema 若收紧会「拒真」；按「不新造枚举值」的口径，此处只校验类型，
-取值由规则层（B17）保证。该不一致已随交付汇报申报。
+★ `risk_types` 用 `RiskType` Literal（6 值，`DESIGN_BASIS §11:436`）：`STOCKOUT` / `LOW_STOCK` /
+`OVERSTOCK` / `SLOW_MOVING` / `SALES_ANOMALY` / `DATA_INSUFFICIENT`。
+★ R115 订正：`LOWSTOCK` 是 **`RuleCode`**（规则编码，如 `R-LOWSTOCK`），**不是** `RiskType`；
+B16 曾据此把字段放宽为 `list[str]`，理由不成立，B16.1 已收紧。
 """
 from __future__ import annotations
 
@@ -31,6 +31,16 @@ from shoppilot_ai.app.schemas.common import Envelope
 
 DataQuality = Literal["GOOD", "FAIR", "POOR", "INSUFFICIENT"]
 RiskLevel = Literal["HIGH", "MEDIUM", "LOW", "NONE", "UNKNOWN"]
+#: 风险类型（`DESIGN_BASIS.md §11:436` 的 `RiskType`，6 值）。`RiskType` 与 `RuleCode`
+#: 是两套值空间：规则编码是 `R-STOCKOUT` / `R-LOWSTOCK`，风险类型是 `STOCKOUT` / `LOW_STOCK`。
+RiskType = Literal[
+    "STOCKOUT",
+    "LOW_STOCK",
+    "OVERSTOCK",
+    "SLOW_MOVING",
+    "SALES_ANOMALY",
+    "DATA_INSUFFICIENT",
+]
 LlmStatus = Literal[
     "NOT_REQUESTED",
     "PENDING",
@@ -139,7 +149,7 @@ class ResultItem(BaseModel):
     valid_days: int
     data_quality: DataQuality
     risk_level: RiskLevel
-    risk_types: list[str] = []
+    risk_types: list[RiskType] = []
     risk_findings: list[RiskFinding] = []
     on_hand_qty: Decimal3Str
     effective_in_transit_qty: Decimal3Str
@@ -209,6 +219,7 @@ __all__ = [
     "ResultItem",
     "RiskFinding",
     "RiskLevel",
+    "RiskType",
     "RunError",
     "RunResultData",
     "RunResultResponse",

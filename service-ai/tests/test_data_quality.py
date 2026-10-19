@@ -34,8 +34,13 @@ def make_request(
     *,
     window_days: int = 28,
     min_days: int = 7,
+    scope_sku_ids: list[int] | None = None,
 ) -> AnalyzeRequest:
-    """按 `(sku_id, [qty...])` 构造合法 `AnalyzeRequest`（日期连续、可空字段取默认）。"""
+    """按 `(sku_id, [qty...])` 构造合法 `AnalyzeRequest`（日期连续、可空字段取默认）。
+
+    :param scope_sku_ids: 显式指定 `scope.sku_ids`；缺省取 `specs` 的 SKU 列表。
+        用于构造「scope 有 SKU、items 为空」的场景（R113：Java 装配前恒传空数组）。
+    """
     items = []
     for sku_id, quantities in specs:
         series = [
@@ -51,11 +56,12 @@ def make_request(
                 "sales_series": series,
             }
         )
+    sku_ids = scope_sku_ids if scope_sku_ids is not None else [sku for sku, _ in specs]
     return AnalyzeRequest.model_validate(
         {
             "analysis_run_id": 1,
             "team_id": 7,
-            "scope": {"scope_type": "SELECTED_SKUS", "sku_ids": [sku for sku, _ in specs]},
+            "scope": {"scope_type": "SELECTED_SKUS", "sku_ids": sku_ids},
             "date_from": START.isoformat(),
             "date_to": (START + timedelta(days=400)).isoformat(),
             "params": {
@@ -266,3 +272,32 @@ def test_warnings_text_and_order() -> None:
     assert "DATA_INSUFFICIENT" in result.warnings[0]
     assert "数据质量较差" in result.warnings[1]
     assert "数据覆盖一般" in result.warnings[2]
+
+
+# --------------------------------------------------------------------------- #
+# R113 / R114（B16.1）
+# --------------------------------------------------------------------------- #
+def test_empty_items_returns_zeroed_summary() -> None:
+    """R113：`items=[]` 是合法输入（Java 装配前恒传空数组），返回零值汇总 + 专用提示。"""
+    result = assess(make_request([], scope_sku_ids=[9002]))
+
+    assert result.analyzable is False
+    assert result.window_days == 28
+    assert result.total_skus == 0
+    assert result.analyzable_skus == 0
+    assert result.insufficient_skus == 0
+    assert result.valid_days_avg == 0.0
+    assert result.missing_days_total == 0
+    assert result.outlier_count_total == 0
+    assert result.per_sku == []
+    assert result.warnings == ["未提供可分析的 SKU"]
+
+
+def test_valid_days_avg_rounds_point_one_five_to_point_two() -> None:
+    """R114：20 个 SKU、合计 3 个有效日 = 0.15，`ROUND_HALF_UP` 必须给 0.2（不是 0.1）。"""
+    specs = [(9000 + index, [1.0] if index < 3 else []) for index in range(20)]
+
+    result = assess(make_request(specs))
+
+    assert sum(row.valid_days for row in result.per_sku) == 3
+    assert result.valid_days_avg == 0.2

@@ -186,8 +186,11 @@ class AnalyzeRequest(BaseModel):
                 date_to=self.date_to.isoformat(),
             )
 
-        if not self.items:
-            raise _schema_error("items must contain at least one SKU")
+        # ★ R113（B16.1）：**空 items 合法**。Java `B15` 的 `AnalysisAppService.toAiRequest`
+        #   在逐 SKU 装配（B17+）落地前恒传 `List.of()`，契约 §3.2 也只规定「≤2000」。
+        #   这里若拒绝，`B19` 端点上线后 `createRun` 会 100% `AI-1001` → Java `ANL-7004`。
+        #   「空 items 的业务语义」（`analyzable=false` / run 状态）由端点与 Java 决定，
+        #   Schema 只负责结构与规模；其余字段的校验（如 prompt_version）照常执行。
         if len(self.items) > MAX_ANALYSIS_SKUS:
             raise ServiceAIBaseError(
                 code=AI_7002,

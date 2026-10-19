@@ -257,6 +257,48 @@ def test_result_example_parses_and_matches_contract_fields() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# R113 / R115（B16.1）
+# --------------------------------------------------------------------------- #
+def test_empty_items_accepted() -> None:
+    """R113：`items=[]` 必须解析成功（Java `toAiRequest` 在装配落地前恒传空数组）。"""
+    payload = deepcopy(CREATE_EXAMPLE)
+    payload["items"] = []
+
+    request = AnalyzeRequest.model_validate(payload)
+
+    assert request.items == []
+    assert request.scope.scope_type == "SELECTED_SKUS"
+
+
+def _result_payload_with_risk_types(risk_types: list[str]) -> dict:
+    payload = deepcopy(RESULT_EXAMPLE)
+    payload["data"]["items"][0]["risk_types"] = risk_types
+    return payload
+
+
+@pytest.mark.parametrize(
+    "risk_types",
+    [
+        ["STOCKOUT", "LOW_STOCK"],
+        ["DATA_INSUFFICIENT"],
+        ["SALES_ANOMALY"],
+        ["OVERSTOCK", "SLOW_MOVING"],
+    ],
+)
+def test_risk_types_accepts_contract_values(risk_types: list[str]) -> None:
+    """R115：`RiskType` 6 值（`DESIGN_BASIS §11:436`）全部可接受。"""
+    response = RunResultResponse.model_validate(_result_payload_with_risk_types(risk_types))
+    assert response.data.items[0].risk_types == risk_types
+
+
+def test_risk_types_rejects_rule_code_value() -> None:
+    """R115：`LOWSTOCK` 是 `RuleCode`（`R-LOWSTOCK`）而非 `RiskType`，必须被拒。"""
+    with pytest.raises(ValidationError) as info:
+        RunResultResponse.model_validate(_result_payload_with_risk_types(["LOWSTOCK"]))
+    assert "LOWSTOCK" in str(info.value)
+
+
+# --------------------------------------------------------------------------- #
 # 2) 负例
 # --------------------------------------------------------------------------- #
 def test_inverted_date_range_maps_to_ai_1001() -> None:
