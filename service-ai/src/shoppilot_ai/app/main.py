@@ -45,6 +45,7 @@ from shoppilot_ai.app.core.errors import (
     AI_9001,
     DEFAULT_MESSAGES,
     InternalTokenError,
+    ServiceAIBaseError,
     error_body,
 )
 from shoppilot_ai.app.core.logging import get_logger
@@ -195,6 +196,27 @@ async def handle_internal_token_error(request: Request, exc: InternalTokenError)
     return _error_response(
         request,
         status.HTTP_401_UNAUTHORIZED,
+        exc.code,
+        exc.message,
+        exc.detail,
+    )
+
+
+@app.exception_handler(ServiceAIBaseError)
+async def handle_service_ai_error(request: Request, exc: ServiceAIBaseError):
+    """Any contract-coded business error → HTTP status from ``exc.http_status`` (``R101``).
+
+    Before ``B16`` only ``InternalTokenError`` had a handler; every other
+    ``ServiceAIBaseError`` (``AI-6001`` 404 / ``AI-6002`` 409 / ``AI-5001`` 502 …)
+    fell through to ``Exception → 500 AI-9001``, losing both code and status.
+
+    ★ Handler resolution is by **most specific registered type** (Starlette walks the
+    exception's MRO), so the dedicated ``InternalTokenError`` handler above still wins
+    for 401 — its behaviour is byte-identical to before this batch.
+    """
+    return _error_response(
+        request,
+        exc.http_status,
         exc.code,
         exc.message,
         exc.detail,
