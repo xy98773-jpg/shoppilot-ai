@@ -350,6 +350,8 @@ X-Request-Id: req_anl_002
 }
 ```
 
+> **`progress` 取值口径（R119）**：上方示例的 `66` 是**示意值**（恰为 `processed_skus / total_skus = 2/3`）。实现按**步骤档位**取值：`VALIDATING=5` / `STATS=20` / `RISK_RULES=40` / `REPLENISHMENT=60` / `LLM_EXPLAIN=80` / `DONE=100`；步内粒度由 `processed_skus` 表达（`DESIGN_REVIEW §5.32` 裁定 #2）。
+
 **`execution_status` 取值（Python 执行状态，**非** `AnalysisRunStatus`）**
 
 | 值 | 含义 |
