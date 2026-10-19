@@ -129,7 +129,7 @@
 | `risk_types` | 风险类型数组 | `DESIGN_BASIS §11` | 元素 ∈ `RiskType`（6 值），去重 |
 | `risk_findings` | 规则命中明细 | §5 | 数组；每条含 `rule_code`/`inputs`/`threshold`/`result` |
 | `on_hand_qty` / `effective_in_transit_qty` / `committed_qty` | 库存快照 | 回显输入 | ≥0，3 位 |
-| `inventory_position`（`IP`） | 库存位置 | `on_hand + eff_in_transit − committed`（`DESIGN_BASIS §3`） | 与三项一致（Java 重算比对） |
+| `inventory_position`（`IP`） | 库存位置 | `on_hand + eff_in_transit − committed`（`DESIGN_BASIS §3`） | 与三项一致（Java 重算比对）；**允许为负**（`committed > on_hand + effective_in_transit` 的超卖场景），Java 侧不得加非负校验 |
 | `safety_stock`（`SS`） | 安全库存 | `DESIGN_BASIS §10.3` | ≥0 或 `null`；3 位 |
 | `lead_time_days`（`L`） | 采用交期 | `DESIGN_BASIS §10.2` | ≥0 或 `null`；与 `lead_time_source` 一致 |
 | `lead_time_source` | `L` 来源 | `DESIGN_BASIS §10.2` | ∈ `LeadTimeSource`（`POLICY`/`SKU`/`SUPPLIER`/`DEFAULT`） |
