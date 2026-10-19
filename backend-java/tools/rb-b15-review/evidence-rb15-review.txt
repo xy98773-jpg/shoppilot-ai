@@ -1,0 +1,154 @@
+JAR_SHA256=54a4dab6ab255c68a8538475450ae29312016c05c0c4fb001476b5d9661ff94f
+PORTS_FREE 3393/18360/18361
+MYSQL_READY=1
+STUB_UP=1 (port 18361, mode=ok)
+APP_UP=1 (port 18360)
+-------------------------------------------------------------
+=== S1/S2 结构面（迁移与隔离） ===
+[PASS] fat jar 内含 V1.0.9__analysis.sql => 1
+[PASS] analysis_runs.team_id IS_NULLABLE => NO
+[PASS] analysis_runs.team_id COLUMN_DEFAULT 为空 => NULL
+[PASS] uk_run_team_no 存在 => 1
+[PASS] uk_run_team_idem 存在 => 1
+[PASS] 迁移版本数（V1.0.0..V1.0.9 = 10） => 10
+[PASS] operator01 登录 => 1
+[PASS] viewer01 登录 => 1
+[PASS] owner8（团队 8）登录 => 1
+-------------------------------------------------------------
+=== T1 成功路径（202 / 11 字段 / RUNNING / 审计） ===
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":1,"run_no":"RUN-20261019-0001","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T07:30:04.422Z","created_at":"2026-10-19T07:25:04.450Z"},"requestId":"req_rb15r_t1","timestamp":"2026-10-19T07:25:04.540Z"}
+[PASS] T1 HTTP => 202
+[PASS] T1 code => OK
+[PASS] T1 status => RUNNING
+[PASS] T1 progress => 5
+[PASS] T1 current_step => VALIDATING
+[PASS] T1 total_skus => 1
+[PASS] T1 processed_skus => 0
+[PASS] T1 llm_status（enable_llm=false） => NOT_REQUESTED
+[PASS] T1 requestId 回显 => req_rb15r_t1
+[PASS] T1 响应 data 字段数（契约 11） => 11
+[PASS] T1 run_no 形态 RUN-8位-4位 => 1
+[PASS] T1 DB status=RUNNING => RUNNING
+[PASS] T1 DB team_id=7（来自 JWT） => 7
+[PASS] T1 DB timeout_at = created+300s（毫秒截断容差 299/300） => 1
+[PASS] T1 审计 CREATE=1 => 1
+[PASS] T1 审计 biz_no=run_no => RUN-20261019-0001
+[PASS] T1 审计 result => SUCCESS
+-------------------------------------------------------------
+=== T2 同键同体重放 ===
+STATUS=202 REPLAYED=true BODY={"code":"OK","message":"success","data":{"run_id":1,"run_no":"RUN-20261019-0001","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T07:30:04.422Z","created_at":"2026-10-19T07:25:04.450Z"},"requestId":"req_rb15r_t2","timestamp":"2026-10-19T07:25:26.390Z"}
+[PASS] T2 HTTP => 202
+[PASS] T2 Idempotent-Replayed => true
+[PASS] T2 run_id 与首次一致 => 1
+[PASS] T2 team7 run 行数仍为 1 => 1
+[PASS] T2 审计 CREATE 未重复 => 1
+-------------------------------------------------------------
+=== T3 探针：同键 + 仅改 date_from（契约 §6.3「请求体不一致」→ COM-0009） ===
+STATUS=202 REPLAYED=true BODY={"code":"OK","message":"success","data":{"run_id":1,"run_no":"RUN-20261019-0001","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T07:30:04.422Z","created_at":"2026-10-19T07:25:04.450Z"},"requestId":"req_rb15r_t3","timestamp":"2026-10-19T07:25:32.900Z"}
+  NOTE 契约 §6.3：请求体一致性按规范化整体比对；日期属于请求体
+[FAIL] T3 期望 COM-0009 / 409 => expected [COM-0009:409] but was [OK:202]
+-------------------------------------------------------------
+=== T4 同键 + 改 scope_json（应 COM-0009） ===
+STATUS=409 BODY={"code":"COM-0009","message":"相同的幂等键已用于另一笔请求，请更换幂等键","data":null,"requestId":"req_rb15r_t4","timestamp":"2026-10-19T07:25:35.947Z"}
+[PASS] T4 期望 COM-0009 / 409 => COM-0009:409
+-------------------------------------------------------------
+=== T5 ANL-7001（同 scope_type + 同仓 + 相交 + RUNNING）与 data 字段 ===
+STATUS=409 BODY={"code":"ANL-7001","message":"该 SKU 范围已有正在运行的分析任务，请稍后或取消后重试","data":null,"requestId":"req_rb15r_t5","timestamp":"2026-10-19T07:25:38.387Z"}
+[PASS] T5 HTTP => 409
+[PASS] T5 code => ANL-7001
+  NOTE 契约 §11.5 失败响应 1 的 data 应含 existing_run_id / existing_run_no
+T5 data.existing_run_id=<missing:existing_run_id>  data.existing_run_no=<missing:existing_run_no>
+[PROBE-FAIL] T5 data 未回带 existing_run_id（契约 §11.5 示例要求；当前异常恒 data=null）
+-------------------------------------------------------------
+=== T6/T7 ALL_ACTIVE（scope_json=NULL 的进行中还原） ===
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":2,"run_no":"RUN-20261019-0002","status":"RUNNING","scope_type":"ALL_ACTIVE","total_skus":0,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T07:30:43.962Z","created_at":"2026-10-19T07:25:43.970Z"},"requestId":"req_rb15r_t6","timestamp":"2026-10-19T07:25:44.019Z"}
+[PASS] T6 HTTP => 202
+[PASS] T6 total_skus（非 SELECTED 为 0） => 0
+[PASS] T6 DB scope_json IS NULL => 1
+STATUS=409 BODY={"code":"ANL-7001","message":"该 SKU 范围已有正在运行的分析任务，请稍后或取消后重试","data":null,"requestId":"req_rb15r_t7","timestamp":"2026-10-19T07:25:48.410Z"}
+[PASS] T7 ALL_ACTIVE 再建 → ANL-7001 => ANL-7001:409
+-------------------------------------------------------------
+=== T8 不同 scope_type 不冲突（ALL_ACTIVE 进行中时 SELECTED_SKUS 放行） ===
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":3,"run_no":"RUN-20261019-0003","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T07:30:50.739Z","created_at":"2026-10-19T07:25:50.750Z"},"requestId":"req_rb15r_t8","timestamp":"2026-10-19T07:25:50.796Z"}
+[PASS] T8 HTTP => 202
+-------------------------------------------------------------
+=== T9 跨团队同键（uk_run_team_idem 带 team_id） ===
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":4,"run_no":"RUN-20261019-0001","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T07:30:52.537Z","created_at":"2026-10-19T07:25:52.544Z"},"requestId":"req_rb15r_t9","timestamp":"2026-10-19T07:25:52.598Z"}
+[PASS] T9 团队 8 同键 → 202 新建 => 202
+[PASS] T9 非重放 => false
+[PASS] T9 新 run_id != 团队 7 的 run => 1
+[PASS] T9 DB team_id=8 => 8
+-------------------------------------------------------------
+=== T10/T11 幂等键边界 ===
+STATUS=400 BODY={"code":"COM-0010","message":"缺少必要的请求信息","data":null,"requestId":"req_rb15r_t10","timestamp":"2026-10-19T07:25:57.512Z"}
+[PASS] T10 缺键 → COM-0010/400 => COM-0010:400
+STATUS=202（128 字符键）BODY={"code":"OK","message":"success","data":{"run_id":5,"run_no":"RUN-20261019-0004","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T07:30:59.653Z","created_at":"2026-10-19T07:25:59.661Z"},"requestId":"req_rb15r_t11a","timestamp":"2026-10-19T07:25:59.705Z"}
+[PASS] T11a 128 字符键 → 202 => 202
+STATUS=400（129 字符键）BODY={"code":"COM-0010","message":"缺少必要的请求信息","data":null,"details":[{"field":"Idempotency-Key","message":"长度必须在 1..128 之间"}],"requestId":"req_rb15r_t11b","timestamp":"2026-10-19T07:26:00.815Z"}
+[PASS] T11b 129 字符键 → COM-0010/400 => COM-0010:400
+-------------------------------------------------------------
+=== T12 VIEWER 静态拦截 ===
+STATUS=403 BODY={"code":"TEAM-2003","message":"当前角色无权执行该操作","data":null,"requestId":"req_rb15r_t12","timestamp":"2026-10-19T07:26:03.288Z"}
+[PASS] T12 VIEWER → TEAM-2003/403 => TEAM-2003:403
+-------------------------------------------------------------
+=== T13 请求体塞 team_id=999（必须忽略） ===
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":6,"run_no":"RUN-20261019-0005","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T07:31:05.771Z","created_at":"2026-10-19T07:26:05.786Z"},"requestId":"req_rb15r_t13","timestamp":"2026-10-19T07:26:05.858Z"}
+[PASS] T13 HTTP => 202
+[PASS] T13 DB team_id 仍为 7 => 7
+-------------------------------------------------------------
+=== T14 探针：CATEGORY 含双引号（scope_json 手工拼接的转义） ===
+STATUS=500 BODY={"code":"COM-0002","message":"系统繁忙，请稍后重试；若持续出现请联系管理员","data":null,"requestId":"req_rb15r_t14","timestamp":"2026-10-19T07:26:10.101Z"}
+  NOTE category 允许任意 1..128 字符串；canonicalJson 用字符串拼接，未做 JSON 转义
+[PROBE-FAIL] T14 category 含引号落 COM-0002:500（既非接受也非 400）——R109
+-------------------------------------------------------------
+=== T15 发起失败补偿（AI-6002 → ANL-7012，run FAILED） ===
+STATUS=409 BODY={"code":"ANL-7012","message":"分析结果尚未生成，请等待任务完成","data":null,"requestId":"req_rb15r_t15","timestamp":"2026-10-19T07:26:13.396Z"}
+[PASS] T15 对外码 ANL-7012/409 => ANL-7012:409
+[PASS] T15 run status=FAILED => FAILED
+[PASS] T15 error_code => ANL-7012
+[PASS] T15 finished_at 非空 => 1
+[PASS] T15 无 PENDING 悬挂 => 0
+[PASS] T15 审计 CREATE=0 => 0
+[PASS] T15 审计 FINISH=1 且 FAILURE => FAILURE
+[PASS] T15 响应体不含 AI- 码 => 0
+[PASS] T15 error_message 脱敏（不含 AI-6002） => 0
+-------------------------------------------------------------
+=== T16 同键重放一个 FAILED 的 run（契约：返回首次结果） ===
+STATUS=202 REPLAYED=true BODY={"code":"OK","message":"success","data":{"run_id":7,"run_no":"RUN-20261019-0006","status":"FAILED","scope_type":"CATEGORY","total_skus":0,"processed_skus":0,"progress":0,"current_step":null,"llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T07:31:13.347Z","created_at":"2026-10-19T07:26:13.356Z"},"requestId":"req_rb15r_t16","timestamp":"2026-10-19T07:26:28.142Z"}
+[PASS] T16 HTTP 202 => 202
+[PASS] T16 重放标记 => true
+[PASS] T16 返回 FAILED 快照 => FAILED
+-------------------------------------------------------------
+=== T17 FAILED 不参与 ANL-7001（同 CATEGORY 重新发起应放行） ===
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":8,"run_no":"RUN-20261019-0007","status":"RUNNING","scope_type":"CATEGORY","total_skus":0,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T07:31:31.685Z","created_at":"2026-10-19T07:26:31.692Z"},"requestId":"req_rb15r_t17","timestamp":"2026-10-19T07:26:31.726Z"}
+[PASS] T17 HTTP => 202
+-------------------------------------------------------------
+=== T18 未知码 → ANL-7002；T19 2xx 非 JSON → ANL-7004；T20 404 AI-1003 → ANL-7002 ===
+STATUS=502 BODY={"code":"ANL-7002","message":"AI 分析服务暂时不可用，请稍后重试","data":null,"requestId":"req_rb15r_t18","timestamp":"2026-10-19T07:26:33.482Z"}
+[PASS] T18 未知码 → ANL-7002/502 => ANL-7002:502
+[PASS] T18 响应不含 AI-9999 => 0
+STATUS=422 BODY={"code":"ANL-7004","message":"分析结果校验未通过，请稍后重试","data":null,"requestId":"req_rb15r_t19","timestamp":"2026-10-19T07:26:35.787Z"}
+[PASS] T19 非 JSON 2xx → ANL-7004/422 => ANL-7004:422
+STATUS=502 BODY={"code":"ANL-7002","message":"AI 分析服务暂时不可用，请稍后重试","data":null,"requestId":"req_rb15r_t20","timestamp":"2026-10-19T07:26:37.605Z"}
+[PASS] T20 404 AI-1003 → ANL-7002/502 => ANL-7002:502
+[PASS] T20 响应不含 AI-1003 => 0
+[PASS] T20 日志保留原码 => 1
+-------------------------------------------------------------
+=== T21 出站头与路径（stub 记录） ===
+STUB_REQUESTS=11
+[PASS] T21 出站路径全为冒号形态 runs => 0
+[PASS] T21 内部令牌头全部正确 => 0
+[PASS] T21 X-Request-Id 全部非空 => 0
+[PASS] T21 至少有一次 202 成功受理 => 1
+-------------------------------------------------------------
+=== T22 内部请求体字段（AI_SERVICE_CONTRACT §3.2） ===
+REQ_BODY_T1={"analysis_run_id":1,"team_id":7,"warehouse_id":9004,"scope":{"scope_type":"SELECTED_SKUS","sku_ids":[9002]},"date_from":"2026-09-16","date_to":"2026-10-13","params":{"window_days":28,"min_days":7,"coverage_days":7,"lead_time_default":7,"ss_ratio":"0.5000","cv_high":"1.0000","enable_llm":false},"algorithm_version":"avg-ma-3sigma-v1","items":[]}
+[PASS] T22 team_id 来自上下文（=7） => 7
+[PASS] T22 items 恒空数组 => []
+[PASS] T22 必需字段齐全（9 个，NON_NULL 省略 null） => 1
+[PASS] T22 date_from 透传 => 2026-09-16
+[PASS] T22 跨团队请求 team_id=8 => 8
+-------------------------------------------------------------
+RB15R_PROBES_TOTAL=80
+RB15R_PASS=77  FAIL=1  PROBE_NOTE=2
+RB15R_RESULT=HAS FAILURES
