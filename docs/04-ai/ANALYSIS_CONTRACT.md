@@ -278,7 +278,7 @@ avg-ma-3sigma-v1+risk-rules-v1+replen-calc-v1
     {
       "rule_code": "R-SLOWMOVING",
       "inputs": { "last_30d_sales_qty": "162.500", "on_hand_qty": "8.000" },
-      "threshold": "近 SLOW_MOVING_DAYS(30) 天销量 = 0 且 on_hand_qty > 0",
+      "threshold": "近 min(SLOW_MOVING_DAYS(30), window_days(28)) 天销量 = 0 且 on_hand_qty > 0",
       "result": "NOT_TRIGGERED"
     },
     {
@@ -292,18 +292,18 @@ avg-ma-3sigma-v1+risk-rules-v1+replen-calc-v1
   "effective_in_transit_qty": "0.000",
   "committed_qty": "0.000",
   "inventory_position": "8.000",
-  "safety_stock": "21.875",
+  "safety_stock": "25.000",
   "lead_time_days": 7,
   "lead_time_source": "SKU",
   "coverage_days": 7,
   "cv": "0.4200",
   "volatility_adjusted": false,
-  "q_base": "79.375",
+  "q_base": "104.500",
   "moq_applied": "50.000",
   "order_multiple_applied": "10.000",
-  "q_suggest": "80.000",
+  "q_suggest": "110.000",
   "truncated_by_budget": false,
-  "llm_explanation": "SKU 当前现有库存 8 件，近 28 天日均销量约 6.25 件，仅够支撑约 1.3 天销售（低于 2 天警戒线），判定为缺货高风险。按交期 7 天与覆盖 7 天计算，理论补货约 79.4 件，叠加最小起订量后建议补货 80 件。",
+  "llm_explanation": "SKU 当前现有库存 8 件，近 28 天日均销量约 6.25 件，仅够支撑约 1.3 天销售（低于 2 天警戒线），判定为缺货高风险。按交期 7 天与覆盖 7 天计算，理论补货约 104.5 件，叠加最小起订量后建议补货 110 件。",
   "llm_evidence": ["on_hand_qty", "avg_daily_sales", "lead_time_days", "coverage_days", "q_suggest"],
   "llm_status": "SUCCEEDED",
   "warnings": []
@@ -362,7 +362,7 @@ avg-ma-3sigma-v1+risk-rules-v1+replen-calc-v1
 | GC-15 | 安全库存覆盖 | `safety_stock_override=100` | `SS=100.000`（覆盖公式） | `DESIGN_BASIS §10.3` |
 | GC-16 | 有效在途计入 `IP` | `on_hand=10`，`eff_in_transit=8`，`committed=0` | `IP=18.000`；`Q_base` 按 `IP=18` 计算 | `DESIGN_BASIS §10.4` |
 | GC-17 | 3σ 截尾 | 窗口含 1 个极端日（`qty` 远超 `mean+3σ`） | 极端日被剔除，`D` 为截尾后均值 | `DESIGN_BASIS §10.1` |
-| GC-18 | 全部规则未命中且 `Q_base<=0` | `D=1`，`on_hand=1000`，`L=0`，`R=0`，`SS=0` | `risk_level=NONE`，`q_suggest=null` | 边界 |
+| GC-18 | 全部规则未命中且 `Q_base<=0` | `D=1`，`on_hand=50`，`L=0`，`R=0`，`SS=0`（原稿 `on_hand=1000` 会触发 `OVERSTOCK`，不满足「全部未命中」，见 `DESIGN_REVIEW R116④`） | `risk_level=NONE`，`q_suggest=null` | 边界 |
 
 > **`enable_llm=false`**：以上 18 个用例**全部**可在无 LLM 条件下断言（`llm_explanation=null`、`llm_status="SKIPPED"`）。`llm_*` 相关行为另见 `AI_SERVICE_CONTRACT.md §9.2` 的 Mock LLM 用例。
 

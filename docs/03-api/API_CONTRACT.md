@@ -1573,10 +1573,10 @@ X-Request-Id: req_anl_003
         "lead_time_days": 7,
         "lead_time_source": "SKU",
         "coverage_days": 7,
-        "safety_stock_qty": "21.875",
+        "safety_stock_qty": "25.000",
         "volatility_adjusted": false,
-        "qty_base": "79.375",
-        "qty_suggest": "80.000",
+        "qty_base": "104.500",
+        "qty_suggest": "110.000",
         "moq_applied": "50.000",
         "order_multiple_applied": "10.000",
         "truncated_by_budget": false,
@@ -1597,7 +1597,7 @@ X-Request-Id: req_anl_003
           }
         ],
         "data_quality_json": { "level": "GOOD", "valid_days": 26, "missing_days": 2, "outlier_days": 0 },
-        "llm_explanation": "SKU-BAG-001-BLK 当前现有库存 8 件，近 28 天日均销量约 6.25 件，仅够支撑约 1.3 天销售（低于 2 天警戒线），判定为缺货高风险。按采购交期 7 天与覆盖天数 7 天计算，理论补货需求约 79.4 件，叠加最小起订量后建议补货 80 件。数据覆盖 26/28 天，质量良好，结论可信。",
+        "llm_explanation": "SKU-BAG-001-BLK 当前现有库存 8 件，近 28 天日均销量约 6.25 件，仅够支撑约 1.3 天销售（低于 2 天警戒线），判定为缺货高风险。按采购交期 7 天与覆盖天数 7 天计算，理论补货需求约 104.5 件，叠加最小起订量后建议补货 110 件。数据覆盖 26/28 天，质量良好，结论可信。",
         "llm_evidence": ["on_hand_qty", "avg_daily_sales", "lead_time_days", "coverage_days", "qty_suggest"],
         "llm_status": "SUCCEEDED",
         "warnings": []

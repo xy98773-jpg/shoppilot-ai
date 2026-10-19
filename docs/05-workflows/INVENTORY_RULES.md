@@ -660,7 +660,7 @@ CV 均 ≤ 1.0（不上浮）, committed_qty = 0, 无在途
 
 | SKU | 场景 | `D` | `on_hand` | `IP` | `SS` | `Q_base` | `MOQ` | `order_multiple` | `Q_suggest` | `truncated` | `risk_types` | `risk_level` |
 | --- | --- | --: | --: | --: | --: | --: | --: | --: | --: | :-: | --- | --- |
-| SKU-01 | 热销充足 | 6.250 | 200.000 | 200.000 | 25.000 | 0.000 | 1 | 1 | **0（不出建议）** | false | — | `NONE` |
+| SKU-01 | 热销充足 | 6.250 | 200.000 | 200.000 | 25.000 | 0.000 | 1 | 1 | **null（不出建议）** | false | — | `NONE` |
 | SKU-02 | 缺货高风险 | 6.250 | 8.000 | 8.000 | 25.000 | 104.500 | 1 | 1 | **104.500** | false | `STOCKOUT`, `LOW_STOCK` | `HIGH` |
 | SKU-03 | 数据不足 | `null` | 40.000 | 40.000 | — | `null` | — | — | **`null`（不出建议）** | false | `DATA_INSUFFICIENT` | `UNKNOWN` |
 | SKU-04 | MOQ 放大 | 3.000 | 5.000 | 5.000 | 12.000 | 49.000 | 100 | 1 | **100.000** | false | `STOCKOUT` | `HIGH` |

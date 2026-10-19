@@ -590,7 +590,7 @@ effective_in_transit_qty = Σ(poi.ordered_qty − poi.received_qty)
 ### 10.5 建议补货量 `Q_suggest`（套用采购约束）
 
 ```
-若 Q_base <= 0                     → Q_suggest = 0（不生成补货建议，只记录风险）
+若 Q_base <= 0                     → Q_suggest = null（不生成补货建议，只记录风险）
 基础量 = max(Q_base, MOQ)           MOQ 来自 policies → skus → suppliers → 默认 1
 若 order_multiple > 1:
      Q_suggest = ceil(基础量 / order_multiple) × order_multiple
@@ -599,6 +599,7 @@ effective_in_transit_qty = Σ(poi.ordered_qty − poi.received_qty)
 ```
 
 - `MOQ` / `order_multiple` 三级来源：`replenishment_policies` → `skus` → `suppliers`。
+- `q_suggest` 三态：`null` = 无建议（`Q_base <= 0` 或数据不足）、`"0.000"` = 有建议但被预算截断为 0、`> 0` = 实际建议量。
 - 预算限制首期**为可选项**，默认不启用（`analysis_runs.params_json.budget_limit` 为空即不限制）。
 
 ### 10.6 参数默认值总表（可配置项）
@@ -611,7 +612,7 @@ effective_in_transit_qty = Σ(poi.ordered_qty − poi.received_qty)
 | `DEFAULT_COVERAGE_DAYS`（R） | 7 | 分析请求 / 策略表 |
 | `SAFETY_RATIO` | 0.5 | 服务默认 |
 | `CV_HIGH` | 1.0 | 服务默认 |
-| `SLOW_MOVING_DAYS` | 30 | 服务默认（滞销判定窗口） |
+| `SLOW_MOVING_DAYS` | 30 | 服务默认（滞销判定窗口；**实际观察窗口 = `min(30, window_days)`**） |
 | `OVERSTOCK_DAYS` | 90 | 服务默认（过高库存判定） |
 | `ANOMALY_SIGMA` | 2.0 | 服务默认（异常检测） |
 | `MAX_ANALYSIS_SKUS` | 2000 | 服务默认（单次运行上限） |
@@ -627,7 +628,7 @@ effective_in_transit_qty = Σ(poi.ordered_qty − poi.received_qty)
 | `R-STOCKOUT` | 缺货风险 | `on_hand_qty`, `D` | `D > 0 AND on_hand_qty <= 0` → `HIGH`；`on_hand_qty / D <= 2` 天 → `HIGH`；`<= L` → `MEDIUM` | `risk_types += STOCKOUT` |
 | `R-LOWSTOCK` | 低库存 | `IP`, `D`, `L`, `R` | `D > 0` 且 `IP < D × (L + R)` → `MEDIUM`。**与 `R-STOCKOUT` 可以同时命中**（`risk_types` 是数组，不是单值；同时命中时 `risk_level` 取较高者） | `risk_types += LOW_STOCK` |
 | `R-OVERSTOCK` | 库存过高 | `on_hand_qty`, `D` | `D > 0 AND on_hand_qty / D > OVERSTOCK_DAYS` → `MEDIUM`；`> 2 × OVERSTOCK_DAYS` → `HIGH` | `OVERSTOCK` |
-| `R-SLOWMOVING` | 滞销 | 窗口销量、上架天数 | 近 `SLOW_MOVING_DAYS` 天总销量 = 0 且 `on_hand_qty > 0` → `MEDIUM` | `SLOW_MOVING` |
+| `R-SLOWMOVING` | 滞销 | 窗口销量、上架天数 | 近 `min(SLOW_MOVING_DAYS, window_days)` 天总销量 = 0 且 `on_hand_qty > 0` → `MEDIUM` | `SLOW_MOVING` |
 | `R-SALESANOMALY` | 销量异常 | 近 7 天 vs 前 21 天 | `|近7天日均 − 前21天日均| > ANOMALY_SIGMA × 前21天标准差` 且变化率 > 50% → `LOW`（仅提示） | `SALES_ANOMALY` |
 | `R-DATAINSUFFICIENT` | 数据不足 | `n < MIN_DAYS` | → `UNKNOWN`，`D = null`，**不生成补货建议**，仅记录 | `DATA_INSUFFICIENT` |
 

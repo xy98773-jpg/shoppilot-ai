@@ -391,6 +391,8 @@ X-Request-Id: req_anl_002
 
 **结果体积估算**：单 item 约 1.2–2.0KB（含 `risk_findings` 与可选 `llm_explanation`，解释文本设 800 字上限）；2000 items ≈ 3–4MB。< 8MB 上限，可全量。
 
+> **`risk_findings` 说明**：下方示例仅列**命中项**；实现须输出全部**已判定**规则（未命中为 `"NOT_TRIGGERED"`，跳过判定的规则不输出并写 `warnings`），见 `ANALYSIS_CONTRACT §5.1`。
+
 **响应体（200）**
 
 ```json
@@ -440,16 +442,16 @@ X-Request-Id: req_anl_002
         "effective_in_transit_qty": "0.000",
         "committed_qty": "0.000",
         "inventory_position": "8.000",
-        "safety_stock": "21.875",
+        "safety_stock": "25.000",
         "lead_time_days": 7,
         "lead_time_source": "SKU",
         "coverage_days": 7,
         "cv": "0.4200",
         "volatility_adjusted": false,
-        "q_base": "79.375",
+        "q_base": "104.500",
         "moq_applied": "50.000",
         "order_multiple_applied": "10.000",
-        "q_suggest": "80.000",
+        "q_suggest": "110.000",
         "truncated_by_budget": false,
         "llm_explanation": null,
         "llm_evidence": [],
