@@ -1,0 +1,158 @@
+JAR_SHA256=25199fac4da5d99975e66ad52003eb7ef0bdb674cbc0a750ed4ff8ebb9303ab2
+PORTS_FREE 3396/18386/18396/18397
+MYSQL_READY=1
+SERVICE_AI_UP=1 (real container, port 18396)
+CAPTURE_PROXY_UP=1 (18391 -> 18396)
+APP_UP=1 (port 18386)
+-------------------------------------------------------------
+=== S1 结构面 ===
+[PASS] fat jar 内含 V1.0.9__analysis.sql => 1
+[PASS] 迁移版本数（10） => 10
+[PASS] analysis_runs.warehouse_id 可空（NULL=默认仓的历史语义仍在） => YES
+[PASS] 种子导入成功 => 0
+[PASS] 种子：团队 7 的默认仓 9004 is_default=1 => 1
+[PASS] 种子：9003 无库存行 => 0
+[PASS] 种子：9002 销量 28 条（含窗口外 1 条） => 28
+[PASS] operator01 登录 => 1
+[PASS] owner8（团队 8）登录 => 1
+-------------------------------------------------------------
+=== T1 端到端：Java 202 → 真实 service-ai 编排 → COMPLETED ===
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":1,"run_no":"RUN-20261019-0001","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T14:31:37.334Z","created_at":"2026-10-19T14:26:37.359Z"},"requestId":"req_b201r_t1","timestamp":"2026-10-19T14:26:37.481Z"}
+[PASS] T1 HTTP => 202
+[PASS] T1 code => OK
+[PASS] T1 DB status=RUNNING（Java 侧已发起） => RUNNING
+[PASS] T1 DB warehouse_id 回填为默认仓 9004（请求未带仓） => 9004
+[PASS] T1 DB team_id=7（来自 JWT） => 7
+[PASS] T1 审计 CREATE=1 => 1
+[PASS] T1 审计 FINISH=0（B20.2 才落库，本批不该有） => 0
+  NOTE 等 Python 编排完成（Java 侧轮询属 B20.2，本批直接查 Python 内部端点）
+[PASS] T1 ★Python 侧 execution_status=COMPLETED（items 真实装配 ⇒ 端到端打通） => COMPLETED
+[PASS] T1 Python result 200 + OK => OK
+[PASS] T1 Python summary.total_skus=1 => 1
+[PASS] T1 Python item.avg_daily_sales=6.000（27 天×6.000 / 27 天） => 6.000
+[PASS] T1 Python item.valid_days=27（不补 0） => 27
+[PASS] T1 Python item.inventory_position=14.000（10+5-1） => 14.000
+-------------------------------------------------------------
+=== T2 出站请求体（抓包，非自报） ===
+[PASS] T2 抓到 1 次出站 create => 1
+[PASS] T2 出站 warehouse_id=9004（解析后的默认仓） => 9004
+[PASS] T2 出站 items 条数=1 => 1
+[PASS] T2 出站 item.sku_id=9002 => 9002
+[PASS] T2 出站 on_hand_qty=10.000 => 10.000
+[PASS] T2 出站 committed_qty=1.000 => 1.000
+[PASS] T2 出站 effective_in_transit_qty=5.000（R124 余额列口径） => 5.000
+[PASS] T2 出站 lead_time_source=POLICY（策略 4 压住 sku 的 3） => POLICY
+[PASS] T2 出站 lead_time_days=4 => 4
+[PASS] T2 出站 safety_stock_override=12.500（策略） => 12.500
+[PASS] T2 出站 moq=50.000（策略） => 50.000
+[PASS] T2 出站 order_multiple=10.000（策略） => 10.000
+[PASS] T2 出站 qty_step=2.000（策略） => 2.000
+[PASS] T2 出站 listed_date=2026-01-15 => 2026-01-15
+[PASS] T2 出站 sales_series 条数=27（不补 0、窗口外被过滤） => 27
+[PASS] T2 出站 sales_series 不含 2026-09-17（缺失日不补） => 0
+[PASS] T2 出站 sales_series 不含 2026-10-20（窗口外被过滤） => 0
+[PASS] T2 出站 sales_series 首条 qty=6.000（字符串 3 位小数） => 6.000
+[PASS] T2 出站 items 字段集合（Python Item extra=forbid，多一个就 400） => committed_qty, effective_in_transit_qty, lead_time_days, lead_time_source, listed_date, moq, on_hand_qty, order_multiple, qty_step, safety_stock_override, sales_series, sku_id
+-------------------------------------------------------------
+=== T3 幂等：请求不带仓，重投仍同体（Q3 核心回归） ===
+STATUS=202 REPLAYED=true BODY={"code":"OK","message":"success","data":{"run_id":1,"run_no":"RUN-20261019-0001","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T14:31:37.334Z","created_at":"2026-10-19T14:26:37.359Z"},"requestId":"req_b201r_t3","timestamp":"2026-10-19T14:27:15.716Z"}
+[PASS] T3 HTTP => 202
+[PASS] T3 Idempotent-Replayed => true
+[PASS] T3 run_id 与首次一致 => 1
+[PASS] T3 同键行数仍为 1 => 1
+[PASS] T3 出站未新增 create（第 2 次被幂等拦截） => 1
+-------------------------------------------------------------
+=== T4 跨团队 SKU ⇒ COM-0001，且不建 run、不写 FINISH 审计（Q5） ===
+STATUS=400 BODY={"code":"COM-0001","message":"请求参数校验失败","data":null,"details":[{"field":"scope.sku_ids","message":"SKU 不存在或不属于当前团队","rejectedValue":9102}],"requestId":"req_b201r_t4","timestamp":"2026-10-19T14:27:24.066Z"}
+[PASS] T4 HTTP => 400
+[PASS] T4 code => COM-0001
+[PASS] T4 details[0].field=scope.sku_ids => scope.sku_ids
+[PASS] T4 details[0].rejectedValue=9102 => 9102
+[PASS] T4 run 行数未增 => 1
+[PASS] T4 FINISH 审计未增 => 0
+-------------------------------------------------------------
+=== T5 INACTIVE SKU ⇒ COM-0001 ===
+STATUS=400 BODY={"code":"COM-0001","message":"请求参数校验失败","data":null,"details":[{"field":"scope.sku_ids","message":"SKU 状态不是 ACTIVE（当前：INACTIVE）","rejectedValue":9005}],"requestId":"req_b201r_t5","timestamp":"2026-10-19T14:27:31.767Z"}
+[PASS] T5 HTTP => 400
+[PASS] T5 code => COM-0001
+-------------------------------------------------------------
+=== T6 交期四来源（ALL_ACTIVE 一次装全） ===
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":2,"run_no":"RUN-20261019-0002","status":"RUNNING","scope_type":"ALL_ACTIVE","total_skus":0,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T14:32:35.494Z","created_at":"2026-10-19T14:27:35.501Z"},"requestId":"req_b201r_t6","timestamp":"2026-10-19T14:27:35.549Z"}
+[PASS] T6 HTTP => 202
+[PASS] T6 出站 items=5（9002/9003/9004/9006/9007；9005 INACTIVE 排除） => 5
+[PASS] T6 出站 sku_id 升序 => [9002, 9003, 9004, 9006, 9007]
+[PASS] T6 交期来源四分支（9002=POLICY/9007=SKU/9004=SUPPLIER/9003,9006=DEFAULT） => 9002:POLICY:4|9003:DEFAULT:7|9004:SUPPLIER:9|9006:DEFAULT:7|9007:SKU:2
+[PASS] T6 9003（无余额行）三项兜 0.000 => 0.000
+[PASS] T6 9003（策略 is_enabled=0）不下发 safety_stock_override => None
+[PASS] T6 9003 无销量 ⇒ sales_series 空数组 => 0
+[PASS] T6 9002 销量 27 条（不补 0、窗口外过滤） => 27
+[PASS] T6 9007 有 sku 级交期 2 但无策略 ⇒ 不下发采购参数 => None
+-------------------------------------------------------------
+=== T6b CATEGORY 按 products.category 取 SKU ===
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":3,"run_no":"RUN-20261019-0003","status":"RUNNING","scope_type":"CATEGORY","total_skus":0,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T14:32:45.841Z","created_at":"2026-10-19T14:27:45.850Z"},"requestId":"req_b201r_t6b","timestamp":"2026-10-19T14:27:45.903Z"}
+[PASS] T6b HTTP => 202
+[PASS] T6b CATEGORY CAT-01 ⇒ 命中 9002/9003/9004/9006/9007（9005 INACTIVE 排除） => [9002, 9003, 9004, 9006, 9007]
+-------------------------------------------------------------
+=== T7 Q15：CATEGORY 匹配为空 ⇒ 放行（建 run，不报错） ===
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":4,"run_no":"RUN-20261019-0004","status":"RUNNING","scope_type":"CATEGORY","total_skus":0,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T14:32:50.685Z","created_at":"2026-10-19T14:27:50.693Z"},"requestId":"req_b201r_t7","timestamp":"2026-10-19T14:27:50.743Z"}
+[PASS] T7 HTTP => 202
+[PASS] T7 run 行数 +1（范围空是业务事实） => 4
+[PASS] T7 出站 items=0 => 0
+-------------------------------------------------------------
+=== T8 Q16：2001 个 SKU ⇒ ANL-7007（早于存在性校验） ===
+STATUS=400 BODY={"code":"ANL-7007","message":"单次分析的 SKU 数量过多，请缩小范围","data":null,"requestId":"req_b201r_t8","timestamp":"2026-10-19T14:27:56.801Z"}
+[PASS] T8 HTTP => 400
+[PASS] T8 code=ANL-7007（不是 COM-0001） => ANL-7007
+[PASS] T8 run 行数未增 => 4
+-------------------------------------------------------------
+=== T9 无默认仓 ⇒ COM-0001（details=未配置默认仓） ===
+STATUS=400 BODY={"code":"COM-0001","message":"请求参数校验失败","data":null,"details":[{"field":"warehouse_id","message":"未配置默认仓"}],"requestId":"req_b201r_t9","timestamp":"2026-10-19T14:28:03.090Z"}
+[PASS] T9 HTTP => 400
+[PASS] T9 code => COM-0001
+[PASS] T9 details[0].message=未配置默认仓 => 未配置默认仓
+[PASS] T9 details[0].field=warehouse_id => warehouse_id
+-------------------------------------------------------------
+=== T10 默认仓命中多行 ⇒ COM-0001（数据异常不猜） ===
+STATUS=400 BODY={"code":"COM-0001","message":"请求参数校验失败","data":null,"details":[{"field":"warehouse_id","message":"默认仓数据异常：同一团队命中多个 is_default=1 且 ACTIVE 的仓库","rejectedValue":[9004,9010]}],"requestId":"req_b201r_t10","timestamp":"2026-10-19T14:28:10.805Z"}
+[PASS] T10 HTTP => 400
+[PASS] T10 code => COM-0001
+[PASS] T10 details[0].message 含「默认仓数据异常」 => 1
+-------------------------------------------------------------
+=== T11 显式指定非默认仓 9010（is_default=0）⇒ 原样使用 ===
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":5,"run_no":"RUN-20261019-0005","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T14:33:16.764Z","created_at":"2026-10-19T14:28:16.772Z"},"requestId":"req_b201r_t11","timestamp":"2026-10-19T14:28:16.852Z"}
+[PASS] T11 HTTP => 202
+[PASS] T11 DB warehouse_id=9010 => 9010
+[PASS] T11 出站 warehouse_id=9010 => 9010
+[PASS] T11 该仓无余额 ⇒ 三项兜 0.000 => 0.000
+-------------------------------------------------------------
+=== T12 R124：每次装配打一条 WARN ===
+[PASS] T12 app.log 含 R124 WARN => 1
+[PASS] T12 WARN 提到 M6 换回 §10.4 => 1
+-------------------------------------------------------------
+=== T13 越界与依赖检查（静态） ===
+[PASS] T13 analysis 主代码零 identity 引用（Q1） => 0
+[PASS] T13 装配器零 SQL 字符串拼接 => 0
+[PASS] T13 装配器未引用 Team 的默认仓 getter（R125） => 0
+  NOTE T13 装配器直接注入的对方 Mapper 导入行数 = 6（MODULE_BOUNDARIES §1.3/§5.3 口径只允许走 application 层服务接口）
+  NOTE T13 既有先例：importdata 的 ImportValidationService 也直接注入 catalog Mapper（4 行）
+  NOTE T13 catalog 侧已有 WarehouseQueryService.getDefaultWarehouse()（注释写明「供 inventory/analysis 等下游使用」）但走 LIMIT 1，检测不到 Q1 要求的「多默认仓」异常
+-------------------------------------------------------------
+=== T14 存量 NULL 仓行 + 同 Idempotency-Key 重投（Q3 裁定的边界：存量行） ===
+STATUS=409 REPLAYED=false BODY={"code":"COM-0009","message":"相同的幂等键已用于另一笔请求，请更换幂等键","data":null,"requestId":"req_b201r_t14","timestamp":"2026-10-19T14:28:31.013Z"}
+  NOTE 存量行的 warehouse_id 是 NULL（Q3 之前写入），而重投请求解析出 9004 ⇒ 两者不等
+[PASS] T14 现状：被判异体 COM-0009（不重放） => COM-0009
+  NOTE ★ 判为**已知边界**（Q3 只保证『新写行』用解析值；存量 NULL 行仍会误判异体）
+-------------------------------------------------------------
+=== T15 请求显式指定**他团队**的仓库 9103（AI_SERVICE_CONTRACT §7 第 3 条归 B20.2） ===
+STATUS=202 BODY={"code":"OK","message":"success","data":{"run_id":7,"run_no":"RUN-20261019-0006","status":"RUNNING","scope_type":"SELECTED_SKUS","total_skus":1,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-19T14:33:35.383Z","created_at":"2026-10-19T14:28:35.392Z"},"requestId":"req_b201r_t15","timestamp":"2026-10-19T14:28:35.449Z"}
+[PASS] T15 HTTP 202（仓库归属校验属 B20.2 落库前二次校验，本批不校验） => 202
+[PASS] T15 DB warehouse_id 原样落 9103（未改写） => 9103
+[PASS] T15 出站 warehouse_id=9103 => 9103
+[PASS] T15 ★他团队仓无本团队余额 ⇒ 三项兜 0.000（租户线过滤，非数据泄漏） => 0.000
+[PASS] T15 ★他团队仓无本团队销量 ⇒ sales_series 空 => 0
+  NOTE ★ 观察：跨团队仓库当前不报错、只会装配出全 0 快照 ⇒ Python 侧判 AI-2002（不可分析）；
+-------------------------------------------------------------
+=== SUMMARY ===
+RB201R_PASS=93 RB201R_FAIL=0
+CAPTURE_LINES=6
+RB201R_DONE

@@ -1,0 +1,4 @@
+*.log
+__pycache__/
+q.err
+seed.err
