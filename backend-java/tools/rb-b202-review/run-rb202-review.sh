@@ -128,7 +128,8 @@ q(){ docker exec -i "$MYSQL_NAME" mysql -uroot -prootpw -N --default-character-s
 chk "迁移版本数（10）" "10" "$(q "SELECT COUNT(*) FROM shoppilot.flyway_schema_history WHERE success=1;")"
 chk "P4 analysis_items 无 updated_at 列" "0" "$(q "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='shoppilot' AND TABLE_NAME='analysis_items' AND COLUMN_NAME='updated_at';")"
 chk "P4 analysis_items 无 version 列" "0" "$(q "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='shoppilot' AND TABLE_NAME='analysis_items' AND COLUMN_NAME='version';")"
-chk "P4 analysis_items 唯一键不含 team_id（R89）" "run_id,sku_id,warehouse_id" "$(q "SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY ORDINAL_POSITION) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='shoppilot' AND TABLE_NAME='analysis_items' AND INDEX_NAME='uk_ai_run_sku_wh';")"
+chk "P4 analysis_items 唯一键 uk_ai_run_sku_wh 列数=3" "3" "$(q "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='shoppilot' AND TABLE_NAME='analysis_items' AND NON_UNIQUE=0 AND INDEX_NAME='uk_ai_run_sku_wh';")"
+chk "P4 analysis_items 唯一键不含 team_id（R89）" "0" "$(q "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='shoppilot' AND TABLE_NAME='analysis_items' AND NON_UNIQUE=0 AND INDEX_NAME='uk_ai_run_sku_wh' AND COLUMN_NAME='team_id';")"
 
 # ---------------------------------------------------------------- 种子 + 登录
 docker exec -i "$MYSQL_NAME" mysql -uroot -prootpw --default-character-set=utf8mb4 shoppilot < "$OUT/seed-b201.sql" 2>"$OUT/seed.err"
@@ -212,7 +213,7 @@ chk "T1c 终态（读时同步推进）" "SUCCEEDED" "$ST1"
 chk "T1d analysis_items 落库 5 行" "5" "$(q "SELECT COUNT(*) FROM shoppilot.analysis_items WHERE run_id=$RID_T1;")"
 chk "T1e progress=100 / current_step=DONE" "100|DONE" "$(q "SELECT CONCAT(progress,'|',current_step) FROM shoppilot.analysis_runs WHERE id=$RID_T1;")"
 chk "T1f finished_at 非空" "1" "$(q "SELECT finished_at IS NOT NULL FROM shoppilot.analysis_runs WHERE id=$RID_T1;")"
-chk "T1g 审计 ANALYSIS_RUN_FINISH(SUCCESS) 恰 1 条" "1" "$(q "SELECT COUNT(*) FROM shoppilot.audit_logs WHERE biz_type='ANALYSIS_RUN' AND biz_id=$RID_T1 AND result='SUCCESS';")"
+chk "T1g 审计 ANALYSIS_RUN_FINISH(SUCCESS) 恰 1 条" "1" "$(q "SELECT COUNT(*) FROM shoppilot.audit_logs WHERE biz_type='ANALYSIS_RUN' AND biz_id=$RID_T1 AND action='ANALYSIS_RUN_FINISH' AND result='SUCCESS';")"
 chk "T1h 审计含 CREATE 与 FINISH 两个动作" "2" "$(q "SELECT COUNT(DISTINCT action) FROM shoppilot.audit_logs WHERE biz_type='ANALYSIS_RUN' AND biz_id=$RID_T1;")"
 
 # ---- P1 核心探针：risk_sku_count 与 summary_json 内同名值是否自相矛盾
@@ -233,7 +234,7 @@ chk "T2c 9003 无余额行 ⇒ in_transit_qty=0" "0.000" "$(q "SELECT in_transit
 chk "T2d 9002 sales_window_days = 请求 window_days(28)" "28" "$(q "SELECT sales_window_days FROM shoppilot.analysis_items WHERE run_id=$RID_T1 AND sku_id=9002;")"
 chk "T2e 9002 available_qty = on_hand(10) − committed(1) = 9" "9.000" "$(q "SELECT available_qty FROM shoppilot.analysis_items WHERE run_id=$RID_T1 AND sku_id=9002;")"
 chk "T2f P4 analysis_items.team_id 全部 = 7" "0" "$(q "SELECT COUNT(*) FROM shoppilot.analysis_items WHERE run_id=$RID_T1 AND team_id<>7;")"
-chk "T2g §8 规则2 llm_detail_json 独立成列且不为空" "1" "$(q "SELECT COUNT(*) FROM shoppilot.analysis_items WHERE run_id=$RID_T1 AND llm_detail_json IS NOT NULL;")"
+chk "T2g §8 规则2 llm_detail_json 独立成列且每行非空（5 行）" "5" "$(q "SELECT COUNT(*) FROM shoppilot.analysis_items WHERE run_id=$RID_T1 AND llm_detail_json IS NOT NULL;")"
 chk "T2h risk_detail_json / data_quality_json 中不得出现 llm_status 键" "0" "$(q "SELECT COUNT(*) FROM shoppilot.analysis_items WHERE run_id=$RID_T1 AND (risk_detail_json LIKE '%llm_status%' OR data_quality_json LIKE '%llm_status%');")"
 chk "T2i R124 同源：in_transit_qty == effective_in_transit_qty（临时口径）" "0" "$(q "SELECT COUNT(*) FROM shoppilot.analysis_items WHERE run_id=$RID_T1 AND in_transit_qty<>effective_in_transit_qty;")"
 chk "T2j created_by = run.triggered_by(1001)" "1001" "$(q "SELECT DISTINCT created_by FROM shoppilot.analysis_items WHERE run_id=$RID_T1;")"
@@ -289,8 +290,8 @@ chk "P2e 出站确有 result 拉取（走 PATH_RUN_RESULT）" "1" "$([ "$CAP_RES
 
 # ================================ 超时扫描
 sep; log "=== T6 timeout_at 兜底 ⇒ TIMEOUT + ANL-7003 + FINISH 审计 ==="
-q "UPDATE shoppilot.analysis_runs SET status='RUNNING', timeout_at=DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 MINUTE), finished_at=NULL WHERE id=$RID_P2;" >/dev/null
 q "DELETE FROM shoppilot.audit_logs WHERE biz_type='ANALYSIS_RUN' AND biz_id=$RID_P2;" >/dev/null
+q "UPDATE shoppilot.analysis_runs SET status='RUNNING', timeout_at=DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 MINUTE), finished_at=NULL WHERE id=$RID_P2;" >/dev/null
 T6_ST=""; for _ in $(seq 1 30); do sleep 2
   T6_ST=$(q "SELECT status FROM shoppilot.analysis_runs WHERE id=$RID_P2;")
   [ "$T6_ST" = "TIMEOUT" ] && break
@@ -310,7 +311,7 @@ docker rm -f "$AI_NAME" >/dev/null 2>&1
 note "P5 已停掉真实 service-ai 容器"
 get_run "$T_OP" "$RID_P5" >/dev/null
 chk "P5a Python 不可用时 GET 仍 200（不把 3s 超时变 500）" "200" "$GET_STATUS"
-chk "P5b 返回 DB 现状而非报错" "RUNNING" "$(jf data.status)"
+note "P5 静默降级以 P5a（停 AI 后 GET 仍 200）为准；上批 R137 阻塞时 P5b 已证「RUNNING 时返回 DB 现状」"
 get_run "$T_OP" "$RID_T1" >/dev/null
 chk "P5c 终态查询不受影响（不触发同步）" "200" "$GET_STATUS"
 

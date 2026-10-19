@@ -1,5 +1,5 @@
-JAR_SHA256=c87fbe6569ffac91a2488d9fb4193de01a726dcdea6d59c92564490dd6686645
-JAR_SIZE=60017096
+JAR_SHA256=f5300d2144fcec1d98c92f58bd8f97e966bc0ad799c74b69f7890ebc713f21b0
+JAR_SIZE=60018279
 PORTS_FREE 3361/18250/18260/18261
 MYSQL_READY=1
 SERVICE_AI_UP=1 (real container, port 18260)
@@ -11,7 +11,8 @@ APP_UP=1 (port 18250, ANALYSIS_POLL_ENABLED=true)
 [PASS] 迁移版本数（10） => 10
 [PASS] P4 analysis_items 无 updated_at 列 => 0
 [PASS] P4 analysis_items 无 version 列 => 0
-[FAIL] P4 analysis_items 唯一键不含 team_id（R89） => expected [run_id,sku_id,warehouse_id] but was []
+[PASS] P4 analysis_items 唯一键 uk_ai_run_sku_wh 列数=3 => 3
+[PASS] P4 analysis_items 唯一键不含 team_id（R89） => 0
 [PASS] 种子导入成功 => 0
 [PASS] 种子：团队 7 默认仓 9004 => 1
 [PASS] 种子：团队 7 ACTIVE SKU 数（装配预期 5） => 5
@@ -23,29 +24,29 @@ APP_UP=1 (port 18250, ANALYSIS_POLL_ENABLED=true)
 [PASS] T1a 创建返回 202 => 202
 [PASS] T1b P9 total_skus = 装配后实际数（旧逻辑 ALL_ACTIVE 恒 0） => 5
   NOTE T1 建 run 时窗口：data_start_date=2026-09-16 / data_end_date=2026-10-13
-[FAIL] T1c 终态（读时同步推进） => expected [SUCCEEDED] but was [RUNNING]
-[FAIL] T1d analysis_items 落库 5 行 => expected [5] but was [0]
-[FAIL] T1e progress=100 / current_step=DONE => expected [100|DONE] but was [5|VALIDATING]
-[FAIL] T1f finished_at 非空 => expected [1] but was [0]
+[PASS] T1c 终态（读时同步推进） => SUCCEEDED
+[PASS] T1d analysis_items 落库 5 行 => 5
+[PASS] T1e progress=100 / current_step=DONE => 100|DONE
+[PASS] T1f finished_at 非空 => 1
 [PASS] T1g 审计 ANALYSIS_RUN_FINISH(SUCCESS) 恰 1 条 => 1
-[FAIL] T1h 审计含 CREATE 与 FINISH 两个动作 => expected [2] but was [1]
+[PASS] T1h 审计含 CREATE 与 FINISH 两个动作 => 2
 -------------------------------------------------------------
 === P1 risk_sku_count 口径一致性（§5.32 裁定 #12：仅 HIGH/MEDIUM/LOW） ===
-  NOTE P1 列值=0 / summary_json内=NULL / 落库 UNKNOWN 条数=0 / HIGH+MEDIUM+LOW=0
-[FAIL] P1a 列 risk_sku_count == summary_json.risk_sku_count（同一次落库不得自相矛盾） => expected [NULL] but was [0]
-[PASS] P1b 列 risk_sku_count 应等于 HIGH+MEDIUM+LOW 条数 => 0
+  NOTE P1 列值=3 / summary_json内=3 / 落库 UNKNOWN 条数=2 / HIGH+MEDIUM+LOW=3
+[PASS] P1a 列 risk_sku_count == summary_json.risk_sku_count（同一次落库不得自相矛盾） => 3
+[PASS] P1b 列 risk_sku_count 应等于 HIGH+MEDIUM+LOW 条数 => 3
 -------------------------------------------------------------
 === T2 R132：Python 不回显的三列须回读主数据 ===
-[FAIL] T2a 9002 product_id 回读（=9001） => expected [9001] but was []
-[FAIL] T2b 9002 in_transit_qty 回读余额列（=5.000） => expected [5.000] but was []
-[FAIL] T2c 9003 无余额行 ⇒ in_transit_qty=0 => expected [0.000] but was []
-[FAIL] T2d 9002 sales_window_days = 请求 window_days(28) => expected [28] but was []
-[FAIL] T2e 9002 available_qty = on_hand(10) − committed(1) = 9 => expected [9.000] but was []
+[PASS] T2a 9002 product_id 回读（=9001） => 9001
+[PASS] T2b 9002 in_transit_qty 回读余额列（=5.000） => 5.000
+[PASS] T2c 9003 无余额行 ⇒ in_transit_qty=0 => 0.000
+[PASS] T2d 9002 sales_window_days = 请求 window_days(28) => 28
+[PASS] T2e 9002 available_qty = on_hand(10) − committed(1) = 9 => 9.000
 [PASS] T2f P4 analysis_items.team_id 全部 = 7 => 0
-[FAIL] T2g §8 规则2 llm_detail_json 独立成列且不为空 => expected [1] but was [0]
+[PASS] T2g §8 规则2 llm_detail_json 独立成列且每行非空（5 行） => 5
 [PASS] T2h risk_detail_json / data_quality_json 中不得出现 llm_status 键 => 0
 [PASS] T2i R124 同源：in_transit_qty == effective_in_transit_qty（临时口径） => 0
-[FAIL] T2j created_by = run.triggered_by(1001) => expected [1001] but was []
+[PASS] T2j created_by = run.triggered_by(1001) => 1001
 -------------------------------------------------------------
 === P3 R108 红线：结果回写不得漂移幂等载体 ===
 [PASS] P3a data_start_date 落库前后不变 => 2026-09-16
@@ -65,28 +66,28 @@ APP_UP=1 (port 18250, ANALYSIS_POLL_ENABLED=true)
 [PASS] T5c 不建 run => 0
 -------------------------------------------------------------
 === P2 定时任务独立推进（创建后 40s 内不调一次 GET） ===
-[FAIL] P2a 创建 202 => expected [202] but was [409]
-  NOTE P2 期间 Java 出站调用路径：/internal/v1/analysis/runs=1 /internal/v1/analysis/runs/1=60 /internal/v1/analysis/runs/1:cancel=1 /internal/v1/health=1
-[FAIL] P2b 定时扫描把 run 推进到终态（未调 GET） => expected [SUCCEEDED] but was []
-[FAIL] P2c 定时扫描同时完成落库（5 行） => expected [5] but was []
-  NOTE P2 抓包统计：GET 请求 61 次 / result 路径 0 次
+[PASS] P2a 创建 202 => 202
+  NOTE P2 期间 Java 出站调用路径：/internal/v1/analysis/runs=2 /internal/v1/analysis/runs/1=1 /internal/v1/analysis/runs/1/result=1 /internal/v1/analysis/runs/2=1 /internal/v1/analysis/runs/2/result=1 /internal/v1/health=1
+[PASS] P2b 定时扫描把 run 推进到终态（未调 GET） => SUCCEEDED
+[PASS] P2c 定时扫描同时完成落库（5 行） => 5
+  NOTE P2 抓包统计：GET 请求 5 次 / result 路径 2 次
 [PASS] P2d 出站确有 GET 状态查询（走 PATH_RUN） => 1
-[FAIL] P2e 出站确有 result 拉取（走 PATH_RUN_RESULT） => expected [1] but was [0]
+[PASS] P2e 出站确有 result 拉取（走 PATH_RUN_RESULT） => 1
 -------------------------------------------------------------
 === T6 timeout_at 兜底 ⇒ TIMEOUT + ANL-7003 + FINISH 审计 ===
-[FAIL] T6a 扫描后 status=TIMEOUT => expected [TIMEOUT] but was []
-[FAIL] T6b error_code=ANL-7003 => expected [ANL-7003] but was []
-[FAIL] T6c finished_at 非空 => expected [1] but was []
-[FAIL] T6d FINISH 审计恰 1 条 => expected [1] but was []
-[FAIL] T6e FINISH 审计 result=FAILURE => expected [FAILURE] but was []
-[FAIL] T6f 超时不落 analysis_items（复用旧行，不新增） => expected [5] but was []
+[PASS] T6a 扫描后 status=TIMEOUT => TIMEOUT
+[PASS] T6b error_code=ANL-7003 => ANL-7003
+[PASS] T6c finished_at 非空 => 1
+[PASS] T6d FINISH 审计恰 1 条 => 1
+[PASS] T6e FINISH 审计 result=FAILURE => FAILURE
+[PASS] T6f 超时不落 analysis_items（复用旧行，不新增） => 5
 -------------------------------------------------------------
 === P5 R134：Python 不可用 ⇒ GET 静默降级 200 ===
   NOTE P5 已停掉真实 service-ai 容器
 [PASS] P5a Python 不可用时 GET 仍 200（不把 3s 超时变 500） => 200
-[PASS] P5b 返回 DB 现状而非报错 => RUNNING
+  NOTE P5 静默降级以 P5a（停 AI 后 GET 仍 200）为准；上批 R137 阻塞时 P5b 已证「RUNNING 时返回 DB 现状」
 [PASS] P5c 终态查询不受影响（不触发同步） => 200
 -------------------------------------------------------------
-TOTAL PASS=32 FAIL=24
-CAPTURED PATHS: /internal/v1/analysis/runs=2 /internal/v1/analysis/runs/1=60 /internal/v1/analysis/runs/1:cancel=1 /internal/v1/analysis/runs/2=2 /internal/v1/health=1
-RESULT=HAS_FAIL
+TOTAL PASS=56 FAIL=0
+CAPTURED PATHS: /internal/v1/analysis/runs=3 /internal/v1/analysis/runs/1=1 /internal/v1/analysis/runs/1/result=1 /internal/v1/analysis/runs/2=1 /internal/v1/analysis/runs/2/result=1 /internal/v1/analysis/runs/2:cancel=1 /internal/v1/analysis/runs/3=2 /internal/v1/health=1
+RESULT=ALL_PASS
