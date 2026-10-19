@@ -28,12 +28,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code DATABASE_DESIGN §5.8/§5.9/§5.10/§7.4} 与 {@code DATABASE_CONSTRAINTS #9–#12/§4.1/§4.2/§5.2}
  * 的数据库级保障：
  * <ul>
- *   <li>Flyway 应用 {@code V1.0.0} → {@code V1.0.8} 共九条迁移，三表存在；</li>
+ *   <li>Flyway 应用 {@code V1.0.0} → {@code V1.0.9} 共十条迁移，三表存在；</li>
  *   <li>四条唯一键在<b>团队内</b>冲突：{@code uk_pol_team_sku_wh} / {@code uk_invbal_team_wh_sku} /
  *       {@code uk_invtxn_team_idem} / {@code uk_invtxn_team_reversed}；</li>
  *   <li>跨团队同业务键<b>允许</b>共存（唯一性只在团队内，{@code DESIGN_BASIS §6} 规则 2）；</li>
  *   <li>可空列上的唯一键允许多行 {@code NULL}（{@code reversed_txn_id}）；</li>
- *   <li>九条 CHECK 逐条负向验证（{@code ck_invtxn_consistency} / {@code ck_invtxn_delta_non_zero} /
+ *   <li>9 条 CHECK 逐条负向验证（{@code ck_invtxn_consistency} / {@code ck_invtxn_delta_non_zero} /
  *       {@code ck_invtxn_*_non_negative} / {@code ck_invtxn_type} / {@code ck_invtxn_biz_type} /
  *       {@code ck_invbal_*_non_negative}）；</li>
  *   <li>{@code available_qty} 是 {@code STORED} 生成列：不可显式写入、自动计算、可索引；</li>
@@ -79,7 +79,7 @@ class InventorySchemaConstraintTest {
     static void setUp() {
         dataSource = new DriverManagerDataSource(
                 MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
-        // 真实执行 Flyway 迁移链（V1.0.0 baseline → V1.0.6 inventory）
+        // 真实执行 Flyway 迁移链（V1.0.0 baseline → V1.0.9 analysis）
         Flyway.configure()
                 .dataSource(dataSource)
                 .locations("classpath:db/migration")
@@ -111,12 +111,12 @@ class InventorySchemaConstraintTest {
     }
 
     // =====================================================================
-    // ① 三表存在 + Flyway 已应用到 1.0.8
+    // ① 三表存在 + Flyway 已应用到 1.0.9
     // =====================================================================
 
     @Test
-    @DisplayName("① Flyway 全链到 V1.0.8：三张库存表存在，九条迁移均 success=1")
-    void migrationAppliesThroughV108AndCreatesThreeTables() throws Exception {
+    @DisplayName("① Flyway 全链到 V1.0.9：三张库存表存在，十条迁移均 success=1")
+    void migrationAppliesThroughV109AndCreatesThreeTables() throws Exception {
         List<String> tables = queryStrings(
                 "SELECT table_name FROM information_schema.tables "
                         + "WHERE table_schema = DATABASE() ORDER BY table_name");
@@ -126,10 +126,11 @@ class InventorySchemaConstraintTest {
 
         List<String> versions = queryStrings(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank");
-        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6", "1.0.7", "1.0.8"),
+        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6", "1.0.7", "1.0.8", "1.0.9"),
                 versions,
-                "应应用 V1.0.0 → V1.0.8 九条迁移（V1.0.6 为 M3-T08 inventory，"
-                        + "V1.0.7 为 M3-T09 inventory R53 修正，V1.0.8 为 M3-T12 sales）");
+                "应应用 V1.0.0 → V1.0.9 十条迁移（V1.0.6 为 M3-T08 inventory，"
+                        + "V1.0.7 为 M3-T09 inventory R53 修正，V1.0.8 为 M3-T12 sales，"
+                        + "V1.0.9 为 M4-T02 analysis）");
     }
 
     // =====================================================================
