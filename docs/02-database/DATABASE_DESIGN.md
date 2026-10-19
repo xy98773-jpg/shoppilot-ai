@@ -581,8 +581,8 @@
 | `model_name` | `VARCHAR(128)` | 是 | `NULL` | LLM 模型名（来自配置，**不写密钥**） | 不可变 |
 | `llm_status` | `VARCHAR(32)` | 否 | `'NOT_REQUESTED'` | `LlmStatus`（`§9.8`） | 执行期更新 |
 | `llm_error_message` | `VARCHAR(500)` | 是 | `NULL` | LLM 失败原因（`DEGRADED` 时非空） | 执行期更新 |
-| `data_start_date` | `DATE` | 是 | `NULL` | 输入销售数据最早日期 | 执行期写入后固定 |
-| `data_end_date` | `DATE` | 是 | `NULL` | 输入销售数据最晚日期 | 执行期写入后固定 |
+| `data_start_date` | `DATE` | 是 | `NULL` | 本次运行声明的取数窗口起始（= 请求 `date_from`） | **创建期写入后固定** |
+| `data_end_date` | `DATE` | 是 | `NULL` | 本次运行声明的取数窗口截止（= 请求 `date_to`） | **创建期写入后固定** |
 | `summary_json` | `JSON` | 是 | `NULL` | 结果摘要（各风险等级 SKU 数、建议数、截断数） | 终态时写入 |
 | `total_skus` | `INT UNSIGNED` | 否 | `0` | 计划分析 SKU 数 | 执行期更新 |
 | `processed_skus` | `INT UNSIGNED` | 否 | `0` | 已完成 SKU 数 | 执行期更新 |

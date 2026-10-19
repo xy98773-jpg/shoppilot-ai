@@ -499,8 +499,8 @@
 | `model_name` | 模型名 | `VARCHAR(128)` | 是 | `NULL` | — | **不写密钥**；不可变 |
 | `llm_status` | LLM 状态 | `VARCHAR(32)` | 否 | `'NOT_REQUESTED'` | `CK:ck_run_llm_status` | `LlmStatus`（`§9.8`，7 值） |
 | `llm_error_message` | LLM 失败原因 | `VARCHAR(500)` | 是 | `NULL` | — | `DEGRADED` 时非空 |
-| `data_start_date` | 输入数据起始 | `DATE` | 是 | `NULL` | — | 执行期写入后固定 |
-| `data_end_date` | 输入数据结束 | `DATE` | 是 | `NULL` | — | 同上 |
+| `data_start_date` | 取数窗口起始 | `DATE` | 是 | `NULL` | — | **创建期写入后固定**；= 请求 `date_from` |
+| `data_end_date` | 取数窗口截止 | `DATE` | 是 | `NULL` | — | 同上；= 请求 `date_to` |
 | `summary_json` | 结果摘要 | `JSON` | 是 | `NULL` | — | 各风险等级计数、建议数、截断数 |
 | `total_skus` | 计划 SKU 数 | `INT UNSIGNED` | 否 | `0` | `CK:ck_run_total_skus` | 执行期更新 |
 | `processed_skus` | 已完成 SKU 数 | `INT UNSIGNED` | 否 | `0` | `CK:ck_run_processed_skus` | 执行期更新 |
