@@ -21,7 +21,7 @@ B16 曾据此把字段放宽为 `list[str]`，理由不成立，B16.1 已收紧�
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -128,6 +128,36 @@ class RunStatusData(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# §3.2 受理回执 / §3.6 取消回执（M4-B19.2）
+# --------------------------------------------------------------------------- #
+class RunAcceptedData(BaseModel):
+    """`§3.2` 创建受理回执 `data`。
+
+    ★ `execution_status` 取 `ExecutionStatus`（而非令文写的 `Literal["ACCEPTED"]`）：
+    幂等重发时（`AI_SERVICE_CONTRACT §6.2` / `DESIGN_REVIEW §5.34` 裁定 #4）本端点要
+    回**当前**状态（可能是 `RUNNING` / `COMPLETED`），否则 Java 无法区分「首次受理」
+    与「重放命中」。Java 侧 `AiRunCreateEnvelope.AiRunAccepted.executionStatus` 是
+    `String`，放宽不影响对端解析。已随 B19.2 交付汇报申报。
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    analysis_run_id: int
+    execution_status: ExecutionStatus = "ACCEPTED"
+    accepted_at: datetime
+
+
+class RunCancelledData(BaseModel):
+    """`§3.6` 取消**受理回执** `data`（真实终态以状态端点为准）。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    analysis_run_id: int
+    execution_status: Literal["CANCELLED"] = "CANCELLED"
+    cancelled_at: datetime
+
+
+# --------------------------------------------------------------------------- #
 # §3.5 结果
 # --------------------------------------------------------------------------- #
 class RiskFinding(BaseModel):
@@ -212,6 +242,8 @@ class RunResultData(BaseModel):
 ValidateResponse = Envelope[ValidateData]
 RunStatusResponse = Envelope[RunStatusData]
 RunResultResponse = Envelope[RunResultData]
+RunAcceptedResponse = Envelope[RunAcceptedData]
+RunCancelledResponse = Envelope[RunCancelledData]
 
 
 __all__ = [
@@ -225,6 +257,10 @@ __all__ = [
     "RiskFinding",
     "RiskLevel",
     "RiskType",
+    "RunAcceptedData",
+    "RunAcceptedResponse",
+    "RunCancelledData",
+    "RunCancelledResponse",
     "RunError",
     "RunResultData",
     "RunResultResponse",

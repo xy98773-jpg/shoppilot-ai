@@ -103,15 +103,17 @@ def test_wrong_token_rejected(client: TestClient, token_configured: str) -> None
 
 
 # --------------------------------------------------------------------------- #
-# 5) Correct token passes the gate (no business route yet ⇒ 404/405, not 401)
+# 5) Correct token passes the gate (reaches the handler; never 401)
 # --------------------------------------------------------------------------- #
 def test_correct_token_passes_gate(
     client: TestClient, token_configured: str
 ) -> None:
     resp = client.post(PROTECTED_PATH, headers={TOKEN_HEADER: token_configured})
     assert resp.status_code != 401, resp.text
-    # The analysis router has no routes in this batch; 404 is the expected outcome.
-    assert resp.status_code in (404, 405), resp.text
+    # ★ B19.2：analysis 路由已注册 5 个端点，带正确令牌 + 空 body ⇒ 落到 handler 的
+    #   请求体校验（400 AI-1001）。若返回 401 说明令牌闸门反而拦住了（回归）。
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["code"] == "AI-1001"
 
 
 # --------------------------------------------------------------------------- #

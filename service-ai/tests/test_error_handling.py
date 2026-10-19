@@ -210,14 +210,15 @@ def test_validation_error_still_400_ai_1001(probe_client: TestClient) -> None:
 
 
 def test_unknown_path_still_404_ai_1003(prod_client: TestClient) -> None:
+    # ★ B19.2：analysis 路由已有 5 个端点，本条改钉一个**真正未定义**的路径。
     resp = prod_client.post(
-        "/internal/v1/analysis/runs",
+        "/internal/v1/analysis/unknown",
         headers={TOKEN_HEADER: TOKEN, REQUEST_ID_HEADER: "req_b16_404"},
     )
     assert resp.status_code == 404, resp.text
     body = resp.json()
     _assert_envelope(body, AI_1003)
-    assert body["detail"] == {"path": "/internal/v1/analysis/runs", "method": "POST"}
+    assert body["detail"] == {"path": "/internal/v1/analysis/unknown", "method": "POST"}
 
 
 def test_wrong_method_still_405_ai_1004(prod_client: TestClient) -> None:
@@ -246,23 +247,22 @@ def test_health_still_exempt_and_healthy(prod_client: TestClient) -> None:
     assert resp.json() == {"status": "UP"}
 
 
-def test_validate_path_with_token_is_404_while_endpoint_absent(
+def test_validate_path_with_token_is_405_now_that_endpoint_exists(
     prod_client: TestClient,
 ) -> None:
-    """`R107`：`analysis:validate` 端点归 B19；零端点下该路径**没有**路由。
+    """`R107` 已由 `B19.2` 解除：`analysis:validate` 注册为 **POST**。
 
-    ⇒ 带令牌请求得到的是 `404 AI-1003`（路由不存在），**不是** `405 AI-1004`
-    （405 要求「路径存在、方法不匹配」，见 `test_wrong_method_still_405_ai_1004`）。
-    本条如实钉住 B16 的边界：本批**不新增路由**（G3），若未来 B19 注册了 POST，
-    这里的 GET 才会变成 405。
+    ⇒ 带令牌的 **GET** 得到 `405 AI-1004`（路径存在、方法不匹配），正是本条
+    docstring 在 B16 时预言的演进结果。POST 成功路径与 400/AI-1001 由
+    `tests/test_analysis_endpoints.py` 覆盖。
     """
     resp = prod_client.get(
         "/internal/v1/analysis:validate",
         headers={TOKEN_HEADER: TOKEN, REQUEST_ID_HEADER: "req_b16_validate_get"},
     )
-    assert resp.status_code == 404, resp.text
+    assert resp.status_code == 405, resp.text
     body = resp.json()
-    _assert_envelope(body, AI_1003)
+    _assert_envelope(body, AI_1004)
     assert body["detail"] == {
         "path": "/internal/v1/analysis:validate",
         "method": "GET",

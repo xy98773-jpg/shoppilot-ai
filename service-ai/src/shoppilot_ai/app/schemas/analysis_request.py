@@ -238,10 +238,81 @@ class AnalyzeRequest(BaseModel):
         return self
 
 
+class ValidateRequest(BaseModel):
+    """`POST /internal/v1/analysis:validate` 请求体（`AI_SERVICE_CONTRACT §3.1`）。
+
+    ★ 与 `AnalyzeRequest` 的唯一结构差异：**没有 `analysis_run_id`**（预检不创建 run）。
+    其余字段（`team_id`/`warehouse_id`/`scope`/`date_from`/`date_to`/`params`/`items`）同构，
+    以便端点直接复用同一套校验与 `assess()`。
+
+    ⚠️ `items` 复用 `Item`（`§1.2`：含三项库存快照），而 `§3.1` 的示例只给了
+    `sku_id` + `sales_series`。两者不一致已随 B19.2 交付汇报申报，待项目负责人裁定
+    （Java 侧 `AiValidateRequest.items` 目前是 `List<Object>` 恒空）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    team_id: int = Field(gt=0)
+    warehouse_id: int | None = Field(default=None, gt=0)
+    scope: Scope
+    date_from: date
+    date_to: date
+    params: Params = Field(default_factory=Params)
+    items: list[Item]
+
+    @model_validator(mode="after")
+    def _validate_run(self) -> "ValidateRequest":
+        if self.date_from > self.date_to:
+            raise _schema_error(
+                "date_from must be <= date_to",
+                date_from=self.date_from.isoformat(),
+                date_to=self.date_to.isoformat(),
+            )
+        if len(self.items) > MAX_ANALYSIS_SKUS:
+            raise ServiceAIBaseError(
+                code=AI_7002,
+                detail={"item_count": len(self.items), "max": MAX_ANALYSIS_SKUS},
+            )
+        for index, item in enumerate(self.items):
+            if item.sku_id is None:
+                raise ServiceAIBaseError(
+                    code=AI_2001,
+                    detail={"index": index, "reason": "items[].sku_id is required"},
+                )
+            if item.sku_id <= 0:
+                raise _schema_error(
+                    "items[].sku_id must be positive",
+                    index=index,
+                    rejected_value=item.sku_id,
+                )
+            for point in item.sales_series:
+                if not (self.date_from <= point.date <= self.date_to):
+                    raise _schema_error(
+                        "sales_series[].date must be within [date_from, date_to]",
+                        sku_id=item.sku_id,
+                        rejected_value=point.date.isoformat(),
+                        date_from=self.date_from.isoformat(),
+                        date_to=self.date_to.isoformat(),
+                    )
+        return self
+
+
+class CancelRequest(BaseModel):
+    """`POST /internal/v1/analysis/runs/{id}:cancel` 请求体（`§3.6`）。
+
+    `reason` 可缺省；取消是「尽力而为」（`§3.6`），`reason` 只作留痕，Python 不据此改行为。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(default=None, max_length=200)
+
+
 __all__ = [
     "ALGORITHM_VERSION_PATTERN",
     "MAX_ANALYSIS_SKUS",
     "AnalyzeRequest",
+    "CancelRequest",
     "Decimal3Str",
     "Decimal4Str",
     "Item",
@@ -251,4 +322,5 @@ __all__ = [
     "Scope",
     "ScopeType",
     "SignedDecimal3Str",
+    "ValidateRequest",
 ]

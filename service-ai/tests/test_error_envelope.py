@@ -141,8 +141,11 @@ def test_unknown_internal_path_returns_404_ai_1003(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(config, "settings", Settings(ai_internal_token=TOKEN))
+    # ★ B19.2：analysis 路由已注册 5 个端点，本条改钉**斜杠变体**
+    #   `/analysis/validate`（Java 侧最常见的路径写错，`R93`）仍是「未定义路径」⇒ 404 AI-1003。
+    #   端点存在性由 tests/test_analysis_endpoints.py 覆盖。
     resp = client.post(
-        "/internal/v1/analysis:validate",
+        "/internal/v1/analysis/validate",
         headers={TOKEN_HEADER: TOKEN, REQUEST_ID_HEADER: "req_b131_404"},
     )
     assert resp.status_code == 404, resp.text
@@ -153,7 +156,7 @@ def test_unknown_internal_path_returns_404_ai_1003(
     assert body["request_id"] == resp.headers[REQUEST_ID_HEADER]
     # detail 给定位信息（path/method），便于 Java 侧定位「路径常量写错」
     assert body["detail"] == {
-        "path": "/internal/v1/analysis:validate",
+        "path": "/internal/v1/analysis/validate",
         "method": "POST",
     }
 
