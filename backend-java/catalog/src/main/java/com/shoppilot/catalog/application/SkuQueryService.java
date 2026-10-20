@@ -6,17 +6,23 @@ import com.shoppilot.catalog.application.dto.CatalogPageQuery;
 import com.shoppilot.catalog.application.dto.SkuView;
 import com.shoppilot.catalog.application.support.CatalogGuards;
 import com.shoppilot.catalog.application.support.CatalogSorts;
+import com.shoppilot.catalog.infrastructure.persistence.entity.ProductEntity;
 import com.shoppilot.catalog.infrastructure.persistence.entity.SkuEntity;
+import com.shoppilot.catalog.infrastructure.persistence.mapper.ProductMapper;
 import com.shoppilot.catalog.infrastructure.persistence.mapper.SkuMapper;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.PageResult;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 /**
@@ -33,10 +39,13 @@ public class SkuQueryService {
 
     private final SkuMapper skuMapper;
     private final ProductQueryService productQueryService;
+    private final ProductMapper productMapper;
 
-    public SkuQueryService(SkuMapper skuMapper, ProductQueryService productQueryService) {
+    public SkuQueryService(SkuMapper skuMapper, ProductQueryService productQueryService,
+                           ProductMapper productMapper) {
         this.skuMapper = skuMapper;
         this.productQueryService = productQueryService;
+        this.productMapper = productMapper;
     }
 
     /**
@@ -163,5 +172,64 @@ public class SkuQueryService {
                 skuMapper.selectById(id),
                 () -> skuMapper.selectTeamIdById(id),
                 ErrorCodes.CAT_3001, "SKU 不存在");
+    }
+
+    // =====================================================================
+    // 采购信息批量只读（M5-T02，跨模块只读入口）
+    // =====================================================================
+
+    /**
+     * 批量读取生成补货建议所需的采购信息（{@code ANALYSIS_CONTRACT §9.2} 的 Java 推断列）。
+     *
+     * <p>★ <b>为什么放在 catalog</b>：{@code replenishment} 需要 {@code skus.supplier_id} /
+     * {@code skus.purchase_price} / {@code products.default_supplier_id}，但
+     * {@code MODULE_BOUNDARIES §8.2 E-2} 禁止它直接注入 {@code SkuMapper}/{@code ProductMapper}
+     * （{@code R126} 同型债）。故由 catalog 提供这一个<b>批量只读</b>方法。
+     *
+     * <p>★ 入参<b>不含 teamId</b>：团队来自 {@code TeamContext}，两次查询都走租户线，
+     * 因此跨团队 SKU 不会出现在结果里（调用方按「缺失即无采购信息」处理）。
+     *
+     * <p>★ 批量语义：一次 {@code IN} 查 SKU、一次 {@code IN} 查商品，共 2 条 SQL；
+     * 不做 N+1。调用方按 ≤500 个 SKU 分批（{@code DEVELOPMENT_PLAN M5-T02}）。
+     *
+     * @param skuIds SKU 主键集合（可空/空 ⇒ 返回空 Map）
+     * @return {@code skuId → 采购信息}；查不到的 SKU 不出现在结果中
+     */
+    public Map<Long, ProcurementInfo> listProcurementInfo(Collection<Long> skuIds) {
+        if (skuIds == null || skuIds.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> ids = skuIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        List<SkuEntity> skus = skuMapper.selectBatchIds(ids);
+        if (skus.isEmpty()) {
+            return Map.of();
+        }
+        Set<Long> productIds = skus.stream().map(SkuEntity::getProductId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, Long> defaultSupplierByProduct = new HashMap<>();
+        if (!productIds.isEmpty()) {
+            for (ProductEntity product : productMapper.selectBatchIds(productIds)) {
+                defaultSupplierByProduct.put(product.getId(), product.getDefaultSupplierId());
+            }
+        }
+        Map<Long, ProcurementInfo> result = new LinkedHashMap<>();
+        for (SkuEntity sku : skus) {
+            result.put(sku.getId(), new ProcurementInfo(sku.getSupplierId(), sku.getPurchasePrice(),
+                    defaultSupplierByProduct.get(sku.getProductId())));
+        }
+        return result;
+    }
+
+    /**
+     * SKU 的采购信息快照。
+     *
+     * @param supplierId              SKU 指定供应商（可空）
+     * @param purchasePrice           SKU 参考采购单价（可空）
+     * @param productDefaultSupplierId 所属商品的默认供应商（可空；SKU 未指定时回退用它）
+     */
+    public record ProcurementInfo(Long supplierId, BigDecimal purchasePrice, Long productDefaultSupplierId) {
     }
 }
