@@ -268,6 +268,20 @@ class AnalysisItemQueryIntegrationTest {
                 "toSnakeCase(pageSize) = page_size（与 COM-0001 的字段路径口径一致）");
     }
 
+    @Test
+    @DisplayName("R146-pageSize=0 ⇒ 400 COM-0001，details[0].field=page_size（服务端口径 snake_case）")
+    void zeroPageSizeRejected() throws Exception {
+        ResponseEntity<String> resp = rawItems("/api/v1/analysis/runs/" + okRunId + "/items?pageSize=0");
+
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode(), resp.getBody());
+        JsonNode root = json.readTree(resp.getBody());
+        assertEquals("COM-0001", root.get("code").asText());
+        JsonNode detail = root.get("details").get(0);
+        assertEquals("page_size", detail.get("field").asText(),
+                "R146：服务端 badParam 首参必须是 snake_case（消息文案可保留 pageSize）");
+        assertEquals(0, detail.get("rejectedValue").asInt(), "回显被拒绝的原始值");
+    }
+
     // =====================================================================
     // 就绪判定 / 存在性 / 权限
     // =====================================================================

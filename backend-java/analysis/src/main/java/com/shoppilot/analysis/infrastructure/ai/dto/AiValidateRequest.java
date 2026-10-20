@@ -35,8 +35,9 @@ public record AiValidateRequest(
     /**
      * 从域值对象 + 已解析参数 + <b>已装配的 items</b>构造（{@code §5.36} Q7）。
      *
-     * <p>★ {@code items} 由调用方（{@code AnalysisAppService.buildValidateRequest}）用与 runs
-     * <b>同一个</b> {@code AnalysisItemAssembler} 填充；本工厂<b>不再</b>提供空数组重载——
+     * <p>★ {@code items} 由调用方用与 runs <b>同一个</b> {@code AnalysisItemAssembler} 填充——
+     * {@code AnalysisAppService#createRun} 的 {@code e0} 步装配后，直接以本工厂构造预检请求
+     * （{@code M4-B20.4} 裁定 B2：禁止二次装配）。本工厂<b>不再</b>提供空数组重载——
      * 留一个「恒空」的入口就是 {@code R123} 的复发点。
      */
     public static AiValidateRequest of(Long teamId, Long warehouseId, AnalysisScope scope,

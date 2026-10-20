@@ -71,7 +71,11 @@ import org.springframework.web.client.RestClientException;
  *   <li>{@code analysis:validate}：<b>0 次</b>重试（快速失败，调用方决定是否继续）；</li>
  *   <li>{@code POST /analysis/runs}：<b>仅网络错误</b>重试 <b>1 次</b>（固定 1s 退避，整体重发请求）；
  *       HTTP 4xx/5xx <b>不</b>重试（业务/契约错误重试必然同样失败）；读超时<b>不</b>重试
- *       （{@code ANL-7003}，避免把 10s 超时放大成 21s）。</li>
+ *       （{@code ANL-7003}，避免把 10s 超时放大成 21s）；</li>
+ *   <li>{@code POST /analysis/runs/{id}:cancel}（{@link #cancelBestEffort}）：<b>5s</b> 超时，
+ *       <b>仅网络错误（连接失败 / 读超时）</b>重试 <b>1 次</b>（固定 <b>500ms</b> 退避）；
+ *       HTTP 4xx/5xx <b>不</b>重试；最终失败只 WARN + 返回 {@code false}，<b>不抛</b>
+ *       （{@code R145}，best-effort 语义）。</li>
  * </ul>
  *
  * <p>线程安全：无状态；{@link RestClient} 本身线程安全。
@@ -86,6 +90,17 @@ public class AiServiceClient {
 
     /** 网络错误的最大尝试次数（首次 + 1 次重试）。 */
     private static final int MAX_ATTEMPTS = 2;
+
+    /**
+     * 取消的最大尝试次数（首次 + 1 次重试；{@code R145}：仅网络错误重试）。
+     *
+     * <p>与 {@link #MAX_ATTEMPTS} 同值但语义不同：create 的读超时<b>不</b>重试，
+     * cancel 的读超时<b>要</b>重试（取消是廉价操作，且 5s 已是端到端预算的上限而非执行预算）。
+     */
+    private static final int CANCEL_MAX_ATTEMPTS = 2;
+
+    /** 取消重试的固定退避（{@code R145}：500ms，比 create 的 1s 短——取消是资源回收的善意尝试）。 */
+    private static final long CANCEL_RETRY_BACKOFF_MS = 500L;
 
     /** 错误信封解析器（只做 JSON → record，不参与业务判定）。 */
     private static final ObjectMapper ERROR_MAPPER = new ObjectMapper()
@@ -393,6 +408,14 @@ public class AiServiceClient {
      * Python 侧的任务若还在跑会白白占额度。取消失败<b>只 WARN</b>、不抛异常、
      * 不影响本地终态——本地 {@code TIMEOUT} 是权威（{@code §13.2}），远端取消只是资源回收的善意尝试。
      *
+     * <h2>★ 超时与重试（R145，M4-B22 契约口径补齐）</h2>
+     * <ul>
+     *   <li><b>5s 超时</b>：复用 {@link #validateClient}（契约 {@code §6.1}：cancel 5s），
+     *       不新增 client 字段；</li>
+     *   <li><b>仅网络错误（连接失败 / 读超时）重试 1 次</b>，固定 500ms 退避；</li>
+     *   <li><b>HTTP 4xx/5xx 一律不重试</b>（业务/契约错误，重试必然同样失败）。</li>
+     * </ul>
+     *
      * @return 是否取消成功（供调用方记日志；失败不抛）
      */
     public boolean cancelBestEffort(long analysisRunId) {
@@ -400,25 +423,47 @@ public class AiServiceClient {
             return false;
         }
         String path = AiContract.PATH_RUN_CANCEL.replace("{analysisRunId}", Long.toString(analysisRunId));
-        try {
-            createClient.post()
-                    .uri(uri(path))
-                    .headers(headers -> headers.setAll(outboundHeaders()))
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(Map.of())
-                    .retrieve()
-                    .onStatus(HttpStatusCode::isError, (req, res) -> {
-                        throw translateError(res.getStatusCode().value(), res, path);
-                    })
-                    .toBodilessEntity();
-            return true;
-        } catch (BizException ex) {
-            log.warn("取消分析任务失败（不影响本地终态）：runId={} code={}", analysisRunId, ex.getErrorCode());
-            return false;
-        } catch (RuntimeException ex) {
-            log.warn("取消分析任务异常（不影响本地终态）：runId={} err={}", analysisRunId, ex.toString());
-            return false;
+        for (int attempt = 1; attempt <= CANCEL_MAX_ATTEMPTS; attempt++) {
+            try {
+                validateClient.post()
+                        .uri(uri(path))
+                        .headers(headers -> headers.setAll(outboundHeaders()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(Map.of())
+                        .retrieve()
+                        .onStatus(HttpStatusCode::isError, (req, res) -> {
+                            throw translateError(res.getStatusCode().value(), res, path);
+                        })
+                        .toBodilessEntity();
+                return true;
+            } catch (BizException ex) {
+                // HTTP 4xx/5xx（已按 19 码映射）：业务/契约错误 ⇒ 不重试（R145）
+                log.warn("取消分析任务失败（不影响本地终态）：runId={} code={} http 状态类错误不重试",
+                        analysisRunId, ex.getErrorCode());
+                return false;
+            } catch (RuntimeException ex) {
+                if (!isTransportFailure(ex)) {
+                    // 解析/结构类异常：重试必然同样失败
+                    log.warn("取消分析任务异常（不影响本地终态）：runId={} err={}",
+                            analysisRunId, ex.toString());
+                    return false;
+                }
+                if (attempt >= CANCEL_MAX_ATTEMPTS) {
+                    log.warn("取消分析任务网络失败（不影响本地终态）：runId={} err={}",
+                            analysisRunId, ex.toString());
+                    return false;
+                }
+                log.warn("取消分析任务网络失败（第 {}/{} 次，将重试）：runId={}",
+                        attempt, CANCEL_MAX_ATTEMPTS, analysisRunId);
+                if (!cancelBackoff()) {
+                    // 退避被中断：放弃重试，保持 best-effort 语义（仍不抛）
+                    log.warn("取消分析任务退避被中断，放弃重试：runId={}", analysisRunId);
+                    return false;
+                }
+            }
         }
+        // 循环内所有分支均已 return；此行为编译可达性兜底
+        return false;
     }
 
     /**
@@ -636,6 +681,22 @@ public class AiServiceClient {
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             throw new BizException(ErrorCodes.ANL_7002, userMessage(ErrorCodes.ANL_7002), ex);
+        }
+    }
+
+    /**
+     * 取消重试的固定 500ms 退避；被中断时恢复中断标记并返回 {@code false}（调用方放弃重试）。
+     *
+     * <p>★ 与 {@link #backoff()} 的差异：cancel 是 best-effort 语义，<b>不得因退避失败而抛异常</b>
+     * （会把「取消失败」升级成「取消调用方 500」）。
+     */
+    private static boolean cancelBackoff() {
+        try {
+            Thread.sleep(CANCEL_RETRY_BACKOFF_MS);
+            return true;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 

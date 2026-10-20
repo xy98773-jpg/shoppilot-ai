@@ -38,7 +38,8 @@ import org.springframework.stereotype.Component;
  * 逐 SKU 计算输入装配器（M4-T12 前置；解除 {@code R120} / {@code R123}）。
  *
  * <p><b>职责</b>：把「范围」解析成一组 {@link AiRunItem}（内部契约 {@code items[]}），
- * 供 {@code AnalysisAppService.toAiRequest} 与预检 {@code buildValidateRequest} 共用。
+ * 供 {@code AnalysisAppService.toAiRequest}（发起）与 {@code createRun} 内的数据质量预检
+ * （{@code AiValidateRequest.of}，{@code M4-B20.4} {@code R131}）<b>共用同一次装配</b>。
  * <b>纯只读</b>：不写库、不写审计、不调外部服务。
  *
  * <h2>★ 定位升级：analysis 对 catalog / inventory 的只读查询门面（§5.38 裁定 #12）</h2>

@@ -146,6 +146,8 @@ public final class ErrorCodes {
     public static final String ANL_7008 = "ANL-7008";
     /** 分析参数非法（400）—— {@code window_days}/{@code min_days}/{@code coverage_days} 越界或不一致。 */
     public static final String ANL_7009 = "ANL-7009";
+    /** 无法取消（422）—— 对非 {@code PENDING}/{@code RUNNING} 的 run 执行取消（{@code ERROR_CODES.md §2.8}）。 */
+    public static final String ANL_7011 = "ANL-7011";
     /** 结果尚未就绪（409）—— {@code progress < 100} 时拉取明细。 */
     public static final String ANL_7012 = "ANL-7012";
     /** 分析时间窗口非法（400）—— {@code date_from > date_to} 或与 {@code window_days} 冲突。 */

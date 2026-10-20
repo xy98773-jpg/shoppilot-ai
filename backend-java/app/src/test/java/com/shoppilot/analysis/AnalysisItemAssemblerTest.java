@@ -491,9 +491,15 @@ class AnalysisItemAssemblerTest {
     @Test
     @DisplayName("R123：预检出站带同一装配器的 items（不再是空数组）")
     void validateRequestCarriesItems() {
-        AiValidateRequest validateRequest = appService.buildValidateRequest(
-                scope(AnalysisScopeType.SELECTED_SKUS, List.of(SKU_LEAD), null),
-                AnalysisParams.resolve(null), DATE_FROM, DATE_TO, null);
+        // ★ R147（M4-B22）：无生产调用方的预检包装方法已删除；本用例改为按 createRun 的真实口径
+        //   自行装配：resolveWarehouseId → assemble → AiValidateRequest.of（断言内容不变）。
+        AnalysisScope scope = scope(AnalysisScopeType.SELECTED_SKUS, List.of(SKU_LEAD), null);
+        AnalysisParams params = AnalysisParams.resolve(null);
+        Long warehouseId = assembler.resolveWarehouseId(TEAM_ID, null);
+        List<AiRunItem> items = assembler.assemble(TEAM_ID, warehouseId, scope, DATE_FROM, DATE_TO);
+
+        AiValidateRequest validateRequest = AiValidateRequest.of(
+                TEAM_ID, warehouseId, scope, DATE_FROM, DATE_TO, params, items);
 
         assertEquals(WAREHOUSE_DEFAULT, validateRequest.warehouseId());
         assertEquals(1, validateRequest.items().size());

@@ -116,16 +116,6 @@ public class AnalysisAppService {
     private static final Set<String> ITEM_SORT_COLUMNS =
             Set.of("avg_daily_sales", "risk_level", "created_at");
 
-    /**
-     * {@code ANL-7011}（无法取消：非 {@code PENDING}/{@code RUNNING}；HTTP 422）。
-     *
-     * <p>★ {@code ErrorCodes} 尚未固化该常量，而 {@code B20.4} 的 {@code G5} 只允许改
-     * {@code common} 的 {@code GlobalExceptionHandler} 一个文件 ⇒ 本模块自持字面量。
-     * 码值本身是 SSOT 明文（{@code ERROR_CODES.md §2.8}），{@code ErrorCodeHttpStatus} 已映射 422；
-     * 待后续允许动 {@code common} 的批次再收敛为 {@code ErrorCodes.ANL_7011}。
-     */
-    private static final String ANL_7011 = "ANL-7011";
-
     private final AnalysisRunMapper runMapper;
     private final AiServiceClient aiServiceClient;
     private final AuditWriteService auditWriteService;
@@ -205,8 +195,8 @@ public class AnalysisAppService {
         // f0. 数据质量预检（R131，M4-B20.4 §B1）：**必须在落库之后**——
         //     analyzable=false 要求把这个 run 置 FAILED（AI_SERVICE_CONTRACT §3.1 字段表），
         //     没有 run 就没有可落状态的对象。
-        //     ★ §B2：复用 e0 已装配的 items，**禁止**调 buildValidateRequest(...)——
-        //       它内部会再 resolveWarehouseId + assemble（重复查库，且可能与 e0 结果不一致）。
+        //     ★ §B2：复用 e0 已装配的 items，**禁止**二次装配（不得再 resolveWarehouseId + assemble，
+        //    那会重复查库且可能与 e0 结果不一致）。
         try {
             aiServiceClient.validate(AiValidateRequest.of(snapshot.teamId(), resolvedWarehouseId,
                     scope, request.dateFrom(), request.dateTo(), params, items));
@@ -313,7 +303,7 @@ public class AnalysisAppService {
             }
             log.warn("取消分析任务被拒绝：runId={} status={}（仅 PENDING/RUNNING 可取消）",
                     runId, latest.getStatus());
-            throw new BizException(ANL_7011, "该任务当前不可取消");
+            throw new BizException(ErrorCodes.ANL_7011, "该任务当前不可取消");
         }
 
         // c. 读回 DB 生成的 finished_at（响应 cancelled_at 的唯一真源）
@@ -434,7 +424,10 @@ public class AnalysisAppService {
             throw badParam("page", "page 必须 ≥ 1", page);
         }
         if (pageSize < 1 || pageSize > MAX_PAGE_SIZE) {
-            throw badParam("pageSize", "pageSize 必须在 1.." + MAX_PAGE_SIZE + " 之间", pageSize);
+            // ★ R146：details[].field 用 snake_case（API_CONTRACT §2.3）；message 文案保留
+            //   「pageSize」供人阅读。与 GlobalExceptionHandler 的 toSnakeCase(ex.getName())
+            //   口径一致（pageSize=abc 走类型转换分支，也会得到 page_size）。
+            throw badParam("page_size", "pageSize 必须在 1.." + MAX_PAGE_SIZE + " 之间", pageSize);
         }
     }
 
@@ -887,29 +880,6 @@ public class AnalysisAppService {
                 .result(AuditResult.SUCCESS)
                 .changeSummary("取消分析任务：" + fromStatus + " → CANCELLED")
                 .build());
-    }
-
-    /**
-     * 构造数据质量预检的出站请求（{@code AI_SERVICE_CONTRACT §3.1}；解除 {@code R123}）。
-     *
-     * <p>与 {@link #createRun} <b>共用</b> {@link AnalysisItemAssembler}：预检若仍发空
-     * {@code items}，Python 侧 {@code assess} 恒判 {@code analyzable=false}，
-     * 用户永远看不到「哪些 SKU 够分析」。
-     *
-     * <p>★ 本批不落 run、不写审计、不调 Python（{@code §5.36} 裁定 #5）；
-     * 供 {@code B20.2} 把预检接进对外链路时调用。
-     *
-     * @param warehouseId 限定仓库（{@code null} ⇒ 解析团队默认仓，与 runs 同口径）
-     */
-    public AiValidateRequest buildValidateRequest(AnalysisScope scope,
-                                                  AnalysisParams params,
-                                                  LocalDate dateFrom,
-                                                  LocalDate dateTo,
-                                                  Long warehouseId) {
-        Long teamId = TeamContext.require().teamId();
-        Long resolvedWarehouseId = itemAssembler.resolveWarehouseId(teamId, warehouseId);
-        List<AiRunItem> items = itemAssembler.assemble(teamId, resolvedWarehouseId, scope, dateFrom, dateTo);
-        return AiValidateRequest.of(teamId, resolvedWarehouseId, scope, dateFrom, dateTo, params, items);
     }
 
     // =====================================================================

@@ -78,6 +78,15 @@ class AiServiceClientTest {
     private volatile String responseBody = "{}";
     private volatile long responseDelayMs = 0L;
 
+    /**
+     * 接下来 N 个请求「不发响应直接断开连接」（R145：构造传输层失败）。
+     *
+     * <p>请求体会被正常读走并计入 {@link #recorded}（请求确实到达过对端），随后
+     * {@code exchange.close()} 不发任何响应 ⇒ 客户端读响应时拿到 EOF/IOException，
+     * 即 {@code AiServiceClient#isTransportFailure} 判定的「网络错误」——重试分支的输入。
+     */
+    private volatile int dropNextResponses = 0;
+
     @BeforeEach
     void startFakePeer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -87,6 +96,11 @@ class AiServiceClientTest {
                 recorded.add(new Recorded(exchange.getRequestMethod(),
                         exchange.getRequestURI().getPath(),
                         exchange.getRequestHeaders(), body));
+                if (dropNextResponses > 0) {
+                    // R145：不发响应直接断开（finally 里 close），制造传输层失败
+                    dropNextResponses--;
+                    return;
+                }
                 if (responseDelayMs > 0) {
                     Thread.sleep(responseDelayMs);
                 }
@@ -520,6 +534,40 @@ class AiServiceClientTest {
         assertEquals("POST", recorded.get(recorded.size() - 1).method());
         assertEquals("/internal/v1/analysis/runs/30001:cancel",
                 recorded.get(recorded.size() - 1).path(), "★ 冒号动作后缀（R93）");
+    }
+
+    @Test
+    @DisplayName("R145-cancel 首次网络异常：500ms 退避后重试成功 ⇒ true 且请求 2 次")
+    void cancelRetriesOnceAfterNetworkFailure() {
+        dropNextResponses = 1; // 第一次连接不发响应直接断开 ⇒ 传输层失败
+
+        assertTrue(newClient().cancelBestEffort(30001L), "重试成功后必须返回 true");
+
+        assertEquals(2, recorded.size(), "首次网络异常后必须重试 1 次（共 2 次请求）");
+        assertEquals("/internal/v1/analysis/runs/30001:cancel", recorded.get(1).path());
+    }
+
+    @Test
+    @DisplayName("R145-cancel 两次都网络异常：false 且请求恰 2 次（重试上限 1 次）")
+    void cancelGivesUpAfterTwoNetworkFailures() {
+        dropNextResponses = 2; // 两次都断 ⇒ 重试用尽
+
+        assertFalse(newClient().cancelBestEffort(30001L), "最终失败只返回 false，不得抛");
+
+        assertEquals(2, recorded.size(), "重试上限 1 次 ⇒ 恰 2 次请求");
+    }
+
+    @Test
+    @DisplayName("R145-cancel HTTP 4xx：false 且仅 1 次（业务错误不重试）")
+    void cancelDoesNotRetryOnHttpError() {
+        responseStatus = 409;
+        responseBody = """
+                {"code":"AI-6002","message":"already terminal","detail":{},"request_id":"r"}
+                """;
+
+        assertFalse(newClient().cancelBestEffort(30001L));
+
+        assertEquals(1, recorded.size(), "HTTP 4xx/5xx 一律不重试");
     }
 
     // =====================================================================
