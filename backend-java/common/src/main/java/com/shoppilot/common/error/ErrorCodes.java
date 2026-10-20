@@ -166,7 +166,13 @@ public final class ErrorCodes {
     public static final String RPL_8002 = "RPL-8002";
     public static final String RPL_8003 = "RPL-8003";
     public static final String RPL_8004 = "RPL-8004";
+    /** 建议数量非法（400）—— {@code qty <= 0} 或小数位 > 3（{@code §14.2} 精度；★ 无上限校验）。 */
+    public static final String RPL_8006 = "RPL-8006";
     public static final String RPL_8007 = "RPL-8007";
+    /** 指定供应商不属于该团队（403）—— {@code supplier_id} 跨团队（{@code §6} 规则 4）。 */
+    public static final String RPL_8009 = "RPL-8009";
+    /** 期望到货日早于今天（400）—— {@code expected_arrival_date < today(UTC)}。 */
+    public static final String RPL_8010 = "RPL-8010";
     public static final String RPL_8012 = "RPL-8012";
 
     // PO —— 采购与到货（9001–9099）

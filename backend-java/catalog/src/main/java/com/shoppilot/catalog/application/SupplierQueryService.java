@@ -64,4 +64,24 @@ public class SupplierQueryService {
                 () -> supplierMapper.selectTeamIdById(id),
                 ErrorCodes.CAT_3001, "供应商不存在");
     }
+
+    /**
+     * 供应商是否<b>属于当前团队</b>（M5-T03 跨模块只读入口）。
+     *
+     * <p>★ 为什么需要它：{@code replenishment} 的 {@code PATCH /items/{id}} 要校验
+     * {@code supplier_id} 同团队（{@code RPL-8009}），但 {@code MODULE_BOUNDARIES §2.3}
+     * 禁止它直接注入 {@code SupplierMapper}。故由 catalog 提供这一个只读判定。
+     *
+     * <p>★ 入参<b>不含 teamId</b>：团队来自 {@code TeamContext}，查询走租户线
+     * （跨团队行查不到 ⇒ 返回 {@code false}，与「不存在」同表现，不泄漏他团队是否存在）。
+     *
+     * <p>★ 只判存在性，不区分「不存在」与「跨团队」——调用方统一映射
+     * {@code RPL-8009}（403，{@code ERROR_CODES §2.9} 的语义就是「指定供应商不属于该团队」）。
+     *
+     * @param supplierId 供应商主键（{@code null} ⇒ {@code false}）
+     * @return 当前团队内存在该供应商 ⇒ {@code true}
+     */
+    public boolean existsInTeam(Long supplierId) {
+        return supplierId != null && supplierMapper.selectById(supplierId) != null;
+    }
 }
