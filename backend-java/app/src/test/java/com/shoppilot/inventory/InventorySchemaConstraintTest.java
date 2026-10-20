@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code DATABASE_DESIGN §5.8/§5.9/§5.10/§7.4} 与 {@code DATABASE_CONSTRAINTS #9–#12/§4.1/§4.2/§5.2}
  * 的数据库级保障：
  * <ul>
- *   <li>Flyway 应用 {@code V1.0.0} → {@code V1.0.10} 共十一条迁移，三表存在；</li>
+ *   <li>Flyway 应用 {@code V1.0.0} → {@code V1.0.11} 共十二条迁移，三表存在；</li>
  *   <li>四条唯一键在<b>团队内</b>冲突：{@code uk_pol_team_sku_wh} / {@code uk_invbal_team_wh_sku} /
  *       {@code uk_invtxn_team_idem} / {@code uk_invtxn_team_reversed}；</li>
  *   <li>跨团队同业务键<b>允许</b>共存（唯一性只在团队内，{@code DESIGN_BASIS §6} 规则 2）；</li>
@@ -115,7 +115,7 @@ class InventorySchemaConstraintTest {
     // =====================================================================
 
     @Test
-    @DisplayName("① Flyway 全链到 V1.0.10：三张库存表存在，十一条迁移均 success=1")
+    @DisplayName("① Flyway 全链到 V1.0.11：三张库存表存在，十二条迁移均 success=1")
     void migrationAppliesThroughV109AndCreatesThreeTables() throws Exception {
         List<String> tables = queryStrings(
                 "SELECT table_name FROM information_schema.tables "
@@ -126,11 +126,11 @@ class InventorySchemaConstraintTest {
 
         List<String> versions = queryStrings(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank");
-        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6", "1.0.7", "1.0.8", "1.0.9", "1.0.10"),
+        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6", "1.0.7", "1.0.8", "1.0.9", "1.0.10", "1.0.11"),
                 versions,
-                "应应用 V1.0.0 → V1.0.10 十一条迁移（V1.0.6 为 M3-T08 inventory，"
+                "应应用 V1.0.0 → V1.0.11 十二条迁移（V1.0.6 为 M3-T08 inventory，"
                         + "V1.0.7 为 M3-T09 inventory R53 修正，V1.0.8 为 M3-T12 sales，"
-                        + "V1.0.9 为 M4-T02 analysis，V1.0.10 为 M5-T01 replenishment）");
+                        + "V1.0.9 为 M4-T02 analysis，V1.0.10 为 M5-T01 replenishment，V1.0.11 为 M6-T01 purchasing）");
     }
 
     // =====================================================================

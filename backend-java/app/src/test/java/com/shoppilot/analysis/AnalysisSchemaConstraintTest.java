@@ -36,7 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code DATABASE_DESIGN §5.14/§5.15/§7.4} 与
  * {@code DATABASE_CONSTRAINTS #15–#17 / §3.2 #31–#35 / §3.3 / §4.1 / §4.2 / §4.3 / §5.2}：
  * <ul>
- *   <li>Flyway 应用 {@code V1.0.0} → {@code V1.0.10} 共十一条迁移，两张表存在且关键列类型正确；</li>
+ *   <li>Flyway 应用 {@code V1.0.0} → {@code V1.0.11} 共十二条迁移，两张表存在且关键列类型正确；</li>
  *   <li>唯一键 {@code uk_run_team_no} / {@code uk_run_team_idem} 在<b>团队内</b>生效；
  *       {@code idempotency_key} 可空 ⇒ 多行 {@code NULL} 合法；</li>
  *   <li>{@code uk_ai_run_sku_wh} 在<b>一次运行内</b>生效，且<b>不带 team_id</b>（R89）；</li>
@@ -131,9 +131,9 @@ class AnalysisSchemaConstraintTest {
         List<String> versions = queryStrings(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank");
         assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4",
-                        "1.0.5", "1.0.6", "1.0.7", "1.0.8", "1.0.9", "1.0.10"),
+                        "1.0.5", "1.0.6", "1.0.7", "1.0.8", "1.0.9", "1.0.10", "1.0.11"),
                 versions,
-                "应应用 V1.0.0 → V1.0.10 十一条迁移（V1.0.9 为 M4-T02 analysis，V1.0.10 为 M5-T01 replenishment）");
+                "应应用 V1.0.0 → V1.0.11 十二条迁移（V1.0.9 为 M4-T02 analysis，V1.0.10 为 M5-T01 replenishment，V1.0.11 为 M6-T01 purchasing）");
 
         // ★ 6 个关键列：覆盖「无符号整数 / 精度 4 的 DECIMAL / TEXT / JSON / DATETIME(3) / 长 VARCHAR」
         assertEquals("tinyint unsigned", columnType("analysis_runs", "progress"),
