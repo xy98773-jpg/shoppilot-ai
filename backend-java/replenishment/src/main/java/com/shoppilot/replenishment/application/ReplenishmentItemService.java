@@ -1,5 +1,6 @@
 package com.shoppilot.replenishment.application;
 
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.shoppilot.audit.application.AuditWriteService;
 import com.shoppilot.audit.domain.model.AuditAction;
 import com.shoppilot.audit.domain.model.AuditEvent;
@@ -9,19 +10,25 @@ import com.shoppilot.common.context.TeamContext;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
+import com.shoppilot.common.web.RequestIdContext;
 import com.shoppilot.replenishment.application.dto.ReplenishmentItemResponse;
+import com.shoppilot.replenishment.application.dto.ReplenishmentReviewActionResponse;
 import com.shoppilot.replenishment.application.dto.UpdateReplenishmentItemRequest;
 import com.shoppilot.replenishment.infrastructure.persistence.entity.ReplenishmentItemEntity;
+import com.shoppilot.replenishment.infrastructure.persistence.entity.ReplenishmentReviewEntity;
 import com.shoppilot.replenishment.infrastructure.persistence.mapper.ReplenishmentItemMapper;
+import com.shoppilot.replenishment.infrastructure.persistence.mapper.ReplenishmentReviewMapper;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -65,6 +72,12 @@ public class ReplenishmentItemService {
     /** 允许人工改量的状态（{@code §9.11}：{@code APPROVED} 后业务字段冻结）。 */
     private static final Set<String> EDITABLE_STATUS = Set.of("SUGGESTED", "PENDING_REVIEW");
 
+    private static final String STATUS_SUGGESTED = "SUGGESTED";
+    private static final String STATUS_PENDING_REVIEW = "PENDING_REVIEW";
+
+    /** 审核意见列宽（字符）。 */
+    private static final int COMMENT_MAX_LENGTH = 500;
+
     /** 审计 {@code biz_type}（{@code §9.17}）。 */
     private static final String BIZ_TYPE = "REPLENISHMENT_ITEM";
 
@@ -75,13 +88,16 @@ public class ReplenishmentItemService {
     private static final int QTY_SCALE = 3;
 
     private final ReplenishmentItemMapper itemMapper;
+    private final ReplenishmentReviewMapper reviewMapper;
     private final SupplierQueryService supplierQueryService;
     private final AuditWriteService auditWriteService;
 
     public ReplenishmentItemService(ReplenishmentItemMapper itemMapper,
+                                    ReplenishmentReviewMapper reviewMapper,
                                     SupplierQueryService supplierQueryService,
                                     AuditWriteService auditWriteService) {
         this.itemMapper = itemMapper;
+        this.reviewMapper = reviewMapper;
         this.supplierQueryService = supplierQueryService;
         this.auditWriteService = auditWriteService;
     }
@@ -210,6 +226,104 @@ public class ReplenishmentItemService {
     }
 
     // =====================================================================
+    // 提交审核 / 撤回（M5-T04，F-RPL-03）
+    // =====================================================================
+
+    /**
+     * 提交审核（{@code POST /items/{id}/submit}）：{@code SUGGESTED → PENDING_REVIEW}。
+     *
+     * <h2>状态判定（顺序固定，A3）</h2>
+     * <ol>
+     *   <li>不存在/跨团队 ⇒ 404 {@code RPL-8004}；</li>
+     *   <li>已是 {@code PENDING_REVIEW} ⇒ <b>409 {@code RPL-8002}</b>「该建议已提交，请勿重复提交」；</li>
+     *   <li>其它非 {@code SUGGESTED} 状态 ⇒ <b>422 {@code RPL-8001}</b>「当前状态不允许提交审核」。</li>
+     * </ol>
+     * ★ 8002 与 8001 <b>必须分开</b>：契约 {@code §11.7} 给了两个独立失败响应，
+     * 合并会让「重复提交」被误报成「状态非法」。
+     *
+     * <h2>落库（同一事务，A4）</h2>
+     * <ol>
+     *   <li>{@code replenishment_items}：{@code status=PENDING_REVIEW}、{@code submitted_at=now(UTC)}，
+     *       走 {@code updateById(entity)}（{@code @Version} CAS）；</li>
+     *   <li>{@code replenishment_reviews} INSERT（{@code action=SUBMIT}，仅追加）；</li>
+     *   <li>审计 {@code REPLENISHMENT_SUBMIT}（{@code recordInBusinessTx}，MANDATORY）。</li>
+     * </ol>
+     *
+     * <p>★ 并发（C2）：{@code updateById} 返回 0 时<b>不一律报 8003</b>，而是用<b>锁定读</b>重查判因
+     * （见 {@link #reloadForConflict}）：若已是 {@code PENDING_REVIEW} ⇒ 8002，否则 8003。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ReplenishmentReviewActionResponse submit(long id, String comment) {
+        validateComment(comment);
+        ReplenishmentItemEntity entity = requireItem(id);
+        if (STATUS_PENDING_REVIEW.equals(entity.getStatus())) {
+            throw new BizException(ErrorCodes.RPL_8002, "该建议已提交，请勿重复提交");
+        }
+        if (!STATUS_SUGGESTED.equals(entity.getStatus())) {
+            throw new BizException(ErrorCodes.RPL_8001, "当前状态不允许提交审核");
+        }
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        entity.setStatus(STATUS_PENDING_REVIEW);
+        entity.setSubmittedAt(now);
+        entity.setUpdatedBy(currentUserId());
+        int affected = itemMapper.updateById(entity);
+        if (affected == 0) {
+            ReplenishmentItemEntity latest = reloadForConflict(id);
+            if (STATUS_PENDING_REVIEW.equals(latest.getStatus())) {
+                throw new BizException(ErrorCodes.RPL_8002, "该建议已提交，请勿重复提交");
+            }
+            throw new BizException(ErrorCodes.RPL_8003, "建议已被他人修改，请刷新后重试");
+        }
+
+        long reviewId = insertReview(entity, "SUBMIT", STATUS_SUGGESTED, STATUS_PENDING_REVIEW, comment, now);
+        recordTransitionAudit(id, entity.getTeamId(), AuditAction.REPLENISHMENT_SUBMIT,
+                STATUS_SUGGESTED, STATUS_PENDING_REVIEW);
+        log.info("补货建议已提交审核 id={} reviewId={}", id, reviewId);
+        return toActionResponse(entity, reviewId, "SUBMIT", STATUS_SUGGESTED, STATUS_PENDING_REVIEW);
+    }
+
+    /**
+     * 撤回提交（{@code POST /items/{id}/withdraw}）：{@code PENDING_REVIEW → SUGGESTED}。
+     *
+     * <p>状态判定：不存在/跨团队 ⇒ 404 {@code RPL-8004}；{@code status != PENDING_REVIEW}
+     * （含已 {@code SUGGESTED}）⇒ 422 {@code RPL-8001}。
+     *
+     * <p>★ <b>{@code submitted_at} 不清空</b>（{@code §5.55} 裁定 4）：清空需
+     * {@code set(col, null)}，那会绕过 {@code @Version}；且「曾提交过」是审计事实，不应抹掉。
+     *
+     * <p>★ 并发：{@code updateById} 返回 0 ⇒ 锁定读重查——已是 {@code SUGGESTED} ⇒ 8001
+     * （另一请求已撤回），否则 8003。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ReplenishmentReviewActionResponse withdraw(long id, String comment) {
+        validateComment(comment);
+        ReplenishmentItemEntity entity = requireItem(id);
+        if (!STATUS_PENDING_REVIEW.equals(entity.getStatus())) {
+            throw new BizException(ErrorCodes.RPL_8001, "当前状态不允许撤回");
+        }
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        entity.setStatus(STATUS_SUGGESTED);
+        // ★ 刻意不动 submitted_at（撤回不清空）
+        entity.setUpdatedBy(currentUserId());
+        int affected = itemMapper.updateById(entity);
+        if (affected == 0) {
+            ReplenishmentItemEntity latest = reloadForConflict(id);
+            if (STATUS_SUGGESTED.equals(latest.getStatus())) {
+                throw new BizException(ErrorCodes.RPL_8001, "当前状态不允许撤回");
+            }
+            throw new BizException(ErrorCodes.RPL_8003, "建议已被他人修改，请刷新后重试");
+        }
+
+        long reviewId = insertReview(entity, "WITHDRAW", STATUS_PENDING_REVIEW, STATUS_SUGGESTED, comment, now);
+        recordTransitionAudit(id, entity.getTeamId(), AuditAction.REPLENISHMENT_WITHDRAW,
+                STATUS_PENDING_REVIEW, STATUS_SUGGESTED);
+        log.info("补货建议已撤回 id={} reviewId={}", id, reviewId);
+        return toActionResponse(entity, reviewId, "WITHDRAW", STATUS_PENDING_REVIEW, STATUS_SUGGESTED);
+    }
+
+    // =====================================================================
     // 内部
     // =====================================================================
 
@@ -240,6 +354,99 @@ public class ReplenishmentItemService {
                 .before(before.isEmpty() ? null : before)
                 .after(after.isEmpty() ? null : after)
                 .build());
+    }
+
+    /**
+     * 冲突判因用的<b>锁定读</b>（C2）。
+     *
+     * <p>★ 为什么必须 {@code FOR UPDATE}：MySQL 默认隔离级别是 REPEATABLE READ，
+     * 普通 {@code SELECT} 读的是<b>本事务快照</b>，看不到「他人已提交」的新状态——
+     * 直接重查会把「另一请求已提交」误判为 {@code RPL-8003}（并发修改），
+     * 而契约要求的是 {@code RPL-8002}（重复提交）。锁定读读取<b>最新已提交版本</b>，
+     * 才能正确归因。该方法只在 {@code updateById} 影响 0 行时调用（罕见路径），无常规性能代价。
+     */
+    private ReplenishmentItemEntity reloadForConflict(long id) {
+        ReplenishmentItemEntity latest = itemMapper.selectOne(
+                Wrappers.<ReplenishmentItemEntity>lambdaQuery()
+                        .eq(ReplenishmentItemEntity::getId, id)
+                        .last("FOR UPDATE"));
+        if (latest == null) {
+            throw new BizException(ErrorCodes.RPL_8004, "补货建议不存在");
+        }
+        return latest;
+    }
+
+    /** 追加审核轨迹（{@code replenishment_reviews} <b>仅 INSERT</b>）；返回主键。 */
+    private long insertReview(ReplenishmentItemEntity item, String action, String fromStatus,
+                              String toStatus, String comment, LocalDateTime now) {
+        TeamContext.Snapshot snapshot = TeamContext.get();
+        ReplenishmentReviewEntity review = new ReplenishmentReviewEntity();
+        review.setTeamId(item.getTeamId());
+        review.setReplenishmentItemId(item.getId());
+        review.setAction(action);
+        review.setFromStatus(fromStatus);
+        review.setToStatus(toStatus);
+        review.setComment(comment);
+        // ★ qty_before / qty_after 都填当前 qty（同值，不是 null）：状态命令不改量
+        review.setQtyBefore(item.getQty());
+        review.setQtyAfter(item.getQty());
+        review.setReviewerId(snapshot == null ? null : snapshot.userId());
+        // ★ 角色快照：记「操作当时的角色」，不 JOIN team_members
+        review.setReviewerRole(snapshot == null || snapshot.roles().isEmpty()
+                ? null : snapshot.roles().get(0));
+        review.setRequestId(resolveRequestId());
+        // ★ occurred_at 与 created_at 同值（D2）
+        review.setOccurredAt(now);
+        review.setCreatedAt(now);
+        review.setCreatedBy(snapshot == null ? null : snapshot.userId());
+        reviewMapper.insert(review);
+        return review.getId();
+    }
+
+    /** 状态流转审计（{@code before/after} 只含 {@code status}）。 */
+    private void recordTransitionAudit(long itemId, Long teamId, AuditAction action,
+                                       String fromStatus, String toStatus) {
+        TeamContext.Snapshot snapshot = TeamContext.get();
+        auditWriteService.recordInBusinessTx(AuditEvent.builder()
+                .teamId(teamId)
+                .action(action)
+                .bizType(BIZ_TYPE)
+                .bizId(itemId)
+                .operatorId(snapshot == null ? null : snapshot.userId())
+                .operatorName(snapshot == null ? null : snapshot.username())
+                .operatorRole(snapshot == null || snapshot.roles().isEmpty()
+                        ? null : snapshot.roles().get(0))
+                .result(AuditResult.SUCCESS)
+                .changeSummary("status: " + fromStatus + " → " + toStatus)
+                .before(Map.of("status", fromStatus))
+                .after(Map.of("status", toStatus))
+                .build());
+    }
+
+    private static ReplenishmentReviewActionResponse toActionResponse(ReplenishmentItemEntity entity,
+                                                                      long reviewId, String action,
+                                                                      String fromStatus, String toStatus) {
+        return new ReplenishmentReviewActionResponse(entity.getId(), entity.getStatus(),
+                ReplenishmentItemResponse.qtyText(entity.getQty()), entity.getSubmittedAt(),
+                reviewId, action, fromStatus, toStatus);
+    }
+
+    private static void validateComment(String comment) {
+        if (comment != null && comment.length() > COMMENT_MAX_LENGTH) {
+            throw badParam("comment", "comment 长度不得超过 500 字符");
+        }
+    }
+
+    /**
+     * 请求链路 ID：优先 {@code X-Request-Id}；缺失则生成 UUID；超 64 字符按列宽截断
+     * （{@code request_id VARCHAR(64)}，防严格模式 1406）。
+     */
+    private static String resolveRequestId() {
+        String requestId = RequestIdContext.get();
+        if (requestId == null || requestId.isBlank()) {
+            return UUID.randomUUID().toString();
+        }
+        return requestId.length() > 64 ? requestId.substring(0, 64) : requestId;
     }
 
     private static BizException badParam(String field, String message) {
