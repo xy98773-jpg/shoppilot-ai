@@ -240,6 +240,35 @@ class AnalysisItemQueryIntegrationTest {
     }
 
     // =====================================================================
+    // R142（B20.4）：@RequestParam 基础类型转换失败 ⇒ 400 COM-0001（全局出口）
+    // =====================================================================
+
+    @Test
+    @DisplayName("R142-page=abc ⇒ 400 COM-0001，details[0].field=page（此前落到 500 COM-0002）")
+    void nonNumericPageReturns400() throws Exception {
+        ResponseEntity<String> resp = rawItems("/api/v1/analysis/runs/" + okRunId + "/items?page=abc");
+
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode(), resp.getBody());
+        JsonNode root = json.readTree(resp.getBody());
+        assertEquals("COM-0001", root.get("code").asText());
+        JsonNode detail = root.get("details").get(0);
+        assertEquals("page", detail.get("field").asText(), "field 取参数名（snake_case）");
+        assertEquals("abc", detail.get("rejectedValue").asText(), "回显被拒绝的原始值");
+    }
+
+    @Test
+    @DisplayName("R142-pageSize=abc ⇒ 400 COM-0001，details[0].field=page_size（证明是全局 handler）")
+    void nonNumericPageSizeReturns400() throws Exception {
+        ResponseEntity<String> resp = rawItems("/api/v1/analysis/runs/" + okRunId + "/items?pageSize=abc");
+
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode(), resp.getBody());
+        JsonNode root = json.readTree(resp.getBody());
+        assertEquals("COM-0001", root.get("code").asText());
+        assertEquals("page_size", root.get("details").get(0).get("field").asText(),
+                "toSnakeCase(pageSize) = page_size（与 COM-0001 的字段路径口径一致）");
+    }
+
+    // =====================================================================
     // 就绪判定 / 存在性 / 权限
     // =====================================================================
 
@@ -359,6 +388,13 @@ class AnalysisItemQueryIntegrationTest {
         if (sort != null) {
             url += "&sort=" + sort;
         }
+        return rest.exchange(url, HttpMethod.GET, new HttpEntity<>(headers), String.class);
+    }
+
+    /** 原样 URL（R142 用：需要传非数字的 page/pageSize，不能走 int 形参的 {@link #getItems}）。 */
+    private ResponseEntity<String> rawItems(String url) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(operatorToken());
         return rest.exchange(url, HttpMethod.GET, new HttpEntity<>(headers), String.class);
     }
 

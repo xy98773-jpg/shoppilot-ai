@@ -19,6 +19,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
@@ -105,6 +106,30 @@ public class GlobalExceptionHandler {
         List<ApiErrorDetail> details = List.of(
                 ApiErrorDetail.of(toSnakeCase(ex.getParameterName()), "缺少必填参数"));
         log.warn("缺少必填参数 param={}", ex.getParameterName());
+        return badRequest(details, "请求参数校验失败");
+    }
+
+    /**
+     * 查询参数类型转换失败：400 + {@code COM-0001}（{@code R142}，{@code B20.4}）。
+     *
+     * <p>典型触发：{@code GET /runs/{id}/items?page=abc}——{@code page} 声明为 {@code int}，
+     * Spring 在参数绑定阶段抛 {@link MethodArgumentTypeMismatchException}。此前本类无对应处理器，
+     * 该异常落到 {@link #handleUnexpected(Exception)} 兜底 → {@code 500 COM-0002}，
+     * 与 {@code API_CONTRACT §2.3}「字段级校验失败 → 400 + COM-0001」不符，且日志记 ERROR 噪声。
+     *
+     * <p>★ 口径（{@code ERROR_CODES §2.1} COM-0001）：{@code details[].field} 取参数名并转
+     * <b>snake_case</b>（与 {@link #handleValidation} 的字段路径口径一致）；
+     * {@code rejectedValue} 回显客户端原始字符串（非敏感值）。
+     * <p>★ 作用域是<b>全局</b>的（任何 {@code @RequestParam} 的 {@code int}/{@code long}/枚举转换失败），
+     * 属预期收益而非副作用——契约对所有端点都要求这一语义。
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<Void>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        Object rawValue = ex.getValue();
+        List<ApiErrorDetail> details = List.of(new ApiErrorDetail(
+                toSnakeCase(ex.getName()), "参数类型不合法",
+                rawValue == null ? null : String.valueOf(rawValue)));
+        log.warn("查询参数类型不合法 param={} value={}", ex.getName(), rawValue);
         return badRequest(details, "请求参数校验失败");
     }
 

@@ -1,6 +1,7 @@
 package com.shoppilot.analysis.api;
 
 import com.shoppilot.analysis.application.AnalysisAppService;
+import com.shoppilot.analysis.application.dto.CancelRunResponse;
 import com.shoppilot.analysis.application.dto.CreateAnalysisRunRequest;
 import com.shoppilot.analysis.application.dto.CreateRunOutcome;
 import com.shoppilot.analysis.application.dto.AnalysisRunStatusResponse;
@@ -25,7 +26,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 分析任务端点（M4-T03；{@code API_CONTRACT.md §11.5}）。
+ * 分析任务端点（M4-T03 / M4-T13 / M4-T14；{@code API_CONTRACT.md §11.5/§11.6}）。
  *
  * <h2>本批端点清单</h2>
  * <ul>
@@ -33,19 +34,22 @@ import org.springframework.web.bind.annotation.RestController;
  *   <li>{@code GET /api/v1/analysis/runs/{id}} —— 运行状态与进度（<b>任何已登录成员，含 VIEWER</b>，200）。</li>
  *   <li>{@code GET /api/v1/analysis/runs/{id}/items} —— 结果明细快照（<b>任何已登录成员，含 VIEWER</b>，200；
  *       {@code progress<100} ⇒ 409 {@code ANL-7012}，M4-T13）。</li>
+ *   <li>{@code POST /api/v1/analysis/runs/{id}/cancel} —— 取消运行（{@code OPERATOR+}，200；M4-T14，B20.4）。</li>
  * </ul>
  *
- * <p><b>不做</b>（留给 B20.4/B22）：取消（M4-T14）、{@code validate} 接线（R131）、列表、导出。
+ * <p><b>不做</b>（留给 B22/M5）：列表 {@code GET /runs}、导出、建议派生、前端。
  *
  * <h2>★ 三个边界</h2>
  * <ol>
- *   <li><b>角色</b>：{@code @RequireRole({"OWNER","ADMIN","OPERATOR","APPROVER"}, teamIdParam="")}
- *       —— 静态声明式拦截 VIEWER（{@code TEAM-2003}，{@code API_CONTRACT §9} 矩阵）。
- *       路径无 {@code {teamId}}，故 {@code teamIdParam=""} 跳过归属步（团队来自 JWT）。</li>
- *   <li><b>幂等键</b>：缺失/空白/超 128 → {@code COM-0010}（{@code ERROR_CODES §2.1}）；
- *       不在 Controller 做「业务幂等」，只做「必填与长度」的门槛。</li>
- *   <li><b>响应</b>：成功一律 202（含幂等重放）；重放时额外带 {@code Idempotent-Replayed: true}。
- *       错误走 {@code GlobalExceptionHandler}（{@code data=null}，裁定⑥）。</li>
+ *   <li><b>角色</b>：写操作（创建/取消）用
+ *       {@code @RequireRole({"OWNER","ADMIN","OPERATOR","APPROVER"}, teamIdParam="")}
+ *       —— 静态声明式拦截 VIEWER（{@code TEAM-2003}，{@code API_CONTRACT §9} 矩阵）；
+ *       读操作不加注解（VIEWER 可读）。路径无 {@code {teamId}}，故 {@code teamIdParam=""} 跳过归属步。</li>
+ *   <li><b>幂等键</b>：创建必填（缺失/空白/超 128 → {@code COM-0010}，{@code ERROR_CODES §2.1}）；
+ *       取消<b>不</b>必填、也不参与幂等槽位（{@code §6.2} 必填清单不含 cancel），
+ *       其幂等由「状态已是 CANCELLED」自然保证。</li>
+ *   <li><b>响应</b>：创建成功一律 202（含幂等重放，重放时附 {@code Idempotent-Replayed: true}）；
+ *       取消成功 200。错误走 {@code GlobalExceptionHandler}（{@code data=null}，裁定⑥）。</li>
  * </ol>
  */
 @RestController
@@ -106,6 +110,29 @@ public class AnalysisController {
     @GetMapping("/runs/{id}")
     public ResponseEntity<ApiResponse<AnalysisRunStatusResponse>> getRunStatus(@PathVariable("id") Long runId) {
         return ResponseEntity.ok(ApiResponse.success(analysisAppService.getRunStatus(runId)));
+    }
+
+    /**
+     * 取消分析运行（{@code POST /api/v1/analysis/runs/{id}/cancel}；M4-T14，B20.4）。
+     *
+     * <p>★ 路径用<b>子路径</b> {@code /cancel}，<b>不用</b>内部契约的冒号形态
+     * {@code :cancel}——对外契约 {@code API_CONTRACT §10.7} 与 {@code §13.1} 第 5 条已统一为子路径；
+     * 冒号后缀只属于 Java ↔ Python 内部接口（{@code R93}）。
+     *
+     * <p>★ 权限 {@code OPERATOR+}：取消是写操作（改状态机），VIEWER 取 {@code TEAM-2003}。
+     *
+     * <p>★ 无请求体：本方法不声明 {@code @RequestBody}，客户端即便传 body 也一律忽略（§A1）。
+     * 幂等键<b>不</b>必填、也不参与幂等槽位（§A2）——幂等由「状态已是 CANCELLED」保证。
+     *
+     * @param runId 运行 ID
+     * @return 200 + {@code {run_id, status:"CANCELLED", cancelled_at}}；
+     *         已取消再取消同样 200（幂等重放，{@code cancelled_at} 为首次取消时刻）
+     * @throws BizException {@code ANL-7005}（不存在/跨团队）、{@code ANL-7011}（其它终态不可取消）
+     */
+    @PostMapping("/runs/{id}/cancel")
+    @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
+    public ResponseEntity<ApiResponse<CancelRunResponse>> cancelRun(@PathVariable("id") Long runId) {
+        return ResponseEntity.ok(ApiResponse.success(analysisAppService.cancelRun(runId)));
     }
 
     /**

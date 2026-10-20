@@ -1,0 +1,53 @@
+JAR=/d/Desktop/ShopPilot-AI/backend-java/app/target/shoppilot-app-0.1.0.jar
+JAR_SIZE=60033690  JAR_SHA256=c567540faf7918a94ce280d50ff25a028049e455437ed4391efe7dcbfdbefbbe
+PORTS_FREE 3381/18321
+MYSQL_READY=1 (port 3381)
+APP_UP=1 (port 18321)
+[PASS] 种子 run 就绪（PENDING/SUCCEEDED） => 2
+RUN_PENDING=1 RUN_SUCCEEDED=2
+[PASS] operator01 登录 => 1
+-------------------------------------------------------------
+=== V5 取消端点原始响应（POST /api/v1/analysis/runs/1/cancel）===
+HTTP 200
+BODY {"code":"OK","message":"success","data":{"run_id":1,"status":"CANCELLED","cancelled_at":"2026-10-20T02:15:22.896Z"},"requestId":"req_764c3064f9e65c6c4bc87393dc8f3671","timestamp":"2026-10-20T02:15:22.949Z"}
+[PASS] V5 HTTP => 200
+[PASS] V5 code => OK
+[PASS] V5 data.run_id => 1
+[PASS] V5 data.status => CANCELLED
+V5 cancelled_at=2026-10-20T02:15:22.896Z
+[PASS] V5 cancelled_at 形态（ISO-8601 UTC 毫秒） => ok
+[PASS] V5 DB status => CANCELLED
+[PASS] V5 DB current_step => CANCELLED
+[PASS] V5 DB finished_at 非空 => 1
+[PASS] V5 审计 ANALYSIS_RUN_CANCEL 恰 1 条 => 1
+[PASS] V5 不额外记 ANALYSIS_RUN_FINISH => 0
+NOTE 远端取消不可达（AI_SERVICE_BASE_URL=127.0.0.1:1）仍返回 200 ⇒ §A5 尽力而为生效
+NOTE WARN 行数=1
+-------------------------------------------------------------
+=== 幂等重放：再取消一次 ===
+HTTP 200  BODY {"code":"OK","message":"success","data":{"run_id":1,"status":"CANCELLED","cancelled_at":"2026-10-20T02:15:22.896Z"},"requestId":"req_5af83b95fc8c3028cabaa0abda9097bb","timestamp":"2026-10-20T02:15:37.447Z"}
+[PASS] 重放 HTTP => 200
+[PASS] 重放 cancelled_at 不变 => 2026-10-20T02:15:22.896Z
+[PASS] 重放不重复审计 => 1
+-------------------------------------------------------------
+=== 终态 SUCCEEDED 取消 ⇒ 422 ANL-7011 ===
+HTTP 422  BODY {"code":"ANL-7011","message":"该任务当前不可取消","data":null,"requestId":"req_90821b695c80c0bcb140537238925264","timestamp":"2026-10-20T02:15:41.698Z"}
+[PASS] 终态 HTTP => 422
+[PASS] 终态 code => ANL-7011
+[PASS] 终态状态不变 => SUCCEEDED
+-------------------------------------------------------------
+=== V6 page=abc 原始响应（GET /api/v1/analysis/runs/2/items?page=abc）===
+HTTP 400
+BODY {"code":"COM-0001","message":"请求参数校验失败","data":null,"details":[{"field":"page","message":"参数类型不合法","rejectedValue":"abc"}],"requestId":"req_1613a1d195ac39f7202d24804fd4e569","timestamp":"2026-10-20T02:15:45.751Z"}
+[PASS] V6 HTTP => 400
+[PASS] V6 code => COM-0001
+[PASS] V6 details[0].field => page
+[PASS] V6 details[0].rejectedValue => abc
+-------------------------------------------------------------
+=== 交叉验证 pageSize=abc（全局 handler 而非单点特判）===
+HTTP 400  BODY {"code":"COM-0001","message":"请求参数校验失败","data":null,"details":[{"field":"page_size","message":"参数类型不合法","rejectedValue":"abc"}],"requestId":"req_a7bbd3362895a20cc61e50176bd00130","timestamp":"2026-10-20T02:15:50.616Z"}
+[PASS] pageSize=abc HTTP => 400
+[PASS] pageSize=abc details[0].field => page_size
+-------------------------------------------------------------
+RESULT: PASS=24 FAIL=0
+ALL PASS

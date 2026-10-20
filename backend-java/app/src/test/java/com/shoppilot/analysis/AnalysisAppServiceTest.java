@@ -9,6 +9,7 @@ import com.shoppilot.analysis.application.dto.CreateRunOutcome;
 import com.shoppilot.analysis.infrastructure.ai.AiServiceClient;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiRunCreateEnvelope;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiRunCreateRequest;
+import com.shoppilot.analysis.infrastructure.ai.dto.AiValidateEnvelope;
 import com.shoppilot.analysis.infrastructure.persistence.entity.AnalysisRunEntity;
 import com.shoppilot.analysis.infrastructure.persistence.mapper.AnalysisRunMapper;
 import com.shoppilot.app.ShopPilotApplication;
@@ -41,8 +42,12 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -144,6 +149,10 @@ class AnalysisAppServiceTest {
             return new AiRunCreateEnvelope.AiRunAccepted(
                     request.analysisRunId(), "ACCEPTED", "2026-10-19T00:00:00.000Z");
         });
+        // ★ R131（B20.4）：createRun 现在会先调 analysis:validate。默认桩 = 数据可分析，
+        //   既有用例的语义不变；预检失败分支由本类新增的 R131 用例逐条覆盖。
+        when(aiServiceClient.validate(any())).thenReturn(
+                new AiValidateEnvelope.AiValidateResult(true, 28, 1, 1, 0, List.of()));
     }
 
     @AfterEach
@@ -649,6 +658,68 @@ class AnalysisAppServiceTest {
     }
 
     // =====================================================================
+    // R131（B20.4）：analysis:validate 接入创建链路
+    // =====================================================================
+
+    @Test
+    @DisplayName("R131-analyzable=true：预检被调 1 次，run 正常创建并置 RUNNING")
+    void validateCalledOnceOnHappyPath() {
+        CreateRunOutcome outcome = appService.createRun(selectedSkus(List.of(SKU_A)), "r131-ok");
+
+        verify(aiServiceClient, times(1)).validate(any());
+        assertEquals("RUNNING", outcome.data().status(), "预检通过后按 §11.5 置 RUNNING");
+        assertEquals(1L, countAudits("ANALYSIS_RUN_CREATE"), "成功路径记 CREATE 恰 1 条");
+        assertEquals(0L, countAudits("ANALYSIS_RUN_FINISH"), "成功路径不记 FINISH");
+    }
+
+    @Test
+    @DisplayName("R131-analyzable=false：422 ANL-7008 + run FAILED + FINISH(FAILURE) 恰 1 条 + 无 CREATE 审计")
+    void validateNotAnalyzableFailsRun() {
+        when(aiServiceClient.validate(any())).thenThrow(
+                new BizException(ErrorCodes.ANL_7008, "所选数据不满足分析条件：有效数据不足"));
+
+        BizException ex = assertThrows(BizException.class,
+                () -> appService.createRun(selectedSkus(List.of(SKU_A)), "r131-7008"));
+
+        assertEquals(ErrorCodes.ANL_7008, ex.getErrorCode(), "必须原样上抛 ANL-7008（422）");
+        assertEquals("FAILED", runStatusByIdemKey("r131-7008"), "run 必须置 FAILED，不留 PENDING 悬挂");
+        assertNotNull(runFinishedAtByIdemKey("r131-7008"), "FAILED 必须写 finished_at");
+        assertEquals("ANL-7008", runErrorCodeByIdemKey("r131-7008"));
+        assertEquals(1L, countAuditsByResult("ANALYSIS_RUN_FINISH", "FAILURE"),
+                "预检失败记 FINISH(FAILURE) 恰 1 条");
+        assertEquals(0L, countAudits("ANALYSIS_RUN_CREATE"), "预检失败不得记 CREATE（§B6）");
+    }
+
+    @Test
+    @DisplayName("R131-技术失败（ANL-7002）：上抛同码 + run FAILED（不只处理 7008）")
+    void validateTechnicalFailureFailsRun() {
+        when(aiServiceClient.validate(any())).thenThrow(
+                new BizException(ErrorCodes.ANL_7002, "AI 分析服务暂时不可用，请稍后重试"));
+
+        BizException ex = assertThrows(BizException.class,
+                () -> appService.createRun(selectedSkus(List.of(SKU_A)), "r131-7002"));
+
+        assertEquals(ErrorCodes.ANL_7002, ex.getErrorCode());
+        assertEquals("FAILED", runStatusByIdemKey("r131-7002"), "技术失败同样置 FAILED（§B3）");
+        assertEquals("ANL-7002", runErrorCodeByIdemKey("r131-7002"));
+        assertEquals(1L, countAuditsByResult("ANALYSIS_RUN_FINISH", "FAILURE"));
+        assertEquals(0L, countAudits("ANALYSIS_RUN_CREATE"));
+    }
+
+    @Test
+    @DisplayName("R131-幂等命中：同键同体重放零次 validate、零次 create（§B4）")
+    void idempotentReplaySkipsValidate() {
+        appService.createRun(selectedSkus(List.of(SKU_A)), "r131-replay");
+        clearInvocations(aiServiceClient);
+
+        CreateRunOutcome replay = appService.createRun(selectedSkus(List.of(SKU_A)), "r131-replay");
+
+        assertTrue(replay.replayed());
+        verify(aiServiceClient, never()).validate(any());
+        verify(aiServiceClient, never()).createAnalysisRun(any());
+    }
+
+    // =====================================================================
     // 工具
     // =====================================================================
 
@@ -661,6 +732,28 @@ class AnalysisAppServiceTest {
         Long value = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM audit_logs WHERE action=?", Long.class, action);
         return value == null ? 0L : value;
+    }
+
+    /** 按动作 + 结果计数（R131 断言「FINISH(FAILURE) 恰 1 条」用）。 */
+    private long countAuditsByResult(String action, String result) {
+        Long value = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM audit_logs WHERE action=? AND result=?", Long.class, action, result);
+        return value == null ? 0L : value;
+    }
+
+    private String runStatusByIdemKey(String key) {
+        return jdbc.queryForObject(
+                "SELECT status FROM analysis_runs WHERE idempotency_key=?", String.class, key);
+    }
+
+    private String runErrorCodeByIdemKey(String key) {
+        return jdbc.queryForObject(
+                "SELECT error_code FROM analysis_runs WHERE idempotency_key=?", String.class, key);
+    }
+
+    private java.time.LocalDateTime runFinishedAtByIdemKey(String key) {
+        return jdbc.queryForObject(
+                "SELECT finished_at FROM analysis_runs WHERE idempotency_key=?", java.time.LocalDateTime.class, key);
     }
 
     /**

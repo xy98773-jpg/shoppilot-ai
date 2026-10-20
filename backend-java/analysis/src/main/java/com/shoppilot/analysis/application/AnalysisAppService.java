@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.shoppilot.analysis.application.dto.AnalysisItemView;
+import com.shoppilot.analysis.application.dto.CancelRunResponse;
 import com.shoppilot.analysis.application.dto.CreateAnalysisRunRequest;
 import com.shoppilot.analysis.application.dto.CreateRunOutcome;
 import com.shoppilot.analysis.application.dto.AnalysisRunStatusResponse;
@@ -52,11 +53,12 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 /**
- * 分析运行的应用服务（M4-T03：{@code createRun}）。
+ * 分析运行的应用服务（M4-T03 {@code createRun} / M4-T05 状态查询 / M4-T13 快照查询 /
+ * M4-T14 取消；B20.4 起 {@code createRun} 接入数据质量预检 {@code R131}）。
  *
  * <p><b>权威依据</b>：{@code API_CONTRACT.md §11.5}（端点与响应）、{@code §6}（幂等键语义）、
- * {@code ERROR_CODES.md §2.8}（{@code ANL-7001/7007/7009/7013}）、{@code DESIGN_BASIS.md §9.7}
- * （状态机）、{@code §13.2}（Java 先落 {@code PENDING} 再把 id 交给 Python）、
+ * {@code ERROR_CODES.md §2.8}（{@code ANL-7001/7005/7007/7008/7009/7011/7013}）、
+ * {@code DESIGN_BASIS.md §9.7}（状态机）、{@code §13.2}（Java 先落 {@code PENDING} 再把 id 交给 Python）、
  * {@code §13.4}（{@code timeout_at = 创建 + 300s}）、{@code D-25}（{@code run_no} 团队内日期前缀 + 序列）。
  *
  * <h2>★ 为什么<b>不</b>加 {@code @Transactional}</h2>
@@ -113,6 +115,16 @@ public class AnalysisAppService {
     /** 快照查询排序白名单（{@code §11.6} B4：仅三字段 + asc/desc；白名单即防注入边界）。 */
     private static final Set<String> ITEM_SORT_COLUMNS =
             Set.of("avg_daily_sales", "risk_level", "created_at");
+
+    /**
+     * {@code ANL-7011}（无法取消：非 {@code PENDING}/{@code RUNNING}；HTTP 422）。
+     *
+     * <p>★ {@code ErrorCodes} 尚未固化该常量，而 {@code B20.4} 的 {@code G5} 只允许改
+     * {@code common} 的 {@code GlobalExceptionHandler} 一个文件 ⇒ 本模块自持字面量。
+     * 码值本身是 SSOT 明文（{@code ERROR_CODES.md §2.8}），{@code ErrorCodeHttpStatus} 已映射 422；
+     * 待后续允许动 {@code common} 的批次再收敛为 {@code ErrorCodes.ANL_7011}。
+     */
+    private static final String ANL_7011 = "ANL-7011";
 
     private final AnalysisRunMapper runMapper;
     private final AiServiceClient aiServiceClient;
@@ -190,6 +202,29 @@ public class AnalysisAppService {
             return reconcile(race.existing(), request, scope, params, resolvedWarehouseId);
         }
 
+        // f0. 数据质量预检（R131，M4-B20.4 §B1）：**必须在落库之后**——
+        //     analyzable=false 要求把这个 run 置 FAILED（AI_SERVICE_CONTRACT §3.1 字段表），
+        //     没有 run 就没有可落状态的对象。
+        //     ★ §B2：复用 e0 已装配的 items，**禁止**调 buildValidateRequest(...)——
+        //       它内部会再 resolveWarehouseId + assemble（重复查库，且可能与 e0 结果不一致）。
+        try {
+            aiServiceClient.validate(AiValidateRequest.of(snapshot.teamId(), resolvedWarehouseId,
+                    scope, request.dateFrom(), request.dateTo(), params, items));
+        } catch (BizException ex) {
+            // §B3：ANL-7008（analyzable=false）与技术失败（ANL-7002/7003/7004…）同口径——
+            // 都置 FAILED + FINISH(FAILURE) + 上抛，❌ 不留 PENDING 悬挂（B20 的超时扫描依赖状态可信）。
+            boolean quality = ErrorCodes.ANL_7008.equals(ex.getErrorCode());
+            markFailed(saved, ex.getErrorCode(), ex.getMessage());
+            auditFinish(snapshot, saved, AuditResult.FAILURE,
+                    (quality ? "数据质量预检未通过：" : "数据质量预检失败：") + ex.getErrorCode(),
+                    ex.getErrorCode());
+            throw ex;
+        } catch (RuntimeException ex) {
+            markFailed(saved, ErrorCodes.COM_0002, "系统繁忙，请稍后重试");
+            auditFinish(snapshot, saved, AuditResult.FAILURE, "数据质量预检异常", ErrorCodes.COM_0002);
+            throw ex;
+        }
+
         // f/g. 发起；失败置 FAILED（不留 PENDING 悬挂）后原样上抛
         try {
             aiServiceClient.createAnalysisRun(toAiRequest(saved, scope, params, request, items));
@@ -210,6 +245,98 @@ public class AnalysisAppService {
         log.info("分析任务已创建：runId={} runNo={} teamId={} scopeType={} totalSkus={}",
                 saved.getId(), saved.getRunNo(), snapshot.teamId(), saved.getScopeType(), saved.getTotalSkus());
         return new CreateRunOutcome(CreateRunResponse.from(saved), false);
+    }
+
+    /**
+     * 取消分析运行（{@code POST /api/v1/analysis/runs/{id}/cancel}；M4-T14，B20.4）。
+     *
+     * <p><b>权威依据</b>：{@code API_CONTRACT.md §10.7}（端点与权限：{@code OPERATOR+}）、
+     * {@code §2}（409/422 边界）、{@code DESIGN_BASIS.md §9.7}（合法转换）、
+     * {@code ERROR_CODES.md §2.8}（{@code ANL-7005} / {@code ANL-7011}）、
+     * {@code AI_SERVICE_CONTRACT.md §3.6}（Java 立即置终态、远端取消尽力而为）。
+     *
+     * <h2>★ 为什么是「一条 CAS UPDATE」而不是「先读后写」</h2>
+     * <p>读与写之间存在并发窗口：轮询/超时扫描可能在这期间把 run 推进到终态
+     * （{@code SUCCEEDED}/{@code DEGRADED}/{@code FAILED}/{@code TIMEOUT}）。用
+     * {@code WHERE id=? AND status IN ('PENDING','RUNNING')} 把「状态合法性」压进数据库的一次原子判定，
+     * 影响 0 行即说明状态已变——此时再读回按「幂等 / 不可取消」分流，<b>绝不用读到的旧状态做写</b>。
+     *
+     * <h2>★ 三种结果</h2>
+     * <ol>
+     *   <li>影响 1 行 → 取消成功：200 + {@code {run_id,status,cancelled_at}}；写<b>恰 1 条</b>
+     *       {@code ANALYSIS_RUN_CANCEL} 审计；再<b>尽力而为</b>通知 Python（失败只 WARN）；</li>
+     *   <li>影响 0 行且已是 {@code CANCELLED} → <b>200 幂等重放</b>（{@code API_CONTRACT §10.7} 幂等列 ✅）：
+     *       不改状态、<b>不重复审计</b>、<b>不再调 Python</b>；</li>
+     *   <li>影响 0 行且是其它终态 → {@code ANL-7011}（422，「无法取消（非 PENDING/RUNNING）」）。</li>
+     * </ol>
+     * <p>★ 口径（任务书 §三.1）：<b>不用 {@code ANL-7010}</b>。{@code API_CONTRACT §2} 的 409/422 边界原文
+     * 把「对 {@code SUCCEEDED} 的 run 再取消」归为 <b>422</b>；{@code ANL-7010} 是「终态再操作」的通用码，
+     * 本端点按更具体的 {@code ANL-7011} 返回。
+     *
+     * <p>★ 不删任何数据：{@code analysis_items} 快照保留；取消后 {@code GET /items} 仍按
+     * {@code progress<100} ⇒ {@code 409 ANL-7012}（{@link #listRunItems} 不特判取消态）。
+     *
+     * @param runId 运行 ID
+     * @return 取消后的响应数据（幂等重放时是首次取消的真实 {@code cancelled_at}）
+     * @throws BizException {@code ANL-7005}（不存在或跨团队——租户线使两者同表现）、
+     *                      {@code ANL-7011}（终态且非 CANCELLED）
+     */
+    public CancelRunResponse cancelRun(Long runId) {
+        TeamContext.Snapshot snapshot = TeamContext.require();
+
+        // a. 存在性（租户线：跨团队同表现 → 404，不泄漏他团队是否存在）
+        AnalysisRunEntity run = runMapper.selectById(runId);
+        if (run == null) {
+            throw new BizException(ErrorCodes.ANL_7005, "分析任务不存在");
+        }
+
+        // b. 唯一写入口：CAS（任务书 §A4 / 执行提醒 #1）
+        int updated = runMapper.update(null, Wrappers.<AnalysisRunEntity>lambdaUpdate()
+                .eq(AnalysisRunEntity::getId, runId)
+                .in(AnalysisRunEntity::getStatus,
+                        AnalysisRunStatus.PENDING.name(), AnalysisRunStatus.RUNNING.name())
+                .set(AnalysisRunEntity::getStatus, AnalysisRunStatus.CANCELLED.name())
+                .set(AnalysisRunEntity::getCurrentStep, "CANCELLED")
+                // ★ 执行提醒 #2：finished_at 取数据库时钟 NOW(3)（UTC），不用 JVM 本地时间
+                .setSql("finished_at = NOW(3)"));
+
+        if (updated == 0) {
+            // 状态在「读 → 写」之间被推进（或本来就是终态）：重读后分流
+            AnalysisRunEntity latest = runMapper.selectById(runId);
+            if (latest == null) {
+                throw new BizException(ErrorCodes.ANL_7005, "分析任务不存在");
+            }
+            if (AnalysisRunStatus.CANCELLED.name().equals(latest.getStatus())) {
+                // 幂等重放（§A4 / §三.2）：不审计、不调 Python、不改状态
+                log.info("取消分析任务（幂等重放）：runId={} 已是 CANCELLED", runId);
+                return CancelRunResponse.from(latest);
+            }
+            log.warn("取消分析任务被拒绝：runId={} status={}（仅 PENDING/RUNNING 可取消）",
+                    runId, latest.getStatus());
+            throw new BizException(ANL_7011, "该任务当前不可取消");
+        }
+
+        // c. 读回 DB 生成的 finished_at（响应 cancelled_at 的唯一真源）
+        AnalysisRunEntity cancelled = runMapper.selectById(runId);
+        if (cancelled == null) {
+            // 理论不可达（本仓无删除 run 的路径）；防御式兜底，不返回半截响应
+            throw new BizException(ErrorCodes.ANL_7005, "分析任务不存在");
+        }
+
+        // d. 审计恰 1 条（ANALYSIS_RUN_CANCEL；不再记 ANALYSIS_RUN_FINISH——语义不同，§A6/§八.7）
+        auditCancel(snapshot, cancelled, run.getStatus());
+
+        // e. 远端尽力而为（§A5）：本地已是权威终态，Python 取消失败只 WARN、不回滚、不抛
+        try {
+            if (!aiServiceClient.cancelBestEffort(runId)) {
+                log.warn("远端取消未成功（不影响本地终态）：runId={}", runId);
+            }
+        } catch (RuntimeException ex) {
+            log.warn("远端取消异常（不影响本地终态）：runId={} err={}", runId, ex.toString());
+        }
+
+        log.info("分析任务已取消：runId={} from={} to=CANCELLED", runId, run.getStatus());
+        return CancelRunResponse.from(cancelled);
     }
 
     /**
@@ -731,6 +858,30 @@ public class AnalysisAppService {
                 .result(result)
                 .errorCode(errorCode)
                 .changeSummary(summary)
+                .build());
+    }
+
+    /**
+     * 审计 {@code ANALYSIS_RUN_CANCEL}（{@code DATABASE_DESIGN §6-J.1 #29}，{@code result=SUCCESS}）。
+     *
+     * <p>★ 只在 CAS 成功时调用<b>恰一次</b>：幂等重放（已 {@code CANCELLED}）不再记；
+     * 也<b>不</b>额外记 {@code ANALYSIS_RUN_FINISH}——取消与「运行结束」是两个语义
+     * （任务书 §A6 / §八.7）。
+     *
+     * @param fromStatus CAS 前读到的状态（{@code PENDING}/{@code RUNNING}），仅用于审计摘要
+     */
+    private void auditCancel(TeamContext.Snapshot snapshot, AnalysisRunEntity run, String fromStatus) {
+        auditWriteService.record(AuditEvent.builder()
+                .teamId(snapshot.teamId())
+                .action(AuditAction.ANALYSIS_RUN_CANCEL)
+                .bizType(AUDIT_BIZ_TYPE)
+                .bizId(run.getId())
+                .bizNo(run.getRunNo())
+                .operatorId(snapshot.userId())
+                .operatorName(snapshot.username())
+                .operatorRole(primaryRole(snapshot))
+                .result(AuditResult.SUCCESS)
+                .changeSummary("取消分析任务：" + fromStatus + " → CANCELLED")
                 .build());
     }
 
