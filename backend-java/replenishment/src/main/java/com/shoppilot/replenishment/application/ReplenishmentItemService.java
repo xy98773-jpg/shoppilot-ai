@@ -11,6 +11,7 @@ import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
 import com.shoppilot.common.web.RequestIdContext;
+import com.shoppilot.replenishment.application.dto.ApprovalCommandRequest;
 import com.shoppilot.replenishment.application.dto.ReplenishmentItemResponse;
 import com.shoppilot.replenishment.application.dto.ReplenishmentReviewActionResponse;
 import com.shoppilot.replenishment.application.dto.UpdateReplenishmentItemRequest;
@@ -74,6 +75,8 @@ public class ReplenishmentItemService {
 
     private static final String STATUS_SUGGESTED = "SUGGESTED";
     private static final String STATUS_PENDING_REVIEW = "PENDING_REVIEW";
+    private static final String STATUS_APPROVED = "APPROVED";
+    private static final String STATUS_REJECTED = "REJECTED";
 
     /** 审核意见列宽（字符）。 */
     private static final int COMMENT_MAX_LENGTH = 500;
@@ -324,6 +327,135 @@ public class ReplenishmentItemService {
     }
 
     // =====================================================================
+    // 审批通过 / 驳回（M5-T05，F-RPL-04）
+    // =====================================================================
+
+    /**
+     * 审批通过（{@code POST /items/{id}/approve}）：{@code PENDING_REVIEW → APPROVED}。
+     *
+     * <h2>状态判定（顺序固定，A3）</h2>
+     * <ol>
+     *   <li>不存在/跨团队 ⇒ 404 {@code RPL-8004}；</li>
+     *   <li>已是 {@code APPROVED} ⇒ <b>409 {@code RPL-8002}</b>（重复审批）；</li>
+     *   <li>其它非 {@code PENDING_REVIEW} ⇒ <b>422 {@code RPL-8001}</b>。</li>
+     * </ol>
+     *
+     * <h2>★ 双保险（A4）</h2>
+     * <ol>
+     *   <li>前置比较 {@code expected_version} 与库内版本，不等 ⇒ 409 {@code RPL-8003}
+     *       <b>并带 {@code details}</b>（field={@code expected_version}，message=期望/实际）；
+     *       这是给客户端可读的「刷新提示」；</li>
+     *   <li>比较通过后仍走 {@code updateById(entity)} 的 {@code @Version} CAS——极窄竞态下
+     *       （比较后、更新前被人抢先）影响 0 行，同样返回 8003。<b>不能只靠前置比较</b>。</li>
+     * </ol>
+     *
+     * <h2>四眼原则（D-09）</h2>
+     * <p>★ 本批<b>不实现</b> {@code RPL-8007}：{@code DESIGN_BASIS §15 D-09} 明文「首期不强制」。
+     * 提交人 == 审批人<b>允许</b>；留痕由 reviews（{@code reviewer_id}/{@code reviewer_role}）与审计保证。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ReplenishmentReviewActionResponse approve(long id, ApprovalCommandRequest request) {
+        if (request == null || request.getExpectedVersion() == null) {
+            throw badParam("expected_version", "expected_version 必填");
+        }
+        validateComment(request.getComment());
+
+        ReplenishmentItemEntity entity = requireItem(id);
+        if (STATUS_APPROVED.equals(entity.getStatus())) {
+            throw new BizException(ErrorCodes.RPL_8002, "该操作已提交，请勿重复");
+        }
+        if (!STATUS_PENDING_REVIEW.equals(entity.getStatus())) {
+            throw new BizException(ErrorCodes.RPL_8001, "当前状态不允许审批");
+        }
+        assertExpectedVersion(entity, request.getExpectedVersion());
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        entity.setStatus(STATUS_APPROVED);
+        entity.setApprovedAt(now);
+        entity.setApprovedBy(currentUserId());
+        entity.setUpdatedBy(currentUserId());
+        // ★ approve 不写 closed_at：APPROVED 不是终态（还可 CONVERTED / CANCELLED）
+        int affected = itemMapper.updateById(entity);
+        if (affected == 0) {
+            ReplenishmentItemEntity latest = reloadForConflict(id);
+            throw versionConflict(request.getExpectedVersion(), latest.getVersion());
+        }
+
+        long reviewId = insertReview(entity, "APPROVE", STATUS_PENDING_REVIEW, STATUS_APPROVED,
+                request.getComment(), now);
+        Map<String, Object> before = new LinkedHashMap<>();
+        before.put("status", STATUS_PENDING_REVIEW);
+        before.put("qty", ReplenishmentItemResponse.qtyText(entity.getQty()));
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("status", STATUS_APPROVED);
+        after.put("qty", ReplenishmentItemResponse.qtyText(entity.getQty()));
+        recordAuditEvent(id, entity.getTeamId(), AuditAction.REPLENISHMENT_APPROVE, before, after,
+                "status: " + STATUS_PENDING_REVIEW + " → " + STATUS_APPROVED);
+        log.info("补货建议已审批通过 id={} reviewId={} approvedBy={}", id, reviewId, entity.getApprovedBy());
+        return toActionResponse(requireItem(id), reviewId, "APPROVE",
+                STATUS_PENDING_REVIEW, STATUS_APPROVED);
+    }
+
+    /**
+     * 驳回（{@code POST /items/{id}/reject}）：{@code PENDING_REVIEW → REJECTED}（终态）。
+     *
+     * <p>★ {@code comment} <b>必填且非空白</b>（{@code isBlank()}，比 DB 的 {@code TRIM(comment) <> ''}
+     * 更宽，含制表符/全角空格）：空 ⇒ 400 {@code RPL-8005}（带 {@code details.field=comment}）。
+     * 应用层与 DB 层口径一致且不矛盾——DB 是最后兜底，应用层负责给出可读错误。
+     *
+     * <p>★ <b>不写 {@code approved_at}/{@code approved_by}</b>（驳回不是审批通过），
+     * 写 {@code closed_at}（进入终态）。
+     *
+     * <p>状态判定：{@code REJECTED} ⇒ 409 {@code RPL-8002}（重复驳回）；其它非
+     * {@code PENDING_REVIEW} ⇒ 422 {@code RPL-8001}。并发同 approve（双保险）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ReplenishmentReviewActionResponse reject(long id, ApprovalCommandRequest request) {
+        if (request == null || request.getExpectedVersion() == null) {
+            throw badParam("expected_version", "expected_version 必填");
+        }
+        if (request.getComment() == null || request.getComment().isBlank()) {
+            throw BizException.withDetails(ErrorCodes.RPL_8005, "驳回补货建议必须填写审核意见",
+                    List.of(ApiErrorDetail.of("comment", "驳回时 comment 不能为空")));
+        }
+        validateComment(request.getComment());
+
+        ReplenishmentItemEntity entity = requireItem(id);
+        if (STATUS_REJECTED.equals(entity.getStatus())) {
+            throw new BizException(ErrorCodes.RPL_8002, "该操作已提交，请勿重复");
+        }
+        if (!STATUS_PENDING_REVIEW.equals(entity.getStatus())) {
+            throw new BizException(ErrorCodes.RPL_8001, "当前状态不允许驳回");
+        }
+        assertExpectedVersion(entity, request.getExpectedVersion());
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        entity.setStatus(STATUS_REJECTED);
+        entity.setClosedAt(now);
+        entity.setUpdatedBy(currentUserId());
+        // ★ 刻意不动 approved_at / approved_by
+        int affected = itemMapper.updateById(entity);
+        if (affected == 0) {
+            ReplenishmentItemEntity latest = reloadForConflict(id);
+            throw versionConflict(request.getExpectedVersion(), latest.getVersion());
+        }
+
+        long reviewId = insertReview(entity, "REJECT", STATUS_PENDING_REVIEW, STATUS_REJECTED,
+                request.getComment(), now);
+        Map<String, Object> before = new LinkedHashMap<>();
+        before.put("status", STATUS_PENDING_REVIEW);
+        before.put("comment", null);
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("status", STATUS_REJECTED);
+        after.put("comment", request.getComment());
+        recordAuditEvent(id, entity.getTeamId(), AuditAction.REPLENISHMENT_REJECT, before, after,
+                "status: " + STATUS_PENDING_REVIEW + " → " + STATUS_REJECTED);
+        log.info("补货建议已驳回 id={} reviewId={}", id, reviewId);
+        return toActionResponse(requireItem(id), reviewId, "REJECT",
+                STATUS_PENDING_REVIEW, STATUS_REJECTED);
+    }
+
+    // =====================================================================
     // 内部
     // =====================================================================
 
@@ -406,6 +538,17 @@ public class ReplenishmentItemService {
     /** 状态流转审计（{@code before/after} 只含 {@code status}）。 */
     private void recordTransitionAudit(long itemId, Long teamId, AuditAction action,
                                        String fromStatus, String toStatus) {
+        Map<String, Object> before = new LinkedHashMap<>();
+        before.put("status", fromStatus);
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("status", toStatus);
+        recordAuditEvent(itemId, teamId, action, before, after,
+                "status: " + fromStatus + " → " + toStatus);
+    }
+
+    /** 审计写点（同事务，{@code MANDATORY}；{@code before/after} 由调用方决定字段集）。 */
+    private void recordAuditEvent(long itemId, Long teamId, AuditAction action,
+                                  Map<String, Object> before, Map<String, Object> after, String summary) {
         TeamContext.Snapshot snapshot = TeamContext.get();
         auditWriteService.recordInBusinessTx(AuditEvent.builder()
                 .teamId(teamId)
@@ -417,9 +560,9 @@ public class ReplenishmentItemService {
                 .operatorRole(snapshot == null || snapshot.roles().isEmpty()
                         ? null : snapshot.roles().get(0))
                 .result(AuditResult.SUCCESS)
-                .changeSummary("status: " + fromStatus + " → " + toStatus)
-                .before(Map.of("status", fromStatus))
-                .after(Map.of("status", toStatus))
+                .changeSummary(summary)
+                .before(before.isEmpty() ? null : before)
+                .after(after.isEmpty() ? null : after)
                 .build());
     }
 
@@ -428,7 +571,23 @@ public class ReplenishmentItemService {
                                                                       String fromStatus, String toStatus) {
         return new ReplenishmentReviewActionResponse(entity.getId(), entity.getStatus(),
                 ReplenishmentItemResponse.qtyText(entity.getQty()), entity.getSubmittedAt(),
+                entity.getApprovedBy(), entity.getApprovedAt(), entity.getClosedAt(), entity.getVersion(),
                 reviewId, action, fromStatus, toStatus);
+    }
+
+    /** 前置版本比较（A4 第一道）：不等即 409 RPL-8003，带字段级 details。 */
+    private static void assertExpectedVersion(ReplenishmentItemEntity entity, Integer expectedVersion) {
+        if (!expectedVersion.equals(entity.getVersion())) {
+            throw versionConflict(expectedVersion, entity.getVersion());
+        }
+    }
+
+    /** 乐观锁冲突（409 RPL-8003；{@code details.field=expected_version}，回显请求值）。 */
+    private static BizException versionConflict(Integer expectedVersion, Integer actualVersion) {
+        return BizException.withDetails(ErrorCodes.RPL_8003, "建议已被他人修改，请刷新后重试",
+                List.of(new ApiErrorDetail("expected_version",
+                        "期望版本 " + expectedVersion + "，实际版本 " + actualVersion,
+                        expectedVersion)));
     }
 
     private static void validateComment(String comment) {

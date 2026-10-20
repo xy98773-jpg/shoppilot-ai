@@ -3,6 +3,7 @@ package com.shoppilot.replenishment.api;
 import com.shoppilot.common.annotation.RequireRole;
 import com.shoppilot.common.web.ApiResponse;
 import com.shoppilot.replenishment.application.ReplenishmentItemService;
+import com.shoppilot.replenishment.application.dto.ApprovalCommandRequest;
 import com.shoppilot.replenishment.application.dto.ReplenishmentItemResponse;
 import com.shoppilot.replenishment.application.dto.ReplenishmentReviewActionResponse;
 import com.shoppilot.replenishment.application.dto.ReviewCommandRequest;
@@ -120,5 +121,44 @@ public class ReplenishmentItemController {
 
     private static String commentOf(ReviewCommandRequest request) {
         return request == null ? null : request.getComment();
+    }
+
+    /**
+     * 审批通过（{@code POST /items/{id}/approve}，{@code PENDING_REVIEW → APPROVED}）。
+     *
+     * <p>★ 权限<b>不含 OPERATOR</b>（契约 §10.8：APPROVER/ADMIN/OWNER）。
+     *
+     * @param id      建议 ID（当前团队）
+     * @param request 请求体（{@code expected_version} 必填；{@code comment} 可选）
+     * @return 200 + 动作结果（含 {@code approved_by}/{@code approved_at}/{@code version}/{@code review_id}）；
+     *         已审批 ⇒ 409 {@code RPL-8002}；状态不符 ⇒ 422 {@code RPL-8001}；
+     *         版本冲突 ⇒ 409 {@code RPL-8003}（带 {@code details}）
+     */
+    @PostMapping("/items/{id}/approve")
+    @RequireRole(value = {"OWNER", "ADMIN", "APPROVER"}, teamIdParam = "")
+    public ResponseEntity<ApiResponse<ReplenishmentReviewActionResponse>> approve(
+            @PathVariable("id") long id,
+            @RequestBody(required = false) ApprovalCommandRequest request) {
+
+        return ResponseEntity.ok(ApiResponse.success(itemService.approve(id, request)));
+    }
+
+    /**
+     * 驳回（{@code POST /items/{id}/reject}，{@code PENDING_REVIEW → REJECTED}，终态）。
+     *
+     * <p>★ {@code comment} 必填且非空白，否则 400 {@code RPL-8005}；★ 不写 {@code approved_*}，
+     * 写 {@code closed_at}。
+     *
+     * @param id      建议 ID（当前团队）
+     * @param request 请求体（{@code expected_version} 必填；{@code comment} 必填非空白）
+     * @return 200 + 动作结果（含 {@code closed_at}/{@code version}/{@code review_id}）
+     */
+    @PostMapping("/items/{id}/reject")
+    @RequireRole(value = {"OWNER", "ADMIN", "APPROVER"}, teamIdParam = "")
+    public ResponseEntity<ApiResponse<ReplenishmentReviewActionResponse>> reject(
+            @PathVariable("id") long id,
+            @RequestBody(required = false) ApprovalCommandRequest request) {
+
+        return ResponseEntity.ok(ApiResponse.success(itemService.reject(id, request)));
     }
 }

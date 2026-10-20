@@ -166,6 +166,8 @@ public final class ErrorCodes {
     public static final String RPL_8002 = "RPL-8002";
     public static final String RPL_8003 = "RPL-8003";
     public static final String RPL_8004 = "RPL-8004";
+    /** 驳回必须填写意见（400）—— {@code REJECT} 的 {@code comment} 为空或纯空白。 */
+    public static final String RPL_8005 = "RPL-8005";
     /** 建议数量非法（400）—— {@code qty <= 0} 或小数位 > 3（{@code §14.2} 精度；★ 无上限校验）。 */
     public static final String RPL_8006 = "RPL-8006";
     public static final String RPL_8007 = "RPL-8007";
