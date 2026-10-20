@@ -1,0 +1,86 @@
+JAR_SHA256=e110bc472872b860b9d3e0b20c9da48b6dc92ea4891ea07f2a31b9998dc9ab8e
+JAR_SIZE=60033693
+PORTS_FREE 3363/18271/18282/18283
+MYSQL_READY=1
+SERVICE_AI_UP=1 (port 18282)
+CAPTURE_PROXY_UP=1
+APP_UP=1 (port 18271)
+[PASS] 种子导入成功 => 0
+[PASS] 三账号登录 => 1|1|1
+-------------------------------------------------------------
+=== S 结构面 ===
+[PASS] fat jar 内含 V1.0.9 => 1
+[PASS] 迁移版本数 10 => 10
+-------------------------------------------------------------
+=== T1 R131：validate 通过 → 202 → 终态 ===
+[PASS] T1a 创建 202 => 202
+  NOTE run_id=1
+[FAIL] T1b 终态 SUCCEEDED（validate 放行） => expected [SUCCEEDED] but was [RUNNING]
+[PASS] T1c 捕获到 analysis:validate 调用 => 1
+  NOTE T1 抓包路径计数：      1 "path": "/internal/v1/analysis/runs"       1 "path": "/internal/v1/analysis:validate"       1 "path": "/internal/v1/health" 
+  NOTE T1 DB: RUNNING|5|VALIDATING
+  NOTE T1 读时同步日志: 0 行
+  NOTE T1 app.log 尾部: 2026-10-20T10:48:28.363+08:00  INFO 16016 --- [shoppilot-ai] [io-18271-exec-2] c.s.identity.application.AuthService     : 登录成功 userId=1001 teamId=7 role=OPERATOR;2026-10-20T10:48:29.026+08:00  INFO 16016 --- [shoppilot-ai] [io-18271-exec-5] c.s.identity.application.AuthService     : 登录成功 userId=1003 teamId=7 role=VIEWER;2026-10-20T10:48:29.812+08:00  INFO 16016 --- [shoppilot-ai] [io-18271-exec-4] c.s.identity.application.AuthService     : 登录成功 userId=2004 teamId=8 role=OWNER;2026-10-20T10:48:35.106+08:00  WARN 16016 --- [shoppilot-ai] [io-18271-exec-7] c.s.a.i.sampling.AnalysisItemAssembler   : effective_in_transit_qty 使用临时口径（inventory_balances.in_transit_qty，无到货窗口过滤，会高估 IP）：R124，M6 落地后换回 DESIGN_BASIS §10.4 口径并重算。teamId=7 warehouseId=9004 skuCount=5;2026-10-20T10:48:35.543+08:00  INFO 16016 --- [shoppilot-ai] [io-18271-exec-7] c.s.a.application.AnalysisAppService     : 分析任务已创建：runId=1 runNo=RUN-20261020-0001 teamId=7 scopeType=ALL_ACTIVE totalSkus=5;
+-------------------------------------------------------------
+=== T2 R131：analyzable=false（SKU 9003 无销售）→ 422 ANL-7008 + run FAILED ===
+[PASS] T2a HTTP 422 => 422
+[PASS] T2b code ANL-7008 => ANL-7008
+[PASS] T2c run 已落库（不是没建） => 1
+[PASS] T2d run status=FAILED（不留 PENDING） => FAILED
+[PASS] T2e error_code=ANL-7008 => ANL-7008
+[PASS] T2f finished_at 非空 => 1
+[PASS] T2g FINISH(FAILURE) 恰 1 条 => 1
+[PASS] T2h 无 CREATE 审计 => 0
+[PASS] T2i 未调用 runs 发起（Python 侧无该 run 的 202） => 0
+-------------------------------------------------------------
+=== T3 M4-T14 取消：PENDING / RUNNING / 终态 / 幂等 ===
+[PASS] T3a PENDING→取消 200 => 200
+[PASS] T3b data 三字段 => 3|CANCELLED
+[PASS] T3c cancelled_at ISO UTC 毫秒 => 1
+[PASS] T3d DB status/current_step => CANCELLED|CANCELLED
+[PASS] T3e finished_at 非空 => 1
+[PASS] T3f 审计 CANCEL 恰 1 条 => 1
+[PASS] T3g 不额外记 FINISH => 0
+[PASS] T3h 重复取消 200 幂等 => 200
+[PASS] T3i cancelled_at 逐字不变 => 2026-10-20T02:52:08.650Z
+[PASS] T3j 重放不重复审计 => 1
+[PASS] T3k RUNNING→取消 200 => 200|CANCELLED
+[PASS] T3l 取消后 items 仍 409 ANL-7012 => 409|ANL-7012
+[PASS] T3m 终态 ⇒ 422 ANL-7011 => 422|ANL-7011
+[PASS] T3n 终态状态不变 => SUCCEEDED
+[PASS] T3o 终态无 CANCEL 审计 => 0
+-------------------------------------------------------------
+=== T4 取消的边界与权限 ===
+[PASS] T4a 不存在 ⇒ 404 ANL-7005 => 404|ANL-7005
+[PASS] T4b 跨团队 ⇒ 404 ANL-7005 => 404|ANL-7005
+[PASS] T4c 他团队 run 未被改 => RUNNING
+  NOTE T4d 他团队 token 取消本团队已取消 run 实测=404/ANL-7005（应为 404）
+[PASS] T4e VIEWER ⇒ 403 TEAM-2003 => 403|TEAM-2003
+[PASS] T4f VIEWER 取消后状态不变 => PENDING
+[PASS] T4g 未登录取消 ⇒ 401 => 401
+-------------------------------------------------------------
+=== T5 并发取消（两请求同时打，审计必须恰 1） ===
+[PASS] T5a 两个并发请求都 200 => 200|200
+[PASS] T5b 并发下审计恰 1 条 => 1
+[PASS] T5c 最终状态 CANCELLED => CANCELLED
+[PASS] T5d 两个响应 cancelled_at 一致 => 
+-------------------------------------------------------------
+=== T6 R142：类型转换 400 COM-0001 ===
+[PASS] T6a page=abc ⇒ 400 COM-0001 => 400|COM-0001
+[PASS] T6b field=page => page
+[PASS] T6c rejectedValue=abc => abc
+[PASS] T6d pageSize=abc ⇒ 400 COM-0001 => 400|COM-0001
+[PASS] T6e field=page_size（snake_case） => page_size
+[PASS] T6f pageSize=0 ⇒ 400 COM-0001 => 400|COM-0001
+  NOTE T6g pageSize=0 的 details.field 实测=[pageSize]（R142 handler=page_size，手工 badParam 可能是 pageSize——观察项）
+[PASS] T6h page=0 ⇒ 400 COM-0001 => 400|COM-0001
+  NOTE T6i page=0 的 details.field 实测=[page]
+[PASS] T6j risk_level 非法 ⇒ 400 COM-0001 => 400|COM-0001
+  NOTE T6k risk_level 的 details.field 实测=[risk_level]
+[PASS] T6l 非法 sort ⇒ 400 COM-0001 => 400|COM-0001
+-------------------------------------------------------------
+=== T7 取消后 Python 结果不得落库 ===
+[PASS] T7a 被取消 run 的 items 恒 0 => 0
+[PASS] T7b 取消后 GET status 仍 CANCELLED（读时同步不复活） => CANCELLED
+-------------------------------------------------------------
+RB204_CHECK_TOTAL=52  RB204_FAIL_COUNT=1  RB204_RESULT=HAS FAILURES

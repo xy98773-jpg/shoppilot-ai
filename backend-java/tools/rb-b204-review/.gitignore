@@ -1,0 +1,12 @@
+app.log
+*.log
+proxy.out
+storage/
+q.err
+seed.err
+body*.json
+headers*.txt
+c1.json
+c2.json
+c1.code
+c2.code
