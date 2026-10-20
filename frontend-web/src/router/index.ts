@@ -132,13 +132,21 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'analysis/runs',
         name: 'analysis-runs',
-        component: () => Promise.resolve(Placeholder),
+        component: () => import('@/views/analysis/AnalysisRunList.vue'),
         meta: { title: '分析任务' },
+      },
+      // ★ 静态段必须排在 `:id` 之前（避免 "new" 被当成 run_id）
+      {
+        path: 'analysis/runs/new',
+        name: 'analysis-run-create',
+        component: () => import('@/views/analysis/AnalysisRunCreate.vue'),
+        // 创建是写操作：与后端 @RequireRole(OPERATOR+) 对齐（体验层）
+        meta: { title: '新建分析任务', roles: WRITE_ROLES },
       },
       {
         path: 'analysis/runs/:id',
         name: 'analysis-run-detail',
-        component: () => Promise.resolve(Placeholder),
+        component: () => import('@/views/analysis/AnalysisRunDetail.vue'),
         meta: { title: '分析任务详情' },
       },
 
