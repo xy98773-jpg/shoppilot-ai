@@ -244,8 +244,14 @@ app → 全部业务模块 → common（组合根，依赖所有业务模块 + c
 >   锁会在方法返回瞬间释放 → **静默退化为无锁**。
 > - 内部：`SELECT id FROM replenishment_items WHERE team_id=? AND warehouse_id=? AND sku_id IN (:skuIds)
 >   AND status='APPROVED' ORDER BY sku_id FOR UPDATE`。
-> - **锁取得序 = `sku_id` 升序**：走 `idx_repl_team_sku_time (team_id, sku_id, created_at)`，与
->   `DATABASE_CONSTRAINTS.md §7.3` 死锁预防 ①「批量加锁按主键升序」一致；`warehouse_id` 与 `status` 为**索引外过滤条件**，不参与锁序。
+> - **锁取得序 = `sku_id` 升序**：走 `idx_repl_team_wh_sku (team_id, warehouse_id, sku_id)`
+>   （`M6-T02-D` / `R165` 新增，迁移 `V1.0.12`），与
+>   `DATABASE_CONSTRAINTS.md §7.3` 死锁预防 ①「批量加锁按主键升序」一致；`status` 为**索引外过滤条件**，不参与锁序。
+>   > ★ **2026-10-21 订正**：原文写「走 `idx_repl_team_sku_time (team_id, sku_id, created_at)`」。
+>   > 实测 EXPLAIN 证明它**不足以**保证 `ORDER BY sku_id` 的加锁序——`warehouse_id` 是索引外过滤条件，
+>   > 优化器会改选 `idx_repl_team_status_time` 并 filesort。故新增 `idx_repl_team_wh_sku`，
+>   > 并同步 `DATABASE_DESIGN §5.16` 索引清单与本节（R165）。
+>   > 新索引与 `inventory_balances.uk_invbal_team_wh_sku (team_id, warehouse_id, sku_id)` **同构对齐**。
 > - ⚠️ **不得写 `ORDER BY id FOR UPDATE`**：`id` 不在该索引前缀 → filesort，实际加锁序仍是 `(sku_id, created_at)`，与声明自相矛盾。
 > - 归属 `ReplenishmentAppService` 而非 `QueryService`：**`FOR UPDATE` 是写意图锁**，一律归该表所属模块的
 >   **业务写入入口服务**（见 §4.1 规则 1 推论）。
