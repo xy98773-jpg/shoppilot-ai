@@ -385,7 +385,7 @@ ALTER TABLE purchase_order_items
 | `ck_ai_qbase` / `ck_ai_qsuggest` | `analysis_items` | `IS NULL OR >= 0` | `§10.2` / `§10.5` |
 | `ck_ai_ss` | `analysis_items` | `safety_stock_qty IS NULL OR safety_stock_qty >= 0` | `§10.3` |
 | `ck_rr_comment_required` | `replenishment_reviews` | `action <> 'REJECT' OR (comment IS NOT NULL AND TRIM(comment) <> '')` | `§9.11`（驳回必填原因）。★ **2026-10-20 修订（M5-T01 裁定）**：原设计为 `comment <> ''`，但 `utf8mb4_0900_ai_ci`（NO PAD）下 `'  ' <> ''` 为真 ⇒ 纯空白会被放行；改为 `TRIM(comment)`。已知边界：`TRIM()` 只去半角空格，`\t`/`\n`/全角空格由应用层 `@NotBlank` 兜住 |
-| `ck_gri_receipt_qty` | `goods_receipt_items` | `received_qty > 0` | 业务 |
+| ~~`ck_gri_receipt_qty`~~ | `goods_receipt_items` | `received_qty > 0` | 业务 | **已注销（2026-10-20，R156）**：与 `ck_gri_received_positive` 表达式完全相同，属重复登记；实际只建 `ck_gri_received_positive`（命名取 `DATABASE_DESIGN §5.21` 口径） |
 | `ck_ire_row_no` | `import_row_errors` | `row_no >= 1` | 行号 1 起 |
 | `ck_imp_total_rows` / `ck_imp_success_rows` / `ck_imp_failed_rows` | `import_batches` | `>= 0` | 业务 |
 | `ck_imp_attempt_no` | `import_batches` | `attempt_no >= 1` | `§6-E.4` |
