@@ -1,0 +1,50 @@
+JAR_SIZE=60035449
+PORTS_FREE 3384/18350/18351/18352
+MYSQL_READY=1
+SERVICE_AI_UP=1 (port 18351)
+[PASS] 种子生成成功（500 SKU） => 0
+APP_UP=1 (port 18350, ANALYSIS_POLL_ENABLED=false)
+[PASS] 种子导入成功 => 0
+[PASS] 迁移版本数 10 => 10
+[PASS] ACTIVE SKU = 500 => 500
+[PASS] operator01 / viewer01 / owner8 登录 => 111
+-------------------------------------------------------------
+=== P2 R148：ALL_ACTIVE 500 SKU 创建→终态 < 60s ===
+[PASS] 创建 202 => 202
+[PASS] 创建响应 total_skus=500（装配后实际数） => 500
+  NOTE R148 墙钟 = 10721 ms（含读时同步延迟，不含 LLM）
+[PASS] 终态 SUCCEEDED => SUCCEEDED
+[PASS] 墙钟 < 60000ms => 1
+[PASS] DB status=SUCCEEDED => SUCCEEDED
+[PASS] DB analysis_items=500 => 500
+[PASS] DB total_skus=processed_skus=500 => 500|500
+-------------------------------------------------------------
+=== P1 F-ANL-09：GET /runs 列表（字段名/分页/权限/过滤/排序） ===
+[PASS] 列表 200 => 200
+[PASS] ★ data.list 是数组（不是 items） => 1
+[PASS] data.page=1 / pageSize=20 => 1|20
+[PASS] data.total>=1 => 1
+[PASS] 列表项字段数=17（与详情同构） => 17
+  NOTE 列表项字段：current_step,data_end_date,data_start_date,finished_at,llm_status,processed_skus,progress,risk_sku_count,run_id,run_no,scope_type,started_at,status,suggestion_count,timeout_at,total_skus,warehouse_id
+[PASS] R150 核验：列表项是否含 created_at（预期 0=不含） => 0
+[PASS] 列表首项与详情 data 逐字一致 => IDENTICAL
+[PASS] VIEWER 列表 200 => 200
+[PASS] 跨团队列表 200（隔离为 0 条） => 200|0
+[PASS] status=SUCCEEDED 过滤命中 => 1
+[PASS] status=FAILED 过滤为 0 条 => 0
+[PASS] 非法 sort ⇒ 400 COM-0001 => 400|COM-0001
+[PASS] pageSize 超上限 ⇒ 400 COM-0001 => 400|COM-0001
+-------------------------------------------------------------
+=== P3 R149-C1：停 service-ai ⇒ 502 / ANL-7002 + run FAILED ===
+[PASS] C1 HTTP 502 => 502
+[PASS] C1 code=ANL-7002 => ANL-7002
+[PASS] C1 run FAILED|ANL-7002 => FAILED|ANL-7002
+-------------------------------------------------------------
+=== P3 R149-C2：stall（连上不回包）⇒ 504 / ANL-7003 + run FAILED ===
+[PASS] app(stall 模式) 就绪 => 200
+[PASS] C2 HTTP 504 => 504
+[PASS] C2 code=ANL-7003 => ANL-7003
+[PASS] C2 run FAILED|ANL-7003 => FAILED|ANL-7003
+-------------------------------------------------------------
+TOTAL PASS=32 FAIL=0
+RESULT=ALL_PASS

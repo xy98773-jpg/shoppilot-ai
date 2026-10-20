@@ -1,0 +1,11 @@
+*.log
+*.sql
+q.err
+seed.err
+gen.err
+body.json
+list.json
+detail.json
+storage/
+__pycache__/
+stall.out
