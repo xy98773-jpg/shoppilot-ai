@@ -93,14 +93,10 @@ class M2_TenantIsolationDbIntegrationTest {
                                                             //   逐条按 team_id 处理，不泄漏跨团队数据
                                                             //   （与 idx_run_timeout 的 status 最左例外同源）
             ,
-            // ↓ M6-T02（转采购冲突检测）新增两处跨团队锚点行锁
-            "InventoryBalanceMapper#lockCrossTeamAnchorSkuIds", // 转采购冲突检测的跨团队锚点行锁
-                                                            //   （与超时扫描同源）：按 sku_id 升序 FOR UPDATE，
-                                                            //   故意不加 team_id，否则锁范围缩回本团队、
-                                                            //   跨团队并发转采购同一 SKU 就失去互斥（TOCTOU）
             "ReplenishmentItemMapper#lockApprovedAnchorItemIds" // 转采购冲突检测的**降级锚点行锁**（§7.2 #8 ②b）：
                                                             //   余额锚点缺失时锁「判定的输入」——本表 APPROVED 行，
-                                                            //   走 idx_repl_team_sku_time；同源跨团队口径
+                                                            //   走 idx_repl_team_sku_time；SQL 自带 team_id/warehouse_id，
+                                                            //   故加 @InterceptorIgnore（否则租户线会重复追加 team_id 列）
     );
 
     @DynamicPropertySource

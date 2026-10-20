@@ -21,6 +21,10 @@ import java.time.LocalDateTime;
 @TableName("goods_receipt_items")
 public class GoodsReceiptItemEntity {
 
+    /** 主键（自增，不可变）。 */
+    @TableId(type = IdType.AUTO)
+    private Long id;
+
     /** 团队 ID（不可变） */
     private Long teamId;
     /** 所属到货单（不可变） */
@@ -121,4 +125,12 @@ public class GoodsReceiptItemEntity {
     public void setCreatedBy(Long createdBy) {
         this.createdBy = createdBy;
     }
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
 }

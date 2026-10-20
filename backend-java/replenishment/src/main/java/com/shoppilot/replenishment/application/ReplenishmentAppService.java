@@ -1,5 +1,6 @@
 package com.shoppilot.replenishment.application;
 
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shoppilot.audit.application.AuditWriteService;
@@ -22,6 +23,7 @@ import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -66,31 +68,44 @@ public class ReplenishmentAppService {
     }
 
     /**
-     * 降级锚点行锁（{@code §7.2 #8} 步骤 ②b）：按 {@code sku_id} 升序锁本表 {@code APPROVED} 行。
+     * 降级锚点行锁（{@code §7.2 #8} 步骤 ②b；契约 {@code MODULE_BOUNDARIES.md:245–246}）。
      *
      * <p><b>何时用</b>：步骤 ② 的 {@code inventory.InventoryWriteService#lockBalanceAnchors}
-     * 返回的 {@code missingSkuIds} 非空时（该 SKU 在任何团队都没有余额行，无行可锁）。
-     * 此时改为锁「冲突判定的输入」——本表的 {@code APPROVED} 行（走 {@code idx_repl_team_sku_time}）。
+     * 返回的 {@code missingSkuIds} 非空时（该 SKU 在本团队本仓库没有余额行，无行可锁）。
+     * 此时改为锁「冲突判定的输入」——本表 {@code APPROVED} 行。
      *
-     * <p>★ 跨团队（底层 {@code @InterceptorIgnore(tenantLine = "true")}）：与余额锚点锁同源，
-     * 已登记 {@code M2_TenantIsolationDbIntegrationTest.TENANT_LINE_EXCEPTIONS}。
+     * <p>★ <b>签名与 SQL 按契约一字不改</b>：
+     * {@code WHERE team_id=? AND warehouse_id=? AND sku_id IN (...) AND status='APPROVED'
+     * ORDER BY sku_id ASC FOR UPDATE}
+     * —— 索引最左列 {@code team_id} 必须在条件里（{@code idx_repl_team_sku_time (team_id, sku_id, created_at)}），
+     * 否则退化为 filesort + 全表行锁。
      *
-     * <p>★ <b>必须由调用方在事务内调用</b>（本方法不开事务）：锁随调用方事务释放。
+     * <p>★ {@code ORDER BY sku_id ASC} 是固定加锁序（{@code §7.2 #8} ② / {@code DATABASE_CONSTRAINTS §7.3}）：
+     * <b>不得</b>写 {@code ORDER BY id}（{@code id} 不在索引前缀里，filesort 后实际加锁序仍是
+     * {@code (sku_id, created_at)}，与声明自相矛盾）。
      *
-     * @param skuIds 待锁 SKU
-     * @return 实际锁到的建议 {@code id}（仅供日志与断言）
+     * <p>★ 只加锁、返回 {@code void}、不写任何数据、不改任何状态。
+     *
+     * <p>★ {@code @Transactional(REQUIRED)}：{@code FOR UPDATE} 的锁在事务结束时释放；
+     * 调用方（{@code purchasing}）必须自带外层事务，否则锁在方法返回瞬间释放 ⇒ 静默退化为无锁。
+     *
+     * @param teamId      团队（须与 {@code TeamContext} 一致，否则 {@code TEAM-2001}）
+     * @param warehouseId 仓库
+     * @param skuIds      SKU 集合（内部去重并按升序）
      */
-    public List<Long> lockApprovedAnchors(Collection<Long> skuIds) {
+    @Transactional(propagation = Propagation.REQUIRED, rollbackFor = Exception.class)
+    public void lockApprovedAnchors(long teamId, long warehouseId, List<Long> skuIds) {
+        if (teamId != currentTeamId()) {
+            throw new BizException(ErrorCodes.TEAM_2001, "跨团队越权");
+        }
         if (skuIds == null || skuIds.isEmpty()) {
-            return List.of();
+            return;
         }
-        List<Long> ids = skuIds.stream().filter(Objects::nonNull).distinct().toList();
-        if (ids.isEmpty()) {
-            return List.of();
+        List<Long> ordered = skuIds.stream().filter(Objects::nonNull).distinct().sorted().toList();
+        if (ordered.isEmpty()) {
+            return;
         }
-        List<Long> locked = itemMapper.lockApprovedAnchorItemIds(ids);
-        log.debug("降级锚点行锁完成：requested={} locked={}", ids.size(), locked.size());
-        return locked;
+        itemMapper.lockApprovedAnchorItemIds(teamId, warehouseId, ordered);
     }
 
     /**
@@ -127,13 +142,25 @@ public class ReplenishmentAppService {
             throw new BizException(ErrorCodes.RPL_8001, "仅已审批通过的补货建议可转为采购单");
         }
 
-        entity.setStatus(STATUS_CONVERTED);
-        entity.setConvertedAt(LocalDateTime.now(ZoneOffset.UTC));
-        entity.setConvertedPoItemIds(appendPoItemId(entity.getConvertedPoItemIds(), purchaseOrderItemId));
-        entity.setUpdatedBy(currentUserId());
-        int affected = itemMapper.updateById(entity);
+        // ★ 同语句状态守卫（R3 / 契约 MODULE_BOUNDARIES:238–239）：
+        //   WHERE id=? AND status='APPROVED' AND version=?
+        //   —— 读到的 version 一并作为条件，杜绝「读完到更新之间被并发改掉」的 TOCTOU。
+        //   本处**故意**不用 updateById：MP 生成的 WHERE 只有 id + version，缺 status 条件。
+        //   同时手动 set(version, version + 1)（乐观锁插件不参与 wrapper 更新），
+        //   保持「乐观锁版本」语义连续（下次读到的 version 是本行 +1）。
+        String appendedJson = appendPoItemId(entity.getConvertedPoItemIds(), purchaseOrderItemId);
+        int affected = itemMapper.update(null, Wrappers.<ReplenishmentItemEntity>lambdaUpdate()
+                .eq(ReplenishmentItemEntity::getId, itemId)
+                .eq(ReplenishmentItemEntity::getStatus, STATUS_APPROVED)
+                .eq(ReplenishmentItemEntity::getVersion, entity.getVersion())
+                .set(ReplenishmentItemEntity::getStatus, STATUS_CONVERTED)
+                .set(ReplenishmentItemEntity::getConvertedAt, LocalDateTime.now(ZoneOffset.UTC))
+                .set(ReplenishmentItemEntity::getConvertedPoItemIds, appendedJson)
+                .set(ReplenishmentItemEntity::getVersion, entity.getVersion() + 1)
+                .set(ReplenishmentItemEntity::getUpdatedBy, currentUserId()));
         if (affected == 0) {
-            throw new BizException(ErrorCodes.RPL_8003, "建议已被他人修改，请刷新后重试");
+            // 0 行 = 已被并发转单（状态或版本变了）⇒ 整事务回滚
+            throw new BizException(ErrorCodes.PO_9001, "该补货建议已生成采购单，不能重复转采购");
         }
 
         Map<String, Object> before = new LinkedHashMap<>();
@@ -187,6 +214,15 @@ public class ReplenishmentAppService {
                 .before(before)
                 .after(after)
                 .build());
+    }
+
+    /** 当前团队 ID；无上下文 ⇒ {@code TEAM-2001}（与 {@code InventoryWriteService} 同款守卫）。 */
+    private static long currentTeamId() {
+        TeamContext.Snapshot snapshot = TeamContext.get();
+        if (snapshot == null || snapshot.teamId() == null) {
+            throw new BizException(ErrorCodes.TEAM_2001, "缺少团队上下文");
+        }
+        return snapshot.teamId();
     }
 
     private static Long currentUserId() {

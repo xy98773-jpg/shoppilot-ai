@@ -182,6 +182,22 @@ public final class ErrorCodes {
     public static final String PO_9002 = "PO-9002";
     public static final String PO_9003 = "PO-9003";
     public static final String PO_9004 = "PO-9004";
+    /** 到货单不存在（404）—— {@code goods_receipt_id} 无效/跨团队（{@code ERROR_CODES §2.10}）。 */
+    public static final String PO_9005 = "PO-9005";
+    /** 采购明细为空（400）—— {@code items} 为空。 */
+    public static final String PO_9006 = "PO-9006";
+    /** 供应商不属于该团队（403）—— {@code supplier_id} 跨团队（{@code §6} 规则 4）。 */
+    public static final String PO_9007 = "PO-9007";
+    /** 到货单已确认不可修改（409）—— 对 {@code CONFIRMED} 到货单再操作（须走冲销）。 */
+    public static final String PO_9008 = "PO-9008";
+    /** 采购单已全部到货不可取消（409）—— {@code status=RECEIVED} 时取消。 */
+    public static final String PO_9009 = "PO-9009";
+    /** 确认到货需更高角色（403）—— 角色不足（{@code USER_ROLES §4.4}）。 */
+    public static final String PO_9010 = "PO-9010";
+    /** 单价非法（400）—— {@code unit_price < 0} 或小数位 > 4。 */
+    public static final String PO_9011 = "PO-9011";
+    /** 到货数量必须为正（400）—— {@code received_qty <= 0}。 */
+    public static final String PO_9012 = "PO-9012";
 
     // AI —— Java ↔ Python 内部通信（ERROR_CODES.md §2.11）
     // ★ 只固化 Java 侧会实际产出/断言的 5 条；其余 14 条只在 ErrorCodeHttpStatus 查表（见类 javadoc）。

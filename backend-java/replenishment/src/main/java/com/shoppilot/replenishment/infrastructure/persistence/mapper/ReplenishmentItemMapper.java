@@ -42,9 +42,14 @@ public interface ReplenishmentItemMapper extends BaseMapper<ReplenishmentItemEnt
      */
     @InterceptorIgnore(tenantLine = "true")
     @Select("<script>"
-            + "SELECT id FROM replenishment_items WHERE status = 'APPROVED' AND sku_id IN "
+            + "SELECT id FROM replenishment_items "
+            + "WHERE team_id = #{teamId} AND warehouse_id = #{warehouseId} "
+            + "AND sku_id IN "
             + "<foreach collection='skuIds' item='skuId' open='(' separator=',' close=')'>#{skuId}</foreach> "
+            + "AND status = 'APPROVED' "
             + "ORDER BY sku_id ASC FOR UPDATE"
             + "</script>")
-    List<Long> lockApprovedAnchorItemIds(@Param("skuIds") List<Long> skuIds);
+    List<Long> lockApprovedAnchorItemIds(@Param("teamId") long teamId,
+                                         @Param("warehouseId") long warehouseId,
+                                         @Param("skuIds") List<Long> skuIds);
 }

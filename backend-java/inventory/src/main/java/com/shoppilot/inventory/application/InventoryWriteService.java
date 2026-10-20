@@ -22,7 +22,6 @@ import com.shoppilot.inventory.infrastructure.persistence.mapper.InventoryTransa
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -827,38 +826,4 @@ public class InventoryWriteService {
         }
     }
 
-
-    // =====================================================================
-    // 跨模块只读/加锁入口（M6-T02；DATABASE_DESIGN §7.2 #8 步骤 ②）
-    // =====================================================================
-
-    /**
-     * 跨团队锚点行锁（{@code DATABASE_DESIGN §7.2 #8} 步骤 ②）：按 {@code sku_id} <b>升序</b>
-     * {@code SELECT ... FOR UPDATE} 锁 {@code inventory_balances} 行。
-     *
-     * <p><b>用途</b>：{@code purchasing} 转采购前的同口径冲突检测必须与「检测之后到写入之前」
-     * 之间的并发转采购互斥（否则存在 TOCTOU）。加锁<b>必须早于</b>冲突检测，故本方法在
-     * {@code §7.2 #8} 的 ② 步、③ 步之前调用。
-     *
-     * <p><b>必须由调用方在事务内调用</b>（本方法不加 {@code @Transactional}）：
-     * 锁的生命周期＝调用方事务的生命周期；若在本方法上开事务，锁会在方法返回时释放，互斥失效。
-     *
-     * <p>★ 跨团队：底层 SQL 带 {@code @InterceptorIgnore(tenantLine = "true")}
-     * （与超时扫描同源），否则锁范围会被租户线缩回本团队，两个团队并发转采购同一 SKU 时互斥失效。
-     *
-     * @param skuIds 待锁 SKU（内部去重；升序由 SQL 保证，防死锁）
-     * @return {@code missingSkuIds}——<b>没有余额行</b>的 SKU（调用方据此降级锁
-     *         {@code replenishment.ReplenishmentAppService#lockApprovedAnchors}，{@code §7.2 #8} ②b）
-     */
-    public List<Long> lockBalanceAnchors(Collection<Long> skuIds) {
-        if (skuIds == null || skuIds.isEmpty()) {
-            return List.of();
-        }
-        List<Long> ids = skuIds.stream().filter(Objects::nonNull).distinct().toList();
-        List<Long> locked = balanceMapper.lockCrossTeamAnchorSkuIds(ids);
-        Set<Long> lockedSet = new HashSet<>(locked);
-        List<Long> missing = ids.stream().filter(id -> !lockedSet.contains(id)).toList();
-        log.debug("锚点行锁完成：requested={} locked={} missing={}", ids.size(), locked.size(), missing.size());
-        return missing;
-    }
 }

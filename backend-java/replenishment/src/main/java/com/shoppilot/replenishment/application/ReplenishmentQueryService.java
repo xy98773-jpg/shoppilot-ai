@@ -199,27 +199,33 @@ public class ReplenishmentQueryService {
      * <p>★ 入参带 {@code teamId}（与 {@code §7.2 #8} 签名一致）：租户线已按当前团队过滤，
      * 该参数用于<b>显式同口径断言</b>（防止上下文与入参不一致时静默按另一团队查询）。
      *
-     * @param teamId      团队（须与 {@code TeamContext} 一致）
-     * @param warehouseId 仓库
-     * @param skuIds      SKU 集合
+     * @param teamId         团队（须与 {@code TeamContext} 一致）
+     * @param warehouseId    仓库
+     * @param skuIds         SKU 集合
+     * @param excludeItemIds 要排除的建议 ID（通常是本次入参的那批；为空则不排除）
      * @return 命中的 {@code APPROVED} 建议摘要（按 {@code id} 升序，保证检测结果稳定）
      */
     @Transactional(readOnly = true)
-    public List<ReplenishmentItemBrief> findByTeamWhSkuApproved(Long teamId, Long warehouseId,
-                                                                Collection<Long> skuIds) {
-        if (teamId == null || warehouseId == null || skuIds == null || skuIds.isEmpty()) {
+    public List<ReplenishmentItemBrief> findByTeamWhSkuApproved(long teamId, long warehouseId,
+                                                                Collection<Long> skuIds,
+                                                                Collection<Long> excludeItemIds) {
+        if (skuIds == null || skuIds.isEmpty()) {
             return List.of();
         }
         List<Long> ids = skuIds.stream().filter(Objects::nonNull).distinct().toList();
         if (ids.isEmpty()) {
             return List.of();
         }
-        return itemMapper.selectList(Wrappers.<ReplenishmentItemEntity>lambdaQuery()
-                        .eq(ReplenishmentItemEntity::getTeamId, teamId)
-                        .eq(ReplenishmentItemEntity::getWarehouseId, warehouseId)
-                        .in(ReplenishmentItemEntity::getSkuId, ids)
-                        .eq(ReplenishmentItemEntity::getStatus, "APPROVED")
-                        .orderByAsc(ReplenishmentItemEntity::getId))
+        var query = Wrappers.<ReplenishmentItemEntity>lambdaQuery()
+                .eq(ReplenishmentItemEntity::getTeamId, teamId)
+                .eq(ReplenishmentItemEntity::getWarehouseId, warehouseId)
+                .in(ReplenishmentItemEntity::getSkuId, ids)
+                .eq(ReplenishmentItemEntity::getStatus, "APPROVED");
+        // ★ 排除本次入参的建议（否则冲突检测会把自己算成冲突 ⇒ E1 必误报 RPL-8012）
+        if (excludeItemIds != null && !excludeItemIds.isEmpty()) {
+            query.notIn(ReplenishmentItemEntity::getId, excludeItemIds);
+        }
+        return itemMapper.selectList(query.orderByAsc(ReplenishmentItemEntity::getId))
                 .stream().map(ReplenishmentItemBrief::of).toList();
     }
 

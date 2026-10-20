@@ -83,33 +83,4 @@ public interface InventoryBalanceMapper extends BaseMapper<InventoryBalanceEntit
     List<Long> lockAnchorSkuIds(@Param("warehouseId") long warehouseId,
                                 @Param("skuIds") List<Long> skuIds);
 
-    /**
-     * 跨团队锚点行锁（M6-T02 转采购冲突检测；{@code DATABASE_DESIGN §7.2 #8} 步骤 ②）。
-     *
-     * <p>与既有 {@link #lockAnchorSkuIds} 的区别：那个按 {@code (warehouse_id, sku_id)} 锁
-     * <b>本团队</b>的行（库存调整路径用）；本方法只按 {@code sku_id} <b>升序</b>锁全部团队的余额行，
-     * 用于「同一 SKU 的转采购冲突检测」必须跨团队串行（否则两个不同团队并发转采购同一 SKU 时，
-     * 各自只锁自己团队的余额行 ⇒ 检测与写入之间仍有 TOCTOU 窗口）。
-     *
-     * <p>★ {@code @InterceptorIgnore(tenantLine = "true")} 的理由（与
-     * {@code AnalysisRunMapper#selectInFlightAcrossTeams} 同源）：本语句<b>故意</b>跨团队锁行，
-     * 加租户线会把锁范围缩回本团队，跨团队并发就失去互斥；
-     * 已同步登记到 {@code M2_TenantIsolationDbIntegrationTest.TENANT_LINE_EXCEPTIONS}。
-     *
-     * <p>★ 本方法自带<b>显式 SQL</b>（否则会落到 {@code BaseMapper} 默认实现，完全失去隔离语义——
-     * M2 测试对此有断言）。
-     *
-     * <p>{@code ORDER BY sku_id ASC} 是<b>防死锁</b>的固定加锁序（{@code §7.2 #8} ②）。
-     * 不存在的 SKU 不会被返回（无可锁之行）；调用方据此得出 {@code missingSkuIds}。
-     *
-     * @param skuIds 待锁 SKU（升序由 SQL 保证）
-     * @return 实际锁到的 {@code sku_id}
-     */
-    @InterceptorIgnore(tenantLine = "true")
-    @Select("<script>"
-            + "SELECT sku_id FROM inventory_balances WHERE sku_id IN "
-            + "<foreach collection='skuIds' item='skuId' open='(' separator=',' close=')'>#{skuId}</foreach> "
-            + "ORDER BY sku_id ASC FOR UPDATE"
-            + "</script>")
-    List<Long> lockCrossTeamAnchorSkuIds(@Param("skuIds") List<Long> skuIds);
 }

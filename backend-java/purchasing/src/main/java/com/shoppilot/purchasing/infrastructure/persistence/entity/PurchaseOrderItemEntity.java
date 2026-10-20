@@ -23,6 +23,10 @@ import java.time.LocalDateTime;
 @TableName("purchase_order_items")
 public class PurchaseOrderItemEntity {
 
+    /** 主键（自增，不可变）。 */
+    @TableId(type = IdType.AUTO)
+    private Long id;
+
     /** 团队 ID（不可变） */
     private Long teamId;
     /** 所属采购单（不可变） */
@@ -178,4 +182,12 @@ public class PurchaseOrderItemEntity {
     public void setVersion(Integer version) {
         this.version = version;
     }
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
 }

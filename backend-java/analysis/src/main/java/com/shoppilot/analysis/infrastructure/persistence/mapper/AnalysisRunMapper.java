@@ -28,7 +28,7 @@ import org.apache.ibatis.annotations.Select;
  *       {@code status} 最左例外同源。</li>
  * </ol>
  * <p>★ 新增任何 {@code @InterceptorIgnore} 方法都必须先登记进
- * {@code M2_TenantIsolationDbIntegrationTest.TENANT_LINE_EXCEPTIONS}（13 → 14 条），
+ * {@code M2_TenantIsolationDbIntegrationTest.TENANT_LINE_EXCEPTIONS}（13 → 15 条），
  * 否则该测试必红——这正是「悄悄绕过租户线」被变成一次性可见失败的设计。
  *
  * <p><b>其余查询一律不写自定义 SQL</b>：幂等槽位 / 并发判定 / run_no 序列都走
