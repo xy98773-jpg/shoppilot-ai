@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>用真实 MySQL 8.0.36（Testcontainers）执行真实迁移与<b>真实 SQL 约束</b>，断言
  * {@code DATABASE_DESIGN §5.11/§7.4} 与 {@code DATABASE_CONSTRAINTS #13/§3.2 #21–#24/§4.1/§4.2/§5.2}：
  * <ul>
- *   <li>Flyway 应用 {@code V1.0.0} → {@code V1.0.9} 共十条迁移，{@code sales_daily} 存在；</li>
+ *   <li>Flyway 应用 {@code V1.0.0} → {@code V1.0.10} 共十一条迁移，{@code sales_daily} 存在；</li>
  *   <li>唯一键 {@code uk_sales_team_wh_sku_date} 在<b>团队内</b>冲突；跨团队 / 换日期允许；</li>
  *   <li>四条二级索引 {@code team_id} 最左；唯一键同样 {@code team_id} 最左；</li>
  *   <li>两条外键均 {@code RESTRICT}（删除被销售引用的 SKU 失败）；</li>
@@ -101,7 +101,7 @@ class SalesSchemaConstraintTest {
     // =====================================================================
 
     @Test
-    @DisplayName("① Flyway 全链到 V1.0.9：sales_daily 存在，十条迁移均 success=1")
+    @DisplayName("① Flyway 全链到 V1.0.10：sales_daily 存在，十一条迁移均 success=1")
     void migrationAppliesThroughV109AndCreatesSalesTable() throws Exception {
         assertTrue(queryStrings("SELECT table_name FROM information_schema.tables "
                         + "WHERE table_schema = DATABASE()").contains("sales_daily"),
@@ -109,10 +109,10 @@ class SalesSchemaConstraintTest {
 
         List<String> versions = queryStrings(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank");
-        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6", "1.0.7", "1.0.8", "1.0.9"),
+        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6", "1.0.7", "1.0.8", "1.0.9", "1.0.10"),
                 versions,
-                "应应用 V1.0.0 → V1.0.9 十条迁移（V1.0.8 为 M3-T12 sales，"
-                        + "V1.0.9 为 M4-T02 analysis）");
+                "应应用 V1.0.0 → V1.0.10 十一条迁移（V1.0.8 为 M3-T12 sales，"
+                        + "V1.0.9 为 M4-T02 analysis，V1.0.10 为 M5-T01 replenishment）");
     }
 
     // =====================================================================

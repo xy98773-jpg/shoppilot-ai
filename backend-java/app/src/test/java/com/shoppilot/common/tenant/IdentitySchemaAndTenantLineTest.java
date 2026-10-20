@@ -46,7 +46,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 断言 {@code DESIGN_BASIS §6} 的数据库级与插件级保障：
  * <ul>
  *   <li>Flyway 应用 {@code V1.0.1__identity.sql} + {@code V1.0.2__refresh_tokens.sql}
- *       + {@code V1.0.3__catalog.sql}（M2-T08）等共十条迁移（{@code V1.0.0} → {@code V1.0.9}），
+ *       + {@code V1.0.3__catalog.sql}（M2-T08）等共十一条迁移（{@code V1.0.0} → {@code V1.0.9}），
  *       表与唯一约束/CHECK 确实生效（含负向用例）；</li>
  *   <li>对含 {@code team_id} 的表发起查询，SQL <b>被自动追加 {@code team_id = <当前团队>}</b>；</li>
  *   <li>INSERT 自动补齐 {@code team_id}；</li>
@@ -145,12 +145,12 @@ class IdentitySchemaAndTenantLineTest {
 
         List<String> versions = queryStrings(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank");
-        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6", "1.0.7", "1.0.8", "1.0.9"),
+        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6", "1.0.7", "1.0.8", "1.0.9", "1.0.10"),
                 versions,
-                "应应用 V1.0.0 → V1.0.9 十条迁移"
+                "应应用 V1.0.0 → V1.0.10 十一条迁移"
                         + "（V1.0.3 为 M2-T08 catalog，V1.0.4 为 M2-T11 audit，V1.0.5 为 M3-T01 importdata，"
                         + "V1.0.6 为 M3-T08 inventory，V1.0.7 为 M3-T09 inventory R53 修正，"
-                        + "V1.0.8 为 M3-T12 sales，V1.0.9 为 M4-T02 analysis）");
+                        + "V1.0.8 为 M3-T12 sales，V1.0.9 为 M4-T02 analysis，V1.0.10 为 M5-T01 replenishment）");
 
         // CHECK 约束负向验证（MySQL 8.0.16+ 才生效，版本守卫已保证）
         try (Connection conn = dataSource.getConnection(); Statement st = conn.createStatement()) {

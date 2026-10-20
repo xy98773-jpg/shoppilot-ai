@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>用真实 MySQL 8.0.36（Testcontainers）执行真实迁移与<b>真实 SQL 约束</b>，
  * 断言 {@code DESIGN_BASIS §6} 与 {@code DATABASE_DESIGN §5.12 / §5.13} 的数据库级保障：
  * <ul>
- *   <li>Flyway 应用 {@code V1.0.0} → {@code V1.0.9} 共十条迁移；</li>
+ *   <li>Flyway 应用 {@code V1.0.0} → {@code V1.0.10} 共十一条迁移；</li>
  *   <li>幂等槽位唯一键 {@code uk_imp_team_hash_biz} 在<b>团队内</b>冲突 → 完整性约束；</li>
  *   <li>{@code dedupe_hash = NULL} 多行共存（MySQL 唯一索引允许多 NULL）；</li>
  *   <li>跨团队同 {@code file_hash} / 同 {@code dedupe_hash} <b>可重复</b>插入成功（幂等只在团队内）；</li>
@@ -82,7 +82,7 @@ class ImportSchemaConstraintTest {
     // ---------------------------------------------------------------------
 
     @Test
-    @DisplayName("§1 Flyway 全链跑通：V1.0.0 → V1.0.9 十条迁移均 success=1")
+    @DisplayName("§1 Flyway 全链跑通：V1.0.0 → V1.0.10 十一条迁移均 success=1")
     void flywayChainAppliedAllVersions() throws Exception {
         List<String> tables = queryStrings(
                 "SELECT table_name FROM information_schema.tables "
@@ -93,12 +93,12 @@ class ImportSchemaConstraintTest {
 
         List<String> versions = queryStrings(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank");
-        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6", "1.0.7", "1.0.8", "1.0.9"),
+        assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6", "1.0.7", "1.0.8", "1.0.9", "1.0.10"),
                 versions,
-                "应应用 V1.0.0 → V1.0.9 十条迁移"
+                "应应用 V1.0.0 → V1.0.10 十一条迁移"
                         + "（V1.0.5 为 M3-T01 importdata，V1.0.6 为 M3-T08 inventory，"
                         + "V1.0.7 为 M3-T09 inventory R53 修正，V1.0.8 为 M3-T12 sales，"
-                        + "V1.0.9 为 M4-T02 analysis）");
+                        + "V1.0.9 为 M4-T02 analysis，V1.0.10 为 M5-T01 replenishment）");
     }
 
     // ---------------------------------------------------------------------
