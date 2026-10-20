@@ -39,6 +39,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -111,7 +112,11 @@ public class PurchaseOrderAppService {
      * @param idempotencyKey {@code Idempotency-Key} 请求头（必填）
      * @return 采购单（草稿）详情
      */
-    @Transactional(rollbackFor = Exception.class)
+    // ★ isolation = READ_COMMITTED（§5.67 P-1 必修）：并发同键抢 uk_po_team_idem 时，
+    //   insert 抛 DuplicateKeyException 后的 findByIdempotencyKey 是重查——必须在 RC 下每条
+    //   语句刷新 ReadView，才能看见并发行 ⇒ 正常落到 COM-0009(409)；RR 快照读看不见 ⇒
+    //   会误判为 po_no 冲突并重试耗尽落 COM-0002(500)。与 InventoryWriteService 6 个写方法同口径。
+    @Transactional(isolation = Isolation.READ_COMMITTED, rollbackFor = Exception.class)
     public PurchaseOrderFromReplenishmentResponse createFromApprovedItems(
             CreatePurchaseOrderFromReplenishmentRequest request, String idempotencyKey) {
 
@@ -124,7 +129,7 @@ public class PurchaseOrderAppService {
         List<Long> itemIds = request.getReplenishmentItemIds().stream()
                 .filter(Objects::nonNull).distinct().toList();
         long warehouseId = request.getWarehouseId();
-        // 仓库必须属本团队（不存在或跨团队一律 404 CAT-3003；不用 PO-9007——那是供应商语义）
+        // 仓库归属：不存在 ⇒ CAT-3003(404)；跨团队 ⇒ TEAM-2001(403)（DESIGN_BASIS §5.1 规则 1：隔离优先）
         warehouseQueryService.requireInTeam(warehouseId);
 
         // ── ① 入参校验：存在 + 属本团队 + APPROVED ──
@@ -414,7 +419,7 @@ public class PurchaseOrderAppService {
             }
         }
         log.error("采购单号连续冲突：{}", order.getPoNo(), lastError);
-        throw new BizException(ErrorCodes.COM_0002, "采购单号生成冲突，请重试");
+        throw new BizException(ErrorCodes.PO_9013, "采购单号生成冲突，请重试");
     }
 
     /** {@code po_no = PO-yyyyMMdd-6位序号}（当日 UTC 自然日；序号 = 同团队当日最大序号 + 1）。 */

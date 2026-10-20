@@ -198,6 +198,8 @@ public final class ErrorCodes {
     public static final String PO_9011 = "PO-9011";
     /** 到货数量必须为正（400）—— {@code received_qty <= 0}。 */
     public static final String PO_9012 = "PO-9012";
+    /** 采购单号生成冲突（409）—— {@code po_no} 连续撞 {@code uk_po_team_no} 且重试耗尽，请重试（§5.67 P-2）。 */
+    public static final String PO_9013 = "PO-9013";
 
     // AI —— Java ↔ Python 内部通信（ERROR_CODES.md §2.11）
     // ★ 只固化 Java 侧会实际产出/断言的 5 条；其余 14 条只在 ErrorCodeHttpStatus 查表（见类 javadoc）。

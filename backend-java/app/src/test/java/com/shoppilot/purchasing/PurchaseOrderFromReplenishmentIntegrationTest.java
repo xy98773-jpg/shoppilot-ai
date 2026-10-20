@@ -9,6 +9,11 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,6 +34,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -341,6 +347,9 @@ class PurchaseOrderFromReplenishmentIntegrationTest {
                         + a + "," + otherC + "]}",
                 token, "idem-e6-pre");
         assertEquals(HttpStatus.CREATED, pre.getStatusCode(), pre.getBody());
+        // pre 带确认转单成功 ⇒ 写 1 条 CONFLICT_ACK（这是「确认放行」的合法留痕）
+        long ackBefore = countOfAuditByAction("PURCHASE_ORDER_CONFLICT_ACK");
+        assertEquals(1L, ackBefore, "pre 应已写 1 条 CONFLICT_ACK");
 
         // 此时真实冲突集只剩 {otherC}；客户端却确认了 {otherB}（已过期）⇒ 拒绝
         ResponseEntity<String> res = postWithKey(
@@ -352,6 +361,10 @@ class PurchaseOrderFromReplenishmentIntegrationTest {
         assertEquals(HttpStatus.CONFLICT, res.getStatusCode());
         assertEquals(ErrorCodes.RPL_8012, codeOf(res));
         assertEquals(1L, countOf("purchase_orders"), "不应为 a 建单");
+        // ★ 裁定 P-6 本意 = 「本次过期请求未写审计」：res 在④即被拒、未走到⑨ ⇒ 计数不变。
+        //   （令文「全表 = 0」与 E6 数据流不符：pre 必先写 1 条，故按「前后不变」断言）
+        assertEquals(ackBefore, countOfAuditByAction("PURCHASE_ORDER_CONFLICT_ACK"),
+                "确认集过期 ⇒ 本次请求不得新增 CONFLICT_ACK 审计");
     }
 
     // =====================================================================
@@ -565,9 +578,11 @@ class PurchaseOrderFromReplenishmentIntegrationTest {
     // =====================================================================
 
     @Test
-    @DisplayName("E12 锚点锁双路径：有余额行⇒lockBalanceAnchors；无余额行⇒lockApprovedAnchors")
+    @DisplayName("E12【弱验证】锚点锁双路径：两条锁路径无副作用，本用例无法区分分支走向")
     void bothLockPaths() throws Exception {
         String token = login("approver01");
+        // ★ 弱验证（§5.67.4）：两条锁路径均无副作用（不写数据、不写审计），本用例仅断言
+        //   201 + CONVERTED，与快乐路径同构——删掉降级分支测试仍绿 ⇒ 无法区分走了哪条分支。
         // 路径 1：SKU_WITH_BALANCE 有余额行 ⇒ ② 即够，不降级
         long withBalance = createApprovedItem(TEAM7, SKU_WITH_BALANCE, "30.000", SUPPLIER7, "10.0000");
         ResponseEntity<String> res1 = postWithKey(
@@ -593,7 +608,7 @@ class PurchaseOrderFromReplenishmentIntegrationTest {
     // =====================================================================
 
     @Test
-    @DisplayName("E13 索引可达性：降级锁 EXPLAIN 非全表扫描，目标索引在 possible_keys")
+    @DisplayName("E13【未覆盖/N-A】降级锁 EXPLAIN 观测（不证明优化器选中 idx_repl_team_sku_time）")
     void degradeLockUsesIndex() {
         long runId = insertRun(TEAM7, "RUN-EXPLAIN");
         jdbc.update("INSERT INTO analysis_items (team_id, run_id, sku_id, product_id, warehouse_id, "
@@ -618,16 +633,67 @@ class PurchaseOrderFromReplenishmentIntegrationTest {
                         + "AND status = 'APPROVED' ORDER BY sku_id ASC",
                 TEAM7, WH7, SKU_WITH_BALANCE, SKU_NO_BALANCE);
         System.out.println("[M6T02-EVIDENCE] E13 EXPLAIN: " + explain);
-        // ★ 口径（申报）：R2 修复的意图是「索引可达、不全表扫描」。实测（2 行小数据量）下
-        //   优化器选择了 idx_repl_team_status_time（team_id+status 等值前缀，key_len=138）
-        //   并 filesort；idx_repl_team_sku_time 在 possible_keys 中可用但未被选中。
-        //   ⇒ 断言对准设计意图：非全表扫描 + 目标索引可达；优化器具体选择如实打印，
-        //     按令 E13「若实测不是 ⇒ 如实报告，不得自行改索引/改迁移」处理。
+        // ★ 【未覆盖/N-A】（§5.67.4）：实测 key=idx_repl_team_status_time + Extra=Using where;
+        //   Using filesort，令文要求的「key=idx_repl_team_sku_time 且无 filesort」未达成。
+        //   断言仅为「非全表扫描 + 索引在 possible_keys」——后者是静态元数据校验、近乎恒真、
+        //   无法证伪；且 EXPLAIN 省略了 FOR UPDATE，与生产加锁语句不等价 ⇒ 不构成 R2 修复生效的证据。
+        //   根因与正解见 R165：需 V1.0.12 新增 idx_repl_team_wh_sku (team_id, warehouse_id, sku_id)，
+        //   本批 G3 禁改迁移，不做；不得把 possible_keys 硬改成 key 断言。
         assertTrue(!"ALL".equals(explain.get("type")),
                 "不得全表扫描（R2 修复的最低目标），实际 type=" + explain.get("type"));
         assertTrue(String.valueOf(explain.get("possible_keys")).contains("idx_repl_team_sku_time"),
                 "idx_repl_team_sku_time 必须可达（在 possible_keys 中），实际："
                         + explain.get("possible_keys"));
+    }
+
+    // =====================================================================
+    // E14：并发幂等（C1 必修）
+    // =====================================================================
+
+    @Test
+    @DisplayName("E14 并发幂等：同键同体并发 ⇒ 组合 ∈ {(201,201),(201,409 COM-0009)}，绝不 500/COM-0002，purchase_orders 恰 1 条")
+    void concurrentIdempotencyDoesNotReturn500() throws Exception {
+        long a = createApprovedItem(TEAM7, SKU_NO_BALANCE, "30.000", SUPPLIER7, "10.0000");
+        String token = login("approver01");
+        String body = "{\"replenishment_item_ids\":[" + a + "],\"warehouse_id\":" + WH7 + "}";
+
+        int threads = 2;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CountDownLatch gate = new CountDownLatch(1);
+        List<Future<ResponseEntity<String>>> futures = new ArrayList<>();
+        for (int i = 0; i < threads; i++) {
+            futures.add(pool.submit(() -> {
+                gate.await();
+                return postWithKey("/api/v1/purchasing/orders/from-replenishment",
+                        body, token, "idem-e14");
+            }));
+        }
+        gate.countDown();
+        List<ResponseEntity<String>> responses = new ArrayList<>();
+        for (Future<ResponseEntity<String>> f : futures) {
+            responses.add(f.get(60, TimeUnit.SECONDS));
+        }
+        pool.shutdown();
+
+        List<Integer> codes = new ArrayList<>();
+        for (ResponseEntity<String> r : responses) {
+            codes.add(r.getStatusCode().value());
+        }
+        System.out.println("[M6T02-EVIDENCE] E14 响应组合: " + codes
+                + " | bodies=" + responses.stream().map(ResponseEntity::getBody).toList());
+        // ★ 合法组合（C1 后）：(201,201)=B 在⑤步命中首单；(201,409)=B 撞 uk_po_team_idem 后
+        //   RC 重查命中所落 COM-0009。绝不出现 500/COM-0002。
+        for (ResponseEntity<String> r : responses) {
+            int status = r.getStatusCode().value();
+            assertTrue(status == 201 || status == 409,
+                    "只允许 201 或 409，实际 " + status + " body=" + r.getBody());
+            if (status == 409) {
+                assertEquals(ErrorCodes.COM_0009, codeOf(r), "并发撞键必须落 COM-0009(409)，不是 COM-0002");
+            }
+            assertFalse(r.getBody().contains("COM-0002"), "绝不出现 COM-0002(500)");
+        }
+        assertEquals(1L, countOf("purchase_orders"), "并发生成恰好 1 条采购单");
+        assertEquals(1L, countOf("purchase_order_items"), "明细行数与首次一致（1 条）");
     }
 
     // =====================================================================
@@ -683,6 +749,12 @@ class PurchaseOrderFromReplenishmentIntegrationTest {
 
     private long countOf(String table) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Long.class);
+    }
+
+    /** 按 action 全表计数（E6 断言「确认集过期 ⇒ 不得写某类审计」用）。 */
+    private long countOfAuditByAction(String action) {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM audit_logs WHERE action = ?", Long.class, action);
     }
 
     private long auditCount(long bizId, String action) {

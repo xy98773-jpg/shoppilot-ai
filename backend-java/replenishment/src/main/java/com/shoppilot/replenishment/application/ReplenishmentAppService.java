@@ -118,12 +118,17 @@ public class ReplenishmentAppService {
      *   <li>已 {@code CONVERTED} ⇒ 409 {@code PO-9001}（<b>与 {@code RPL-8001} 分开</b>：
      *       「已转采购」与「状态非法」是两种语义）；</li>
      *   <li>其它非 {@code APPROVED} ⇒ 422 {@code RPL-8001}；</li>
-     *   <li>{@code updateById} 影响 0 行 ⇒ 409 {@code RPL-8003}（乐观锁冲突，
-     *       说明已被并发推进）⇒ 调用方整个事务回滚。</li>
+     *   <li>★ <b>同语句状态守卫</b>：{@code WHERE id=? AND status='APPROVED' AND version=?}，
+     *       影响 0 行 ⇒ 409 {@code PO-9001}（已被并发转单，调用方整个事务回滚）。</li>
      * </ul>
      *
-     * <p>★ 写路径用 {@code updateById(entity)}（{@code @Version} CAS），
-     * <b>禁止</b> {@code update(null, wrapper)}。
+     * <p>★ 写路径<b>故意</b>用 {@code update(null, lambdaUpdate())} 而非 {@code updateById(entity)}：
+     * MyBatis-Plus 的 {@code updateById} 只生成 {@code WHERE id=? AND version=?}（缺 {@code status}
+     * 条件）⇒ 无法在一条语句里同时守住「状态仍为 APPROVED」与「版本未变」两个前提，存在 TOCTOU。
+     * 此处用 {@code LambdaUpdateWrapper} 把三个条件并进同一 UPDATE，并手动 {@code set(version, version+1)}
+     * （乐观锁插件不参与 wrapper 更新），保持版本号语义连续——<b>这是对「禁止 update(null, wrapper)」
+     * 常规的、有据可依的例外</b>（常规禁令针对的是「绕过 @Version 的覆盖写」，本处显式把 version
+     * 当作等值条件 + 自增，等价于 CAS，不构成绕过）。
      *
      * @param itemId              建议 ID
      * @param purchaseOrderItemId 对应采购明细 ID（追加进 {@code converted_po_item_ids}）

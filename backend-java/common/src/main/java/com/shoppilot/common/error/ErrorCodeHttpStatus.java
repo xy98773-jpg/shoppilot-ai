@@ -158,6 +158,7 @@ public final class ErrorCodeHttpStatus {
         put("PO-9010", 403);
         put("PO-9011", 400);
         put("PO-9012", 400);
+        put("PO-9013", 409);
 
         // AI —— Java ↔ Python 内部通信（ERROR_CODES §2.11）
         put("AI-0001", 401);
