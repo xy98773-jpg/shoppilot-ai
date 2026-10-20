@@ -39,6 +39,7 @@ public final class ErrorCodeHttpStatus {
         put("COM-0012", 503);
         put("COM-0013", 500);
         put("COM-0014", 502);
+        put("COM-0015", 409);
 
         // AUTH —— 认证与登录
         put("AUTH-1001", 401);

@@ -42,6 +42,9 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>upsert 用 {@code uk_pol_team_sku_wh (team_id, sku_id, warehouse_id)} 吸收并发冲突
  *       （先查后写 + 唯一约束兜底），<b>不</b>使用 {@code @InterceptorIgnore}（任务书「零新增 @InterceptorIgnore」）；</li>
  *   <li>停用走 {@code is_enabled = 0}，<b>不物理删除</b>（{@code §5.8}）；</li>
+ *   <li><b>★ 乐观锁（{@code R62}，M4-B23）</b>：{@code version} 列此前建而未用，本批通过
+ *       {@code @Version} + {@code OptimisticLockerInnerInterceptor} 生效；两处 {@code updateById}
+ *       均<b>判返回值</b>，影响 0 行 ⇒ {@code COM-0015}（409）。插件本身<b>不抛异常</b>。</li>
      *   <li>校验：{@code sku_id}/{@code warehouse_id} 必填（{@code COM-0001}）、二者须同团队
      *       （{@code CAT-3004}）、参数不得为负（{@code COM-0001}；注：{@code CAT-3010} 未固化，本批降级使用）；</li>
  *   <li>团队间资源隔离由租户线自动追加 {@code team_id} 保证，跨团队行查不到；</li>
@@ -182,7 +185,13 @@ public class InventoryPolicyService {
         PolicyChange change = policyChange(existing.getId(), existing.getSkuId(), existing.getWarehouseId(),
                 existing, req);
         copyFields(req, existing, operatorId);
-        policyMapper.updateById(existing);
+        // ★ R62（M4-B23）：乐观锁插件在版本不匹配时**不抛异常**，只让 UPDATE 影响 0 行
+        //   ⇒ 必须判返回值；否则并发写会静默丢更新（B7 登记的正是「建了 version 列却不生效」）。
+        //   CAS 的 SET version = version + 1 保证「匹配即 1 行变更」，故返回 0 必然是不匹配。
+        int affected = policyMapper.updateById(existing);
+        if (affected == 0) {
+            throw new BizException(ErrorCodes.COM_0015, "补货策略已被他人修改，请刷新后重试");
+        }
         recordPolicyAudit(new PolicyAudit(existing.getId(), change.summary(), change.before(), change.after()));
         return toView(existing);
     }
@@ -200,7 +209,12 @@ public class InventoryPolicyService {
         Integer beforeEnabled = entity.getIsEnabled();
         entity.setIsEnabled(0);
         entity.setUpdatedBy(currentOperatorId());
-        policyMapper.updateById(entity);
+        // ★ R62：与 upsert 同一口径——判返回值（插件不抛异常）；重复停用本身幂等
+        //   （每次调用重新读取当前 version 再 CAS），只有「期间被他人改过」才 409。
+        int affected = policyMapper.updateById(entity);
+        if (affected == 0) {
+            throw new BizException(ErrorCodes.COM_0015, "补货策略已被他人修改，请刷新后重试");
+        }
         recordPolicyAudit(new PolicyAudit(id, "停用策略 " + id,
                 Map.of("is_enabled", beforeEnabled == null ? 0 : beforeEnabled),
                 Map.of("is_enabled", 0)));

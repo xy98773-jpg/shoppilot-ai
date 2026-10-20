@@ -185,7 +185,7 @@ public class CatalogWriteService {
      * @param writableCode 是否允许把请求体里的 {@code code} 写进库内（见上）
      */
     private WarehouseView updateWarehouse(Long id, JsonNode body, boolean writableCode) {
-        CatalogGuards.requireInTeam(warehouseMapper.selectById(id),
+        WarehouseEntity existing = CatalogGuards.requireInTeam(warehouseMapper.selectById(id),
                 () -> warehouseMapper.selectTeamIdById(id), ErrorCodes.CAT_3003, "仓库不存在");
 
         requireNonBlankIfPresent(body, "code");
@@ -209,12 +209,20 @@ public class CatalogWriteService {
             }
         }
         w.set("updated_by", currentUserId());
-        warehouseMapper.update(null, w);
+        applyVersionCas(w, existing.getVersion());
+        requireCasHit(warehouseMapper.update(null, w));
         log.info("仓库已更新 id={}", id);
         return WarehouseView.of(warehouseMapper.selectById(id));
     }
 
-    /** 同团队默认仓唯一：把其它行的 {@code is_default} 清 0（{@code DATABASE_DESIGN §5.4} 设计要点）。 */
+    /**
+     * 同团队默认仓唯一：把其它行的 {@code is_default} 清 0（{@code DATABASE_DESIGN §5.4} 设计要点）。
+     *
+     * <p>★ <b>非 CAS（{@code R62} 豁免，M4-B23）</b>：这是<b>批量语义</b>，一行 {@code WHERE version=?}
+     * 会让「版本已被他人推进」的行被跳过，留下两个默认仓（比并发覆盖更糟）。
+     * 口径：并发下以最后一次为准；<b>单行默认仓切换</b>的并发正确性由调用方
+     * （{@code updateWarehouse} 对目标行的 CAS）保证。
+     */
     private void clearOtherDefaults(Long exceptId) {
         UpdateWrapper<WarehouseEntity> w = new UpdateWrapper<>();
         w.eq("is_default", true).set("is_default", false);
@@ -275,7 +283,7 @@ public class CatalogWriteService {
      * {@code writableCode}，理由与取舍见 {@link #updateWarehouse(Long, JsonNode, boolean)}。
      */
     private SupplierView updateSupplier(Long id, JsonNode body, boolean writableCode) {
-        CatalogGuards.requireInTeam(supplierMapper.selectById(id),
+        SupplierEntity existing = CatalogGuards.requireInTeam(supplierMapper.selectById(id),
                 () -> supplierMapper.selectTeamIdById(id), ErrorCodes.CAT_3001, "供应商不存在");
 
         requireNonBlankIfPresent(body, "code");
@@ -301,7 +309,8 @@ public class CatalogWriteService {
         setString(w, body, "payment_terms", "payment_terms");
         setString(w, body, "remark", "remark");
         w.set("updated_by", currentUserId());
-        supplierMapper.update(null, w);
+        applyVersionCas(w, existing.getVersion());
+        requireCasHit(supplierMapper.update(null, w));
         log.info("供应商已更新 id={}", id);
         return SupplierView.of(supplierMapper.selectById(id));
     }
@@ -390,7 +399,8 @@ public class CatalogWriteService {
             w.set("default_supplier_id", supplierId);
         }
         w.set("updated_by", currentUserId());
-        productMapper.update(null, w);
+        applyVersionCas(w, existing.getVersion());
+        requireCasHit(productMapper.update(null, w));
         log.info("商品已更新 id={}", id);
         return withView ? ProductView.of(productMapper.selectById(id)) : ProductView.of(existing);
     }
@@ -474,7 +484,8 @@ public class CatalogWriteService {
      * 理由与取舍见 {@link #updateWarehouse(Long, JsonNode, boolean)}。
      */
     private SkuView updateSku(Long id, JsonNode body, boolean writableCode) {
-        skuQueryService.requireInTeam(id);
+        // ★ R62：requireInTeam 本就返回实体，直接复用其 version，无需再查一次
+        SkuEntity existing = skuQueryService.requireInTeam(id);
 
         requireNonBlankIfPresent(body, "sku_code");
         requireNonBlankIfPresent(body, "name");
@@ -501,7 +512,8 @@ public class CatalogWriteService {
             w.set("supplier_id", supplierId);
         }
         w.set("updated_by", currentUserId());
-        skuMapper.update(null, w);
+        applyVersionCas(w, existing.getVersion());
+        requireCasHit(skuMapper.update(null, w));
         log.info("SKU 已更新 id={}", id);
         return SkuView.of(skuMapper.selectById(id));
     }
@@ -1087,7 +1099,8 @@ public class CatalogWriteService {
      * <p>4 个 {@code DELETE /{id}}（软删 → {@code INACTIVE}）与 2 个 {@code PATCH /{id}/status}
      * （显式改状态，含重新启用）全部经此收敛。<b>DELETE 一律软删</b>：只改 {@code status} 列，
      * 物理行保留（{@code API_CONTRACT §1.2} 硬规则 1）；对已 {@code INACTIVE} 对象重复 DELETE 仍返回成功
-     * （幂等，任务书 §3-1），不做乐观锁、不报 409/422。
+     * （幂等，任务书 §3-1）：<b>每次调用都重新读取当前 version 再 CAS</b>，重复操作自身不会制造冲突；
+     * 仅当期间有他人改了同一行才返回 {@code COM-0015}（409，{@code R62}）。
      *
      * @param resourceType 资源类型（区分四表）
      * @param id           资源主键
@@ -1116,7 +1129,8 @@ public class CatalogWriteService {
         if (STATUS_INACTIVE.equals(status) && Boolean.TRUE.equals(current.getIsDefault())) {
             w.set("is_default", false);
         }
-        warehouseMapper.update(null, w);
+        applyVersionCas(w, current.getVersion());
+        requireCasHit(warehouseMapper.update(null, w));
         log.info("仓库状态已变更 id={} status={}", id, status);
         recordMasterData(BIZ_TYPE_WAREHOUSE, id, current.getCode(),
                 STATUS_INACTIVE.equals(status) ? "停用仓库" : "启用仓库");
@@ -1130,7 +1144,8 @@ public class CatalogWriteService {
         // TODO(M3/M6): CAT-3007 关联校验（在途采购/库存/补货建议）——依赖表属 M3/M6，本阶段不存在，故不实现
         UpdateWrapper<SupplierEntity> w = new UpdateWrapper<>();
         w.eq("id", id).set("status", status).set("updated_by", currentUserId());
-        supplierMapper.update(null, w);
+        applyVersionCas(w, current.getVersion());
+        requireCasHit(supplierMapper.update(null, w));
         log.info("供应商状态已变更 id={} status={}", id, status);
         recordMasterData(BIZ_TYPE_SUPPLIER, id, current.getCode(),
                 STATUS_INACTIVE.equals(status) ? "停用供应商" : "启用供应商");
@@ -1153,7 +1168,8 @@ public class CatalogWriteService {
         // TODO(M3/M6): CAT-3007 关联校验（在途采购/库存/补货建议）——依赖表属 M3/M6，本阶段不存在，故不实现
         UpdateWrapper<ProductEntity> w = new UpdateWrapper<>();
         w.eq("id", id).set("status", status).set("updated_by", currentUserId());
-        productMapper.update(null, w);
+        applyVersionCas(w, current.getVersion());
+        requireCasHit(productMapper.update(null, w));
         log.info("商品状态已变更 id={} status={}", id, status);
         recordMasterData(BIZ_TYPE_PRODUCT, id, current.getProductCode(),
                 STATUS_INACTIVE.equals(status) ? "停用商品" : "启用商品");
@@ -1167,11 +1183,48 @@ public class CatalogWriteService {
         // TODO(M3/M6): CAT-3007 关联校验（在途采购/库存/补货建议）——依赖表属 M3/M6，本阶段不存在，故不实现
         UpdateWrapper<SkuEntity> w = new UpdateWrapper<>();
         w.eq("id", id).set("status", status).set("updated_by", currentUserId());
-        skuMapper.update(null, w);
+        applyVersionCas(w, current.getVersion());
+        requireCasHit(skuMapper.update(null, w));
         log.info("SKU 状态已变更 id={} status={}", id, status);
         recordMasterData(BIZ_TYPE_SKU, id, current.getSkuCode(),
                 STATUS_INACTIVE.equals(status) ? "停用 SKU" : "启用 SKU");
         return SkuView.of(skuMapper.selectById(id));
+    }
+
+    // =====================================================================
+    // 乐观锁 CAS（R62，M4-B23）
+    // =====================================================================
+
+    /**
+     * 追加版本 CAS 条件（{@code R62}，M4-B23）。
+     *
+     * <p>★ <b>为什么必须手写</b>：本类的更新全部是 {@code update(null, UpdateWrapper)}——
+     * MyBatis-Plus 的 {@code OptimisticLockerInnerInterceptor} 只改写<b>实体形态</b>的
+     * {@code updateById(entity)} / {@code update(entity, wrapper)}，对 {@code null} 实体
+     * <b>完全不触发</b>（{@code §5.48} 已核实）。实体上仍标 {@code @Version}，
+     * 是为了语义一致与未来若改用 {@code updateById} 时的正确性。
+     *
+     * <p>★ {@code version = version + 1} 用 {@code setSql} 而非 {@code set}：
+     * 后者要求调用方先算出新值，会给「两个请求都读到 0」留下同值写入的窗口。
+     *
+     * @param w               已带 {@code id} 条件的更新包装器
+     * @param expectedVersion 同一方法内 {@code selectById} 读到的版本（<b>不得</b>重新查库取最新值）
+     */
+    private static <T> void applyVersionCas(UpdateWrapper<T> w, Integer expectedVersion) {
+        w.eq("version", expectedVersion);
+        w.setSql("version = version + 1");
+    }
+
+    /**
+     * CAS 影响 0 行 ⇒ 并发冲突（{@code COM-0015}，409）。
+     *
+     * <p>★ 插件与手写 CAS <b>都不抛异常</b>，0 行就是「版本已被他人推进」的唯一信号；
+     * 由于 SET 里恒有 {@code version = version + 1}，不存在「值未变化导致 Changed: 0」的误判。
+     */
+    private static void requireCasHit(int affected) {
+        if (affected == 0) {
+            throw new BizException(ErrorCodes.COM_0015, "该数据已被他人修改，请刷新后重试");
+        }
     }
 
     /** {@code status} 入参校验（任务书 §3-2）：缺失 / 非法枚举 → 400 {@code COM-0001} + {@code details[]}。 */

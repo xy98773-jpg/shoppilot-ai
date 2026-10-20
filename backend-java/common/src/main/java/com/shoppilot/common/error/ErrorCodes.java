@@ -34,6 +34,14 @@ public final class ErrorCodes {
     public static final String COM_0009 = "COM-0009";
     /** 缺少必填请求头（400）—— 对必填幂等键的接口缺失/非法 {@code Idempotency-Key}（ERROR_CODES §2.1）。 */
     public static final String COM_0010 = "COM-0010";
+    /**
+     * 数据已被他人修改（409）—— 乐观锁 {@code version} CAS 失败（{@code R62}，M4-B23）。
+     *
+     * <p>★ 语义边界：这是<b>并发冲突</b>，不是权限（403）、不是不存在（404）、也不是幂等键冲突
+     * （{@code COM-0009}）。触发点是 {@code UPDATE ... WHERE id=? AND version=?} 影响 0 行——
+     * MyBatis-Plus 乐观锁插件与手写 CAS <b>都不抛异常</b>，由调用方判返回值后抛出本码。
+     */
+    public static final String COM_0015 = "COM-0015";
 
     // AUTH —— 认证与登录（1001–1099）
     /** 未登录或 Token 失效（401）—— 缺失/格式错误的 Authorization。 */

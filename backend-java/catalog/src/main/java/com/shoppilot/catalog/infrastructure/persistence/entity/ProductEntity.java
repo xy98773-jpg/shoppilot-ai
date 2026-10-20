@@ -3,6 +3,7 @@ package com.shoppilot.catalog.infrastructure.persistence.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.Version;
 import java.time.LocalDateTime;
 import lombok.Data;
 
@@ -40,5 +41,7 @@ public class ProductEntity {
     private LocalDateTime updatedAt;
     private Long createdBy;
     private Long updatedBy;
+    /** 乐观锁版本（{@code R62}，M4-B23）；本类更新走 {@code update(null, wrapper)}，由写服务手写 CAS。 */
+    @Version
     private Integer version;
 }

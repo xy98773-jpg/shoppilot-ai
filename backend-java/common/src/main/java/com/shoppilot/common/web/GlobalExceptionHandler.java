@@ -11,6 +11,7 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
@@ -78,6 +79,29 @@ public class GlobalExceptionHandler {
         log.warn("唯一约束冲突 code={} field={}", ErrorCodes.CAT_3002, field);
         return ResponseEntity.status(ErrorCodeHttpStatus.resolve(ErrorCodes.CAT_3002))
                 .body(ApiResponse.fail(ErrorCodes.CAT_3002, "编码在该团队内已存在", details));
+    }
+
+    /**
+     * 乐观锁版本冲突：<b>409 + {@code COM-0015}</b>（{@code R62}，M4-B23）——<b>兜底</b>通道。
+     *
+     * <p>★ 主路径是<b>调用方判返回值</b>：MyBatis-Plus 的
+     * {@code OptimisticLockerInnerInterceptor} 在版本不匹配时<b>不抛异常</b>，
+     * 只是让 {@code UPDATE} 影响 0 行（{@code updateById} 返回 {@code 0}），
+     * 由 {@code InventoryPolicyService} / {@code CatalogWriteService} 翻译为 {@code COM-0015}。
+     *
+     * <p>★ 本处理器只覆盖「框架若改用抛异常形态」的情形：Spring 的
+     * {@link OptimisticLockingFailureException}（含 JPA/Spring Data 语义）。
+     * <b>刻意不</b>捕获 {@code com.baomidou.mybatisplus.core.exceptions.MybatisPlusException}——
+     * 该类是 MP 的<b>通用</b>运行时异常（参数映射、SQL 构造等都会抛），
+     * 一律映射成 409 会把真正的系统错误伪装成并发冲突，违反 {@code ERROR_CODES §2}
+     * 「能归类必须归类」的反面——<b>不可把不同语义混为一类</b>。
+     * 经核实 MP 3.5.17 也<b>没有</b>专门的 {@code OptimisticLockException} 类。
+     */
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<ApiResponse<Void>> handleOptimisticLock(OptimisticLockingFailureException ex) {
+        log.warn("乐观锁版本冲突 code={} message={}", ErrorCodes.COM_0015, ex.getMessage());
+        return ResponseEntity.status(ErrorCodeHttpStatus.resolve(ErrorCodes.COM_0015))
+                .body(ApiResponse.fail(ErrorCodes.COM_0015, "该数据已被他人修改，请刷新后重试", null));
     }
 
     /** 请求体字段级校验失败：400 + COM-0001 + details[]（契约 §3）。 */
