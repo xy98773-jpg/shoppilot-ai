@@ -2,12 +2,17 @@ package com.shoppilot.replenishment.api;
 
 import com.shoppilot.common.annotation.RequireRole;
 import com.shoppilot.common.web.ApiResponse;
+import com.shoppilot.common.web.PageResult;
 import com.shoppilot.replenishment.application.ReplenishmentItemService;
+import com.shoppilot.replenishment.application.ReplenishmentQueryService;
 import com.shoppilot.replenishment.application.dto.ApprovalCommandRequest;
 import com.shoppilot.replenishment.application.dto.ReplenishmentItemResponse;
+import com.shoppilot.replenishment.application.dto.ReplenishmentPageQuery;
 import com.shoppilot.replenishment.application.dto.ReplenishmentReviewActionResponse;
+import com.shoppilot.replenishment.application.dto.ReplenishmentReviewResponse;
 import com.shoppilot.replenishment.application.dto.ReviewCommandRequest;
 import com.shoppilot.replenishment.application.dto.UpdateReplenishmentItemRequest;
+import java.util.List;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -15,6 +20,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -46,9 +52,64 @@ import org.springframework.web.bind.annotation.RestController;
 public class ReplenishmentItemController {
 
     private final ReplenishmentItemService itemService;
+    private final ReplenishmentQueryService queryService;
 
-    public ReplenishmentItemController(ReplenishmentItemService itemService) {
+    public ReplenishmentItemController(ReplenishmentItemService itemService,
+                                       ReplenishmentQueryService queryService) {
         this.itemService = itemService;
+        this.queryService = queryService;
+    }
+
+    /**
+     * 建议列表（{@code GET /api/v1/replenishment/items}，任何已登录成员，含 VIEWER）。
+     *
+     * <p>★ <b>不加</b> {@code @RequireRole}（只读，隔离由租户线保证）。
+     *
+     * <p>查询参数：{@code status} / {@code risk_level}（或驼峰 {@code riskLevel}）/
+     * {@code run_id}（或 {@code runId}）/ {@code page}（默认 1）/ {@code pageSize}（默认 20，1..200）/
+     * {@code sort}（形如 {@code sort=created_at,desc}）。非法值 ⇒ 400 {@code COM-0007}。
+     *
+     * @return 200 + 分页结果（{@code data.list/page/pageSize/total}；★ 字段是 {@code list} 不是 {@code items}）
+     */
+    @GetMapping("/items")
+    public ResponseEntity<ApiResponse<PageResult<ReplenishmentItemResponse>>> listItems(
+            @RequestParam(name = "status", required = false) String status,
+            @RequestParam(name = "risk_level", required = false) String riskLevel,
+            @RequestParam(name = "riskLevel", required = false) String riskLevelCamel,
+            @RequestParam(name = "run_id", required = false) Long runId,
+            @RequestParam(name = "runId", required = false) Long runIdCamel,
+            @RequestParam(name = "page", required = false) Integer page,
+            @RequestParam(name = "pageSize", required = false) Integer pageSize,
+            @RequestParam(name = "sort", required = false) List<String> sort) {
+
+        return ResponseEntity.ok(ApiResponse.success(queryService.list(
+                status,
+                riskLevel != null ? riskLevel : riskLevelCamel,
+                runId != null ? runId : runIdCamel,
+                page == null ? 1 : page,
+                pageSize == null ? ReplenishmentPageQuery.DEFAULT_PAGE_SIZE : pageSize,
+                sort)));
+    }
+
+    /**
+     * 审核时间线（{@code GET /api/v1/replenishment/items/{id}/reviews}，任何已登录成员）。
+     *
+     * <p>默认排序 {@code occurred_at asc}；目标不存在/跨团队 ⇒ 404 {@code RPL-8004}；
+     * 无记录 ⇒ 空 {@code list} + {@code total=0}。
+     *
+     * @return 200 + 分页结果（{@code data.list/page/pageSize/total}）
+     */
+    @GetMapping("/items/{id}/reviews")
+    public ResponseEntity<ApiResponse<PageResult<ReplenishmentReviewResponse>>> reviews(
+            @PathVariable("id") long id,
+            @RequestParam(name = "page", required = false) Integer page,
+            @RequestParam(name = "pageSize", required = false) Integer pageSize,
+            @RequestParam(name = "sort", required = false) List<String> sort) {
+
+        return ResponseEntity.ok(ApiResponse.success(queryService.reviews(id,
+                page == null ? 1 : page,
+                pageSize == null ? ReplenishmentPageQuery.DEFAULT_PAGE_SIZE : pageSize,
+                sort)));
     }
 
     /**
