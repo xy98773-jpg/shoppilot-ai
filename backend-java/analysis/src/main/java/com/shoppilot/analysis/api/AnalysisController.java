@@ -12,8 +12,11 @@ import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.ApiResponse;
 import com.shoppilot.common.web.BizException;
+import com.shoppilot.common.web.PageResult;
 import jakarta.validation.Valid;
+import java.time.LocalDate;
 import java.util.List;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,13 +34,15 @@ import org.springframework.web.bind.annotation.RestController;
  * <h2>本批端点清单</h2>
  * <ul>
  *   <li>{@code POST /api/v1/analysis/runs} —— 创建分析任务（{@code OPERATOR+}，202）。</li>
+ *   <li>{@code GET /api/v1/analysis/runs} —— 历史列表（<b>任何已登录成员，含 VIEWER</b>，200；
+ *       分页 + status/date_from/date_to/sort，F-ANL-09，M4-B22.1）。</li>
  *   <li>{@code GET /api/v1/analysis/runs/{id}} —— 运行状态与进度（<b>任何已登录成员，含 VIEWER</b>，200）。</li>
  *   <li>{@code GET /api/v1/analysis/runs/{id}/items} —— 结果明细快照（<b>任何已登录成员，含 VIEWER</b>，200；
  *       {@code progress<100} ⇒ 409 {@code ANL-7012}，M4-T13）。</li>
  *   <li>{@code POST /api/v1/analysis/runs/{id}/cancel} —— 取消运行（{@code OPERATOR+}，200；M4-T14，B20.4）。</li>
  * </ul>
  *
- * <p><b>不做</b>（留给 B22/M5）：列表 {@code GET /runs}、导出、建议派生、前端。
+ * <p><b>不做</b>（留给 M5/后续）：导出、建议派生。
  *
  * <h2>★ 三个边界</h2>
  * <ol>
@@ -92,6 +97,48 @@ public class AnalysisController {
             builder.header(HEADER_IDEMPOTENT_REPLAYED, "true");
         }
         return builder.body(ApiResponse.success(outcome.data()));
+    }
+
+    /**
+     * 查询分析运行列表（{@code GET /api/v1/analysis/runs}；F-ANL-09 / M4-B22.1）。
+     *
+     * <p>★ 权限：<b>任何已登录成员（含 VIEWER）</b>——只读历史列表，不写任何业务数据，
+     * 故<b>不加</b> {@code @RequireRole}（与 {@link #getRunStatus} 同口径，{@code API_CONTRACT §11.5}）。
+     *
+     * <p>★ 响应元素复用 {@link AnalysisRunStatusResponse}（与 {@code GET /runs/{id}} 字段逐字一致）；
+     * 分页包络为 {@code data.list/page/pageSize/total}（{@code §2.2}，字段名 {@code list} 不是 {@code items}）。
+     *
+     * <p>★ 参数口径（B22.1-A2）：
+     * <ul>
+     *   <li>{@code page}/{@code pageSize} 与 {@code GET /runs/{id}/items} 完全一致（默认 1/20，上限 200）；</li>
+     *   <li>{@code status} 为 {@code AnalysisRunStatus} 七态之一，非法 ⇒ {@code COM-0001}；</li>
+     *   <li>{@code date_from}/{@code date_to} 为 {@code yyyy-MM-dd} 自然日，按 {@code created_at} 过滤；</li>
+     *   <li>{@code sort} 白名单 {@code created_at/status/finished_at} + {@code asc|desc}，
+     *       非法 ⇒ {@code COM-0001}；缺省 {@code created_at,desc}。</li>
+     * </ul>
+     * ★ 手工 {@code badParam} 的 {@code details[].field} 一律 snake_case（R146）：
+     * {@code page_size}/{@code date_from}，与全局异常处理器 {@code toSnakeCase} 口径一致。
+     *
+     * @param status   可选状态过滤（七态之一）
+     * @param dateFrom 可选起始日（含，{@code yyyy-MM-dd}）
+     * @param dateTo   可选结束日（含，{@code yyyy-MM-dd}）
+     * @param page     页码（默认 1）
+     * @param pageSize 每页大小（默认 20，上限 200）
+     * @param sort     排序（如 {@code created_at,desc}）
+     */
+    @GetMapping("/runs")
+    public ResponseEntity<ApiResponse<PageResult<AnalysisRunStatusResponse>>> listRuns(
+            @RequestParam(name = "status", required = false) String status,
+            @RequestParam(name = "date_from", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
+            @RequestParam(name = "date_to", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo,
+            @RequestParam(name = "page", defaultValue = "1") int page,
+            @RequestParam(name = "pageSize", defaultValue = "20") int pageSize,
+            @RequestParam(name = "sort", required = false) String sort) {
+
+        return ResponseEntity.ok(ApiResponse.success(
+                analysisAppService.listRuns(status, dateFrom, dateTo, page, pageSize, sort)));
     }
 
     /**

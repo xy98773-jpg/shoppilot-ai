@@ -116,6 +116,15 @@ public class AnalysisAppService {
     private static final Set<String> ITEM_SORT_COLUMNS =
             Set.of("avg_daily_sales", "risk_level", "created_at");
 
+    /**
+     * 运行列表排序白名单（{@code §11.5} / B22.1-A2：仅三字段 + asc/desc）。
+     *
+     * <p>★ 与 {@link #ITEM_SORT_COLUMNS} <b>分列</b>：两张表的可排序列不同，
+     * 共用一个集合会让某一侧出现「以为可排、实际列不存在」的 500；白名单即防注入边界。
+     */
+    private static final Set<String> RUN_SORT_COLUMNS =
+            Set.of("created_at", "status", "finished_at");
+
     private final AnalysisRunMapper runMapper;
     private final AiServiceClient aiServiceClient;
     private final AuditWriteService auditWriteService;
@@ -367,6 +376,63 @@ public class AnalysisAppService {
     }
 
     /**
+     * 查询分析运行列表（{@code GET /api/v1/analysis/runs}；F-ANL-09 / M4-B22.1）。
+     *
+     * <p>★ 权限：<b>任何已登录成员（含 VIEWER）</b>——与 {@link #getRunStatus} 同口径，
+     * 只读历史列表不改任何业务数据，故<b>不加</b> {@code @RequireRole}（{@code API_CONTRACT §11.5}）。
+     *
+     * <p>★ 元素复用 {@link AnalysisRunStatusResponse}（B22.1-A4）：列表与
+     * {@code GET /runs/{id}} <b>字段逐字一致</b>，不新建平行 DTO、不返回子集。
+     * 该 DTO 当前<b>不含</b> {@code created_at}（可空列走 {@code NON_NULL} 省略）——
+     * 本批不为其增列：G2 禁止改动 {@code GET /runs/{id}} 的响应结构，
+     * 增列会让两个端点同时变更。
+     *
+     * <p>★ 日期过滤口径：{@code date_from}/{@code date_to} 是<b>自然日</b>（{@code yyyy-MM-dd}），
+     * 按 {@code created_at} 过滤；{@code date_from} 含当日 00:00:00，{@code date_to} 含当日
+     * 23:59:59.999（实现为 {@code < date_to + 1 天}），与「按天筛选」的直觉一致。
+     *
+     * <p>★ 排序白名单 + Lambda 方法引用（同 {@link #listRunItems} 范式）：用户输入绝不进 SQL 文本。
+     * 未传 {@code sort} 时默认 {@code created_at,desc}；同毫秒并列时以主键倒序兜底，保证分页稳定。
+     *
+     * @param status   可选状态过滤（七态之一）；非法 ⇒ {@code COM-0001}（field={@code status}）
+     * @param dateFrom 可选起始日（含）；{@code date_from > date_to} ⇒ {@code COM-0001}
+     * @param dateTo   可选结束日（含）
+     * @param page     页码（默认 1）
+     * @param pageSize 每页大小（默认 20，上限 200）
+     * @param sort     排序（{@code created_at,desc}）；非法 ⇒ {@code COM-0001}（field={@code sort}）
+     * @return 分页列表（租户线自动追加 {@code team_id}；空列表合法：{@code total=0}、{@code list=[]}）
+     */
+    public PageResult<AnalysisRunStatusResponse> listRuns(String status,
+                                                          LocalDate dateFrom,
+                                                          LocalDate dateTo,
+                                                          int page,
+                                                          int pageSize,
+                                                          String sort) {
+        validatePage(page, pageSize);
+        AnalysisRunStatus statusFilter = resolveRunStatus(status);
+        assertCreatedAtRange(dateFrom, dateTo);
+        SortSpec spec = parseRunSort(sort);
+
+        LambdaQueryWrapper<AnalysisRunEntity> wrapper = Wrappers.<AnalysisRunEntity>lambdaQuery();
+        if (statusFilter != null) {
+            wrapper.eq(AnalysisRunEntity::getStatus, statusFilter.name());
+        }
+        if (dateFrom != null) {
+            wrapper.ge(AnalysisRunEntity::getCreatedAt, dateFrom.atStartOfDay());
+        }
+        if (dateTo != null) {
+            wrapper.lt(AnalysisRunEntity::getCreatedAt, dateTo.plusDays(1).atStartOfDay());
+        }
+        applyRunSort(wrapper, spec);
+
+        Page<AnalysisRunEntity> result = runMapper.selectPage(new Page<>(page, pageSize), wrapper);
+        List<AnalysisRunStatusResponse> views = result.getRecords().stream()
+                .map(AnalysisRunStatusResponse::from)
+                .toList();
+        return PageResult.of(result.getTotal(), page, pageSize, views);
+    }
+
+    /**
      * 查询分析结果明细（{@code GET /api/v1/analysis/runs/{id}/items}；M4-T13）。
      *
      * <p>★ 权限：<b>任何已登录成员（含 VIEWER）</b>——与 {@link #getRunStatus} 同口径，只读明细
@@ -509,6 +575,94 @@ public class AnalysisAppService {
             }
             default -> throw badParam("sort", "排序字段不在白名单内", spec.column);
         }
+    }
+
+    // ---- 运行列表（B22.1）的三个参数解析器：与 items 的分列，互不复用 ----
+
+    /** 列表 {@code status} 过滤值解析（可选；与枚举<b>逐字</b>匹配，非法 ⇒ {@code COM-0001}）。 */
+    private static AnalysisRunStatus resolveRunStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return null;
+        }
+        String code = status.trim();
+        for (AnalysisRunStatus value : AnalysisRunStatus.values()) {
+            if (value.name().equals(code)) {
+                return value;
+            }
+        }
+        throw badParam("status",
+                "必须是 PENDING/RUNNING/SUCCEEDED/DEGRADED/FAILED/TIMEOUT/CANCELLED 之一", status);
+    }
+
+    /** 列表日期过滤区间校验（{@code date_from ≤ date_to}）；非法 ⇒ {@code COM-0001}。 */
+    private static void assertCreatedAtRange(LocalDate dateFrom, LocalDate dateTo) {
+        if (dateFrom != null && dateTo != null && dateFrom.isAfter(dateTo)) {
+            throw badParam("date_from", "date_from 不得晚于 date_to", dateFrom);
+        }
+    }
+
+    /** 列表 {@code sort} 解析（白名单 + 方向；{@code null} = 用默认 {@code created_at,desc}）。 */
+    private static SortSpec parseRunSort(String sort) {
+        if (sort == null || sort.isBlank()) {
+            return null;
+        }
+        String[] parts = sort.split(",", -1);
+        if (parts.length == 1) {
+            return new SortSpec(requireRunSortColumn(parts[0]), true);
+        }
+        if (parts.length == 2) {
+            String column = requireRunSortColumn(parts[0]);
+            String dir = parts[1].trim().toLowerCase();
+            if ("asc".equals(dir)) {
+                return new SortSpec(column, true);
+            }
+            if ("desc".equals(dir)) {
+                return new SortSpec(column, false);
+            }
+        }
+        throw badParam("sort", "排序参数必须是「字段,asc|desc」且字段在白名单内", sort);
+    }
+
+    private static String requireRunSortColumn(String raw) {
+        String column = raw.trim();
+        if (!RUN_SORT_COLUMNS.contains(column)) {
+            throw badParam("sort", "排序字段不在白名单内（created_at/status/finished_at）", raw);
+        }
+        return column;
+    }
+
+    /** 把已校验的列表排序片段落到实体列（Lambda 方法引用，杜绝 SQL 注入）。 */
+    private static void applyRunSort(LambdaQueryWrapper<AnalysisRunEntity> wrapper, SortSpec spec) {
+        if (spec == null) {
+            wrapper.orderByDesc(AnalysisRunEntity::getCreatedAt);
+        } else {
+            switch (spec.column()) {
+                case "created_at" -> {
+                    if (spec.ascending()) {
+                        wrapper.orderByAsc(AnalysisRunEntity::getCreatedAt);
+                    } else {
+                        wrapper.orderByDesc(AnalysisRunEntity::getCreatedAt);
+                    }
+                }
+                case "status" -> {
+                    if (spec.ascending()) {
+                        wrapper.orderByAsc(AnalysisRunEntity::getStatus);
+                    } else {
+                        wrapper.orderByDesc(AnalysisRunEntity::getStatus);
+                    }
+                }
+                case "finished_at" -> {
+                    if (spec.ascending()) {
+                        wrapper.orderByAsc(AnalysisRunEntity::getFinishedAt);
+                    } else {
+                        wrapper.orderByDesc(AnalysisRunEntity::getFinishedAt);
+                    }
+                }
+                default -> throw badParam("sort", "排序字段不在白名单内", spec.column());
+            }
+        }
+        // ★ 稳定分页：created_at 是 DATETIME(3)，同毫秒并列时以主键倒序兜底，避免跨页重复/丢失
+        wrapper.orderByDesc(AnalysisRunEntity::getId);
     }
 
     /** {@code sku_code} 回填（查不到主数据 ⇒ {@code null}，契约不要求此列恒非空）。 */

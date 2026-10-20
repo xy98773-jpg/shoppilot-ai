@@ -1,0 +1,11 @@
+# 生成物（每次运行重建，不入库）
+seed-500.sql
+run-stdout.log
+q.err
+seed.err
+app.log
+app-blackhole.log
+app-stall.log
+stall.log
+hs_err_*.log
+replay_*.log

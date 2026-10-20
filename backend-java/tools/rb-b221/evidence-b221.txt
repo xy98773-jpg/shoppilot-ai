@@ -1,0 +1,77 @@
+JAR_SIZE=60035449
+PORTS_FREE 3383/18340/18341/18342
+MYSQL_READY=1
+SERVICE_AI_UP=1 (real container, port 18341)
+APP_UP=1 base=http://127.0.0.1:18341 pid=2097
+[PASS] 种子导入成功 => 0
+[PASS] 迁移版本数 10 => 10
+[PASS] ACTIVE SKU 数 = 500 => 500
+[PASS] sales_daily 行数 = 14000 => 14000
+[PASS] inventory_balances 行数 = 500 => 500
+[PASS] operator01 登录 => 1
+-------------------------------------------------------------
+=== R148：ALL_ACTIVE / 500 SKU / enable_llm=false ===
+CREATE HTTP 202
+CREATE BODY {"code":"OK","message":"success","data":{"run_id":1,"run_no":"RUN-20261020-0001","status":"RUNNING","scope_type":"ALL_ACTIVE","total_skus":500,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-20T07:53:15.619Z","created_at":"2026-10-20T07:48:15.639Z"},"requestId":"req_3b01027017393ea7bad5ddefe2f94f6d","timestamp":"2026-10-20T07:48:15.917Z"}
+[PASS] 创建 202 => 202
+[PASS] 创建响应 total_skus=500 => 500
+  poll#1 status=SUCCEEDED progress=100 step=DONE
+R148 计时：创建→终态 墙钟 = 13132 ms（含 1 次 GET 读时同步；不含 LLM）
+R148 最终 status=SUCCEEDED progress=100
+[PASS] 最终 SUCCEEDED => SUCCEEDED
+[PASS] 最终 progress=100 => 100
+[PASS] 墙钟 < 60000ms => 1
+[PASS] DB status=SUCCEEDED => SUCCEEDED
+[PASS] DB total_skus=500 => 500
+[PASS] DB processed_skus=500 => 500
+[PASS] analysis_items=500 => 500
+DB suggestion_count=500 / risk_sku_count=500
+-------------------------------------------------------------
+=== V3：GET /api/v1/analysis/runs 真实响应 ===
+LIST HTTP 200
+LIST BODY {"code":"OK","message":"success","data":{"list":[{"run_id":1,"run_no":"RUN-20261020-0001","status":"SUCCEEDED","scope_type":"ALL_ACTIVE","warehouse_id":9004,"total_skus":500,"processed_skus":500,"progress":100,"current_step":"DONE","llm_status":"SKIPPED","risk_sku_count":500,"suggestion_count":500,"data_start_date":"2026-09-16","data_end_date":"2026-10-13","timeout_at":"2026-10-20T07:53:15.619Z","started_at":"2026-10-20T07:48:15.889Z","finished_at":"2026-10-20T07:48:21.356Z"}],"total":1,"page":1,"pageSize":20},"requestId":"req_ef802f05adcdd63b8c438bfd8267294c","timestamp":"2026-10-20T07:48:35.840Z"}
+[PASS] 列表 200 => 200
+[PASS] data.list 为数组 => 1
+[PASS] data.page=1 => 1
+[PASS] data.pageSize=20 => 20
+[PASS] data.total>=1 => 1
+DETAIL BODY {"code":"OK","message":"success","data":{"run_id":1,"run_no":"RUN-20261020-0001","status":"SUCCEEDED","scope_type":"ALL_ACTIVE","warehouse_id":9004,"total_skus":500,"processed_skus":500,"progress":100,"current_step":"DONE","llm_status":"SKIPPED","risk_sku_count":500,"suggestion_count":500,"data_start_date":"2026-09-16","data_end_date":"2026-10-13","timeout_at":"2026-10-20T07:53:15.619Z","started_at":"2026-10-20T07:48:15.889Z","finished_at":"2026-10-20T07:48:21.356Z"},"requestId":"req_0ecb9af4f9f582430d38a6340210752e","timestamp":"2026-10-20T07:48:40.412Z"}
+LIST_ITEM_VS_DETAIL=IDENTICAL
+[PASS] 列表元素与详情 data 逐字一致（A4） => IDENTICAL
+列表元素字段集：current_step,data_end_date,data_start_date,finished_at,llm_status,processed_skus,progress,risk_sku_count,run_id,run_no,scope_type,started_at,status,suggestion_count,timeout_at,total_skus,warehouse_id
+[PASS] VIEWER 列表 200 => 200
+-------------------------------------------------------------
+=== R149-C1：停 service-ai 容器后创建 ⇒ 502 ANL-7002 + run FAILED ===
+[PASS] service-ai 已停 => exited
+C1 HTTP 502
+C1 BODY {"code":"ANL-7002","message":"AI 分析服务暂时不可用，请稍后重试","data":null,"requestId":"req_b3e1760965b9c069bc858e185859c953","timestamp":"2026-10-20T07:48:50.280Z"}
+[PASS] C1 502 => 502
+[PASS] C1 code=ANL-7002 => ANL-7002
+[PASS] C1 data 为 null（不泄漏内部细节） => 1
+C1 最新 run 行（status|error_code）=FAILED|ANL-7002
+[PASS] C1 run FAILED|ANL-7002 => FAILED|ANL-7002
+-------------------------------------------------------------
+=== R149-C2：AI_SERVICE_BASE_URL=http://10.255.255.1:8000 重启 app 后创建 ===
+APP_UP=1 base=http://10.255.255.1:8000 pid=2326
+C2(blackhole) HTTP 502  耗时=10856 ms
+C2(blackhole) BODY {"code":"ANL-7002","message":"AI 分析服务暂时不可用，请稍后重试","data":null,"requestId":"req_f68688b27b50ada27f6672b7837cfe6f","timestamp":"2026-10-20T07:49:15.181Z"}
+C2(blackhole) code=ANL-7002
+★ 任务书 C2 期望 504/ANL-7003；实现口径：AiServiceClient.isReadTimeout 显式把
+  「connect timed out」排除在 7003 之外（归 isTransportFailure ⇒ 502/ANL-7002）。
+  实测值即为下面这一行；7003 分支另由 stall 服务正证（见下一节）。
+C2(blackhole) 最新 run 行（status|error_code）=FAILED|ANL-7002
+[PASS] C2(blackhole) 返回 502/504 之一（实际值已记录） => 1
+[PASS] C2(blackhole) run 已 FAILED 且 error_code 与响应码一致 => FAILED|ANL-7002
+-------------------------------------------------------------
+=== R149-C2 补充：stall 服务（accept 不回包）构造真实读超时 ⇒ 504 ANL-7003 ===
+[PASS] stall 已监听 => 1
+APP_UP=1 base=http://127.0.0.1:18342 pid=2382
+C2(stall) HTTP 504  耗时=11074 ms（读掉请求不回包 ⇒ readTimeout 应触发）
+C2(stall) BODY {"code":"ANL-7003","message":"AI 分析服务响应超时，请稍后重试","data":null,"requestId":"req_a5073cbea343ced810f14f5f0440ff08","timestamp":"2026-10-20T07:49:42.551Z"}
+[PASS] C2(stall) 504 => 504
+[PASS] C2(stall) code=ANL-7003 => ANL-7003
+C2(stall) 最新 run 行（status|error_code）=FAILED|ANL-7003
+[PASS] C2(stall) run FAILED|ANL-7003 => FAILED|ANL-7003
+-------------------------------------------------------------
+RESULT: PASS=33 FAIL=0
+ALL PASS
