@@ -1,11 +1,13 @@
 package com.shoppilot.replenishment.application;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
 import com.shoppilot.common.web.PageResult;
+import com.shoppilot.replenishment.application.dto.ReplenishmentItemBrief;
 import com.shoppilot.replenishment.application.dto.ReplenishmentItemResponse;
 import com.shoppilot.replenishment.application.dto.ReplenishmentPageQuery;
 import com.shoppilot.replenishment.application.dto.ReplenishmentReviewResponse;
@@ -13,7 +15,11 @@ import com.shoppilot.replenishment.infrastructure.persistence.entity.Replenishme
 import com.shoppilot.replenishment.infrastructure.persistence.entity.ReplenishmentReviewEntity;
 import com.shoppilot.replenishment.infrastructure.persistence.mapper.ReplenishmentItemMapper;
 import com.shoppilot.replenishment.infrastructure.persistence.mapper.ReplenishmentReviewMapper;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -149,6 +155,72 @@ public class ReplenishmentQueryService {
                 new Page<>(query.getPage(), query.getPageSize()), wrapper);
         return PageResult.of(result.getTotal(), query.getPage(), query.getPageSize(),
                 result.getRecords().stream().map(ReplenishmentReviewResponse::of).toList());
+    }
+
+
+    // =====================================================================
+    // 跨模块只读入口（M6-T02；DATABASE_DESIGN §7.2 #8 步骤 ① / ③）
+    // =====================================================================
+
+    /**
+     * 按 ID 取建议摘要（{@code §7.2 #8} 步骤 ①：校验「存在 + 属本团队」）。
+     *
+     * <p>走租户线 ⇒ 他团队的建议<b>查不到</b>（返回集合中缺失该项），调用方据此报
+     * {@code RPL-8004}（404）——不泄漏他团队是否存在。
+     *
+     * @param itemIds 建议 ID（去重、保持传入顺序）
+     * @return 命中的建议摘要（可能少于入参个数 = 有 ID 不存在或跨团队）
+     */
+    @Transactional(readOnly = true)
+    public List<ReplenishmentItemBrief> getItems(Collection<Long> itemIds) {
+        if (itemIds == null || itemIds.isEmpty()) {
+            return List.of();
+        }
+        List<Long> ids = itemIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, ReplenishmentItemEntity> byId = new HashMap<>();
+        for (ReplenishmentItemEntity entity : itemMapper.selectBatchIds(ids)) {
+            byId.put(entity.getId(), entity);
+        }
+        // 保持调用方传入顺序（建单行号与审计顺序稳定可测）
+        return ids.stream().map(byId::get).filter(Objects::nonNull)
+                .map(ReplenishmentItemBrief::of).toList();
+    }
+
+    /**
+     * 同口径候选集（{@code §7.2 #8} 步骤 ③）：{@code team_id × warehouse_id × sku_id} 下的
+     * <b>{@code APPROVED}</b> 建议（<b>含本次入参之外的其他建议</b>）。
+     *
+     * <p>该结果是冲突集 C 的<b>上界</b>；{@code purchasing} 再做「未转采购」过滤（{@code NOT EXISTS}）
+     * 得到真正的冲突集（{@code §7.2 #8} ③b）。
+     *
+     * <p>★ 入参带 {@code teamId}（与 {@code §7.2 #8} 签名一致）：租户线已按当前团队过滤，
+     * 该参数用于<b>显式同口径断言</b>（防止上下文与入参不一致时静默按另一团队查询）。
+     *
+     * @param teamId      团队（须与 {@code TeamContext} 一致）
+     * @param warehouseId 仓库
+     * @param skuIds      SKU 集合
+     * @return 命中的 {@code APPROVED} 建议摘要（按 {@code id} 升序，保证检测结果稳定）
+     */
+    @Transactional(readOnly = true)
+    public List<ReplenishmentItemBrief> findByTeamWhSkuApproved(Long teamId, Long warehouseId,
+                                                                Collection<Long> skuIds) {
+        if (teamId == null || warehouseId == null || skuIds == null || skuIds.isEmpty()) {
+            return List.of();
+        }
+        List<Long> ids = skuIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        return itemMapper.selectList(Wrappers.<ReplenishmentItemEntity>lambdaQuery()
+                        .eq(ReplenishmentItemEntity::getTeamId, teamId)
+                        .eq(ReplenishmentItemEntity::getWarehouseId, warehouseId)
+                        .in(ReplenishmentItemEntity::getSkuId, ids)
+                        .eq(ReplenishmentItemEntity::getStatus, "APPROVED")
+                        .orderByAsc(ReplenishmentItemEntity::getId))
+                .stream().map(ReplenishmentItemBrief::of).toList();
     }
 
     private static BizException com0007(String field, String message, Object rejected) {
