@@ -1,5 +1,5 @@
-JAR_SHA256=b9fbdd0a5290aa065eb2c765712e93b9b7d458fad7debc4602ddf3e81dfdb26f
-JAR_SIZE=60033694
+JAR_SHA256=b66f2020cbdb8339f888bd4ebdc56fc125178fed08666c780d235c3df11f8661
+JAR_SIZE=60033897
 PORTS_FREE 3363/18271/18282/18283
 MYSQL_READY=1
 SERVICE_AI_UP=1 (port 18282)
@@ -20,7 +20,7 @@ APP_UP=1 (port 18271)
   NOTE T1 抓包路径计数：      1 "path": "/internal/v1/analysis/runs"       1 "path": "/internal/v1/analysis/runs/1"       1 "path": "/internal/v1/analysis/runs/1/result"       1 "path": "/internal/v1/analysis:validate"       1 "path": "/internal/v1/health" 
   NOTE T1 DB: SUCCEEDED|100|DONE
   NOTE T1 读时同步日志: 0 行
-  NOTE T1 app.log 尾部: 2026-10-20T12:55:53.988+08:00  INFO 28344 --- [shoppilot-ai] [io-18271-exec-4] c.s.identity.application.AuthService     : 登录成功 userId=1003 teamId=7 role=VIEWER;2026-10-20T12:55:54.750+08:00  INFO 28344 --- [shoppilot-ai] [io-18271-exec-5] c.s.identity.application.AuthService     : 登录成功 userId=2004 teamId=8 role=OWNER;2026-10-20T12:55:59.824+08:00  WARN 28344 --- [shoppilot-ai] [io-18271-exec-9] c.s.a.i.sampling.AnalysisItemAssembler   : effective_in_transit_qty 使用临时口径（inventory_balances.in_transit_qty，无到货窗口过滤，会高估 IP）：R124，M6 落地后换回 DESIGN_BASIS §10.4 口径并重算。teamId=7 warehouseId=9004 skuCount=5;2026-10-20T12:56:00.132+08:00  INFO 28344 --- [shoppilot-ai] [io-18271-exec-9] c.s.a.application.AnalysisAppService     : 分析任务已创建：runId=1 runNo=RUN-20261020-0001 teamId=7 scopeType=ALL_ACTIVE totalSkus=5;2026-10-20T12:56:01.949+08:00  INFO 28344 --- [shoppilot-ai] [io-18271-exec-7] c.s.a.a.AnalysisResultWriteService       : 分析结果落库完成：runId=1 status=SUCCEEDED llm=SKIPPED items=5 risk=3 suggestion=3;
+  NOTE T1 app.log 尾部: 2026-10-20T14:49:30.075+08:00  INFO 28420 --- [shoppilot-ai] [io-18271-exec-4] c.s.identity.application.AuthService     : 登录成功 userId=1003 teamId=7 role=VIEWER;2026-10-20T14:49:30.858+08:00  INFO 28420 --- [shoppilot-ai] [io-18271-exec-3] c.s.identity.application.AuthService     : 登录成功 userId=2004 teamId=8 role=OWNER;2026-10-20T14:49:36.537+08:00  WARN 28420 --- [shoppilot-ai] [io-18271-exec-8] c.s.a.i.sampling.AnalysisItemAssembler   : effective_in_transit_qty 使用临时口径（inventory_balances.in_transit_qty，无到货窗口过滤，会高估 IP）：R124，M6 落地后换回 DESIGN_BASIS §10.4 口径并重算。teamId=7 warehouseId=9004 skuCount=5;2026-10-20T14:49:36.853+08:00  INFO 28420 --- [shoppilot-ai] [io-18271-exec-8] c.s.a.application.AnalysisAppService     : 分析任务已创建：runId=1 runNo=RUN-20261020-0001 teamId=7 scopeType=ALL_ACTIVE totalSkus=5;2026-10-20T14:49:38.912+08:00  INFO 28420 --- [shoppilot-ai] [o-18271-exec-10] c.s.a.a.AnalysisResultWriteService       : 分析结果落库完成：runId=1 status=SUCCEEDED llm=SKIPPED items=5 risk=3 suggestion=3;
 -------------------------------------------------------------
 === T2 R131：analyzable=false（SKU 9003 无销售）→ 422 ANL-7008 + run FAILED ===
 [PASS] T2a HTTP 422 => 422
@@ -42,7 +42,7 @@ APP_UP=1 (port 18271)
 [PASS] T3f 审计 CANCEL 恰 1 条 => 1
 [PASS] T3g 不额外记 FINISH => 0
 [PASS] T3h 重复取消 200 幂等 => 200
-[PASS] T3i cancelled_at 逐字不变 => 2026-10-20T04:56:22.143Z
+[PASS] T3i cancelled_at 逐字不变 => 2026-10-20T06:50:02.647Z
 [PASS] T3j 重放不重复审计 => 1
 [PASS] T3k RUNNING→取消 200 => 200|CANCELLED
 [PASS] T3l 取消后 items 仍 409 ANL-7012 => 409|ANL-7012
@@ -72,7 +72,7 @@ APP_UP=1 (port 18271)
 [PASS] T6d pageSize=abc ⇒ 400 COM-0001 => 400|COM-0001
 [PASS] T6e field=page_size（snake_case） => page_size
 [PASS] T6f pageSize=0 ⇒ 400 COM-0001 => 400|COM-0001
-  NOTE T6g pageSize=0 的 details.field 实测=[pageSize]（R142 handler=page_size，手工 badParam 可能是 pageSize——观察项）
+  NOTE T6g pageSize=0 的 details.field 实测=[page_size]（R142 handler=page_size，手工 badParam 可能是 pageSize——观察项）
 [PASS] T6h page=0 ⇒ 400 COM-0001 => 400|COM-0001
   NOTE T6i page=0 的 details.field 实测=[page]
 [PASS] T6j risk_level 非法 ⇒ 400 COM-0001 => 400|COM-0001
