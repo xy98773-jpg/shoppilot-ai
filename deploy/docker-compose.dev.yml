@@ -99,6 +99,9 @@ services:
       JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx512m}
       AI_INTERNAL_TOKEN: ${AI_INTERNAL_TOKEN:-changeme_internal_token}
       AI_SERVICE_BASE_URL: ${AI_SERVICE_BASE_URL:-http://service-ai:8000}
+      # M4-B20.4.1（R143）：分析轮询 / timeout_at 超时扫描开关。
+      # application.yml 默认 false 是为了护住 34+ 个 @SpringBootTest；开发态显式打开。
+      ANALYSIS_POLL_ENABLED: ${ANALYSIS_POLL_ENABLED:-true}
       # M2-T02：JWT 签名密钥（DESIGN_BASIS §15 D-01 / ADR-001-12 风险表：密钥绝不入业务代码）。
       # 本地开发默认值仅为占位；生产/CI 必须通过环境变量覆盖（密钥不得入仓）。
       JWT_SECRET: ${JWT_SECRET:-dev-only-placeholder-jwt-secret-change-me-32bytes}

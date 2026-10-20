@@ -750,6 +750,28 @@ class AnalysisResultWriteServiceTest {
         assertEquals(runId, response.runId());
         assertEquals(AnalysisRunStatus.RUNNING.name(), runRow(runId).get("status"),
                 "同步失败不得改变库内状态");
+        // ★ R143（B20.4.1 F2）：必须证明「同步确实被调用过」——否则「同步失败后静默降级」
+        //   与「根本没同步」不可区分。本缺陷正是被这条弱断言漏掉：
+        //   getRunStatus 用 == 比较字符串引用恒 false ⇒ fetchStatus 从未被调用，本用例照样绿。
+        org.mockito.Mockito.verify(aiServiceClient, org.mockito.Mockito.times(1)).fetchStatus(anyLong());
+    }
+
+    @Test
+    @DisplayName("R143：GET /runs/{id} 读时同步把 COMPLETED 推进为 SUCCEEDED 并落库（修复前必红）")
+    void readTimeSyncAdvancesRunToSucceeded() {
+        long runId = insertRunningRun("RUN-READ-SYNC", 2);
+        stubStatus(runId, "COMPLETED", 100, "DONE", 2, 2);
+        stubResult(runId, LlmStatus.SUCCEEDED.name(),
+                resultItem(SKU_A, WAREHOUSE), resultItem(SKU_B, WAREHOUSE));
+
+        AnalysisRunStatusResponse response = appService.getRunStatus(runId);
+
+        org.mockito.Mockito.verify(aiServiceClient, org.mockito.Mockito.times(1)).fetchStatus(anyLong());
+        assertEquals("SUCCEEDED", response.status(),
+                "读时同步必须把 Python 的 COMPLETED 推进为本地 SUCCEEDED（R143）");
+        assertEquals(100, response.progress(), "progress 取 Python 档位值（DONE=100）");
+        assertEquals(2L, count("analysis_items"), "COMPLETED 必须落库（2 个 SKU）");
+        assertEquals("SUCCEEDED", runRow(runId).get("status"), "库内状态必须已推进");
     }
 
     @Test
@@ -778,8 +800,14 @@ class AnalysisResultWriteServiceTest {
     @Test
     @DisplayName("R135：createRun 落库的 total_skus 是装配后实际数（ALL_ACTIVE 不再是 0）")
     void totalSkusIsAssembledCount() {
-        AnalysisRunStatusResponse response = appService.getRunStatus(
-                createAllActiveRun("idem-r135"));
+        long runId = createAllActiveRun("idem-r135");
+        // ★ R143（B20.4.1）：修复读时同步后，本用例会真的向 Python 问一次状态。
+        //   此前因 == 恒 false 从未发问，mock 的 fetchStatus 未打桩也不会暴露；
+        //   现按「仍在跑」打桩，保持本用例只验证 total_skus 口径（R135）。
+        stubStatus(runId, "RUNNING", 20, "STATS", 2, 0);
+
+        AnalysisRunStatusResponse response = appService.getRunStatus(runId);
+
         assertEquals(2, response.totalSkus(),
                 "本夹具有 2 个 ACTIVE SKU（SKU_A / SKU_B；SKU_INACTIVE 不计）"
                         + " ⇒ total_skus 应为装配后实际数而非 0（R135）");

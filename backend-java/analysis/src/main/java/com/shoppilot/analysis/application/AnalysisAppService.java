@@ -359,8 +359,12 @@ public class AnalysisAppService {
         if (run == null) {
             throw new BizException(ErrorCodes.ANL_7005, "分析任务不存在");
         }
-        if (run.getStatus() == AnalysisRunStatus.PENDING.name()
-                || run.getStatus() == AnalysisRunStatus.RUNNING.name()) {
+        // ★ R143（B20.4.1 F1）：必须用 equals，**不能**用 ==。MyBatis 从 ResultSet 读出的是
+        //   运行时新建的 String，与 Enum.name() 的实例不是同一引用 ⇒ == 恒为 false ⇒
+        //   读时同步永不触发（实测：polling 关闭时创建 run，120s 仍 RUNNING|5|VALIDATING，
+        //   抓包零 GET /runs/{id}）。左常量右变量：run.getStatus() 为 null 时不 NPE。
+        if (AnalysisRunStatus.PENDING.name().equals(run.getStatus())
+                || AnalysisRunStatus.RUNNING.name().equals(run.getStatus())) {
             // ★ 同步失败不外抛：syncFromPython 内部已 try/catch 并记 WARN
             syncService.syncFromPython(run);
             // 同步可能已推进状态（COMPLETED → 落库 → 终态），必须重新读回

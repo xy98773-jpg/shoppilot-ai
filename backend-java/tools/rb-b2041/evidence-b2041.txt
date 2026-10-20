@@ -1,0 +1,46 @@
+JAR_SIZE=60033696
+PORTS_FREE 3382/18331/18330
+MYSQL_READY=1
+SERVICE_AI_UP=1 (real container, port 18330)
+APP_UP=1 (port 18331)  ANALYSIS_POLL_ENABLED=false
+[PASS] 种子导入成功 => 0
+[PASS] 迁移版本数 10 => 10
+[PASS] operator01 登录 => 1
+-------------------------------------------------------------
+=== 创建 run（ALL_ACTIVE / enable_llm=false，避免真实 LLM 费用）===
+CREATE HTTP 202
+CREATE BODY {"code":"OK","message":"success","data":{"run_id":1,"run_no":"RUN-20261020-0001","status":"RUNNING","scope_type":"ALL_ACTIVE","total_skus":5,"processed_skus":0,"progress":5,"current_step":"VALIDATING","llm_status":"NOT_REQUESTED","timeout_at":"2026-10-20T04:35:30.616Z","created_at":"2026-10-20T04:30:30.649Z"},"requestId":"req_bf6e6c1aa4c8ba23d4dfc9fa20e771ea","timestamp":"2026-10-20T04:30:30.806Z"}
+[PASS] 创建 202 => 202
+run_id=1  创建后状态=RUNNING/progress=5/step=VALIDATING
+[PASS] 创建后未落终态（RUNNING，待读时同步推进） => RUNNING
+-------------------------------------------------------------
+=== 只靠 GET /runs/{id} 轮询推进（不启动定时轮询）===
+  poll#1 status=SUCCEEDED progress=100 step=DONE
+轮询次数=1 最终 status=SUCCEEDED
+[PASS] 最终 SUCCEEDED（读时同步推进） => SUCCEEDED
+[PASS] 最终 progress=100 => 100
+-------------------------------------------------------------
+=== DB 终态与落库 ===
+[PASS] DB status => SUCCEEDED
+[PASS] DB progress => 100
+analysis_items 行数=5 ；total_skus=5（数据不足的 SKU 可能不出条目，故只断言 >0）
+[PASS] analysis_items > 0 => 1
+-------------------------------------------------------------
+=== 出站调用证据（service-ai uvicorn access log）===
+--- GET /internal/v1/analysis/runs/{id}（状态查询，前 6 行）---
+INFO:     172.17.0.1:57870 - "GET /internal/v1/analysis/runs/1 HTTP/1.1" 200 OK
+出站状态查询次数=1 ；我方轮询 GET 次数=1
+[PASS] 出站状态查询次数 == 轮询次数（证明无定时轮询掺入） => 1
+--- 其余出站调用（validate / create / result / cancel）---
+INFO:     172.17.0.1:57854 - "POST /internal/v1/analysis%3Avalidate HTTP/1.1" 200 OK
+INFO:     172.17.0.1:57854 - "POST /internal/v1/analysis/runs HTTP/1.1" 202 Accepted
+INFO:     172.17.0.1:57870 - "GET /internal/v1/analysis/runs/1/result HTTP/1.1" 200 OK
+[PASS] 出现 POST /internal/v1/analysis:validate => 1
+[PASS] 出现 POST /internal/v1/analysis/runs  => 1
+[PASS] 出现 GET  .../result（COMPLETED 后取结果） => 1
+-------------------------------------------------------------
+=== 反向证据：定时轮询未装配 ===
+[PASS] app.log 无轮询扫描日志 => 0
+-------------------------------------------------------------
+RESULT: PASS=15 FAIL=0
+ALL PASS
