@@ -161,4 +161,26 @@ public class ReplenishmentItemController {
 
         return ResponseEntity.ok(ApiResponse.success(itemService.reject(id, request)));
     }
+
+    /**
+     * 作废（{@code POST /items/{id}/cancel}）：{@code SUGGESTED|APPROVED → CANCELLED}。
+     *
+     * <p>★ 合法来源状态<b>只有</b> {@code SUGGESTED} 与 {@code APPROVED}；
+     * {@code PENDING_REVIEW} 不能直接作废（须先 withdraw），返回 422 {@code RPL-8001}
+     * 且提示「请先撤回再作废」。
+     *
+     * <p>★ 不要求 {@code expected_version}（契约 §10.8 cancel 行只列 {@code RPL-8001}）。
+     *
+     * @param id      建议 ID（当前团队）
+     * @param request 可空请求体（可选 {@code comment}）
+     * @return 200 + 动作结果（含 {@code closed_at}/{@code review_id}）
+     */
+    @PostMapping("/items/{id}/cancel")
+    @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
+    public ResponseEntity<ApiResponse<ReplenishmentReviewActionResponse>> cancel(
+            @PathVariable("id") long id,
+            @RequestBody(required = false) ReviewCommandRequest request) {
+
+        return ResponseEntity.ok(ApiResponse.success(itemService.cancel(id, commentOf(request))));
+    }
 }

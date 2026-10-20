@@ -77,6 +77,13 @@ public class ReplenishmentItemService {
     private static final String STATUS_PENDING_REVIEW = "PENDING_REVIEW";
     private static final String STATUS_APPROVED = "APPROVED";
     private static final String STATUS_REJECTED = "REJECTED";
+    private static final String STATUS_CANCELLED = "CANCELLED";
+
+    /**
+     * 可作废的来源状态（{@code §9.11} 状态机原文）：只有 {@code SUGGESTED} 与 {@code APPROVED}。
+     * ★ {@code PENDING_REVIEW → CANCELLED} <b>不存在</b>（该态只能 → APPROVED/REJECTED/SUGGESTED/SUPERSEDED）。
+     */
+    private static final Set<String> CANCELLABLE_STATUS = Set.of("SUGGESTED", "APPROVED");
 
     /** 审核意见列宽（字符）。 */
     private static final int COMMENT_MAX_LENGTH = 500;
@@ -453,6 +460,71 @@ public class ReplenishmentItemService {
         log.info("补货建议已驳回 id={} reviewId={}", id, reviewId);
         return toActionResponse(requireItem(id), reviewId, "REJECT",
                 STATUS_PENDING_REVIEW, STATUS_REJECTED);
+    }
+
+    // =====================================================================
+    // 作废（M5-T06，F-RPL-05）
+    // =====================================================================
+
+    /**
+     * 作废建议（{@code POST /items/{id}/cancel}）：{@code SUGGESTED|APPROVED → CANCELLED}（终态）。
+     *
+     * <h2>★ 合法来源状态只有两个（{@code §9.11} 状态机原文）</h2>
+     * <ul>
+     *   <li>{@code SUGGESTED → CANCELLED} ✅</li>
+     *   <li>{@code APPROVED → CANCELLED} ✅</li>
+     *   <li>★ {@code PENDING_REVIEW → CANCELLED} <b>不存在</b>——待审批不能直接作废，
+     *       必须先 {@code withdraw} 撤回再作废。此时返回 422 {@code RPL-8001}，
+     *       且提示语明确写出「请先撤回再作废」（{@code §5.59} 裁定 1）。</li>
+     * </ul>
+     * 其余状态（{@code CONVERTED}/{@code REJECTED}/{@code SUPERSEDED}/{@code CANCELLED}）同样 422。
+     *
+     * <h2>★ 不要求 {@code expected_version}（{@code §5.59} 裁定 2）</h2>
+     * <p>契约 {@code §10.8} 的 cancel 行只列 {@code RPL-8001}，未列 {@code RPL-8003}；
+     * 故用服务端 {@code selectById} 读到的版本做 {@code @Version} CAS。
+     * <b>但 CAS 仍必须保留</b>：返回 0 行时用锁定读重查判因——
+     * 已是 {@code CANCELLED} ⇒ 422（重复作废，语义上就是「状态不允许」）；
+     * 其余 ⇒ 409 {@code RPL-8003}（并发修改）。
+     *
+     * <p>请求体可空（可选 {@code {"comment":"..."}}，≤500）；无 comment ⇒ reviews 存 NULL。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ReplenishmentReviewActionResponse cancel(long id, String comment) {
+        validateComment(comment);
+        ReplenishmentItemEntity entity = requireItem(id);
+        String fromStatus = entity.getStatus();
+        if (STATUS_PENDING_REVIEW.equals(fromStatus)) {
+            // ★ 状态机不允许 PENDING_REVIEW → CANCELLED；提示语必须给出可执行动作
+            throw new BizException(ErrorCodes.RPL_8001, "当前状态不允许作废，请先撤回再作废");
+        }
+        if (!CANCELLABLE_STATUS.contains(fromStatus)) {
+            throw new BizException(ErrorCodes.RPL_8001, "当前状态不允许作废");
+        }
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        entity.setStatus(STATUS_CANCELLED);
+        entity.setClosedAt(now);
+        entity.setUpdatedBy(currentUserId());
+        int affected = itemMapper.updateById(entity);
+        if (affected == 0) {
+            ReplenishmentItemEntity latest = reloadForConflict(id);
+            if (STATUS_CANCELLED.equals(latest.getStatus())) {
+                throw new BizException(ErrorCodes.RPL_8001, "当前状态不允许作废");
+            }
+            throw new BizException(ErrorCodes.RPL_8003, "建议已被他人修改，请刷新后重试");
+        }
+
+        long reviewId = insertReview(entity, "CANCEL", fromStatus, STATUS_CANCELLED, comment, now);
+        Map<String, Object> before = new LinkedHashMap<>();
+        before.put("status", fromStatus);
+        before.put("qty", ReplenishmentItemResponse.qtyText(entity.getQty()));
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("status", STATUS_CANCELLED);
+        after.put("qty", ReplenishmentItemResponse.qtyText(entity.getQty()));
+        recordAuditEvent(id, entity.getTeamId(), AuditAction.REPLENISHMENT_CANCEL, before, after,
+                "status: " + fromStatus + " → " + STATUS_CANCELLED);
+        log.info("补货建议已作废 id={} from={} reviewId={}", id, fromStatus, reviewId);
+        return toActionResponse(requireItem(id), reviewId, "CANCEL", fromStatus, STATUS_CANCELLED);
     }
 
     // =====================================================================

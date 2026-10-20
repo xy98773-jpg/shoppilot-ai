@@ -11,7 +11,11 @@ import com.shoppilot.replenishment.infrastructure.persistence.entity.Replenishme
 import com.shoppilot.replenishment.infrastructure.persistence.mapper.ReplenishmentItemMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -63,6 +67,11 @@ public class ReplenishmentGenerationService {
 
     /** 初始状态常量（{@code ANALYSIS_CONTRACT §9.2}）。 */
     private static final String STATUS_SUGGESTED = "SUGGESTED";
+
+    /** 可被新一轮分析取代的旧状态（{@code §9.11} 补充规则 2：只有这两个）。 */
+    private static final Set<String> SUPERSEDABLE_STATUS = Set.of("SUGGESTED", "PENDING_REVIEW");
+
+    private static final String STATUS_SUPERSEDED = "SUPERSEDED";
 
     private final AnalysisSnapshotQueryService snapshotQueryService;
     private final SkuQueryService skuQueryService;
@@ -129,16 +138,88 @@ public class ReplenishmentGenerationService {
         Map<Long, SkuQueryService.ProcurementInfo> procurement = skuQueryService.listProcurementInfo(skuIds);
 
         LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         Long operatorId = currentUserId();
-        int created = 0;
+        List<ReplenishmentItemEntity> inserted = new ArrayList<>();
         for (AnalysisSnapshotQueryService.GenerationItem item : source.items()) {
             ReplenishmentItemEntity entity = toEntity(source, item, procurement.get(item.skuId()),
                     today, operatorId);
             itemMapper.insert(entity);
-            created++;
+            inserted.add(entity);
         }
-        log.info("补货建议生成完成：runId={} created={}", runId, created);
-        return new ReplenishmentGenerationResult(runId, created, 0, false);
+        // ★ M5-T06：新建议全部插入之后，同一事务内把「同 SKU×仓库」的未审批旧建议置 SUPERSEDED
+        supersedeOldSuggestions(source.runId(), inserted, now, operatorId);
+        log.info("补货建议生成完成：runId={} created={}", runId, inserted.size());
+        return new ReplenishmentGenerationResult(runId, inserted.size(), 0, false);
+    }
+
+    /**
+     * 新 run 取代旧建议（M5-T06，{@code §5.59} 裁定 3–5）。
+     *
+     * <p>对每条<b>新建议</b>，把同 {@code (team_id, sku_id, warehouse_id)} 下<b>其它</b>且状态 ∈
+     * {@code {SUGGESTED, PENDING_REVIEW}} 的建议置 {@code SUPERSEDED} + {@code superseded_by_item_id=新建议 id}
+     * + {@code closed_at=now(UTC)}。
+     *
+     * <h2>三条硬口径</h2>
+     * <ul>
+     *   <li><b>{@code APPROVED}/{@code CONVERTED}/{@code REJECTED} 一律不动</b>：
+     *       {@code §9.11} 补充规则 2/3——已产生业务后果的状态不得被数据更新覆盖；</li>
+     *   <li><b>不写 {@code replenishment_reviews}</b>：{@code ReviewAction} 只有 5 值、无 {@code SUPERSEDE}，
+     *       系统派生动作不是人工审核记录（自造第 6 值会撞 {@code ck_rr_action}）；</li>
+     *   <li><b>不写审计</b>：{@code §9.17} 的 35 条 {@code AuditAction} 无「取代」动作，
+     *       也不得用 {@code REPLENISHMENT_CANCEL} 顶替（语义不同）。</li>
+     * </ul>
+     *
+     * <p>★ 写路径仍走 {@code updateById(entity)}（{@code @Version} CAS），<b>不用</b>
+     * {@code update(null, wrapper)}。若某条旧建议刚被他人审批/撤回导致版本不匹配（影响 0 行），
+     * <b>跳过该条</b>而不是让整批生成失败——取代是派生动作，不该阻塞新建议落库。
+     *
+     * <p>候选集用一次 {@code IN} 查询（sku × warehouse 的笛卡尔近似）后在内存按
+     * {@code (skuId, warehouseId)} 精确配对，避免 N+1。
+     */
+    private void supersedeOldSuggestions(Long runId, List<ReplenishmentItemEntity> inserted,
+                                         LocalDateTime now, Long operatorId) {
+        if (inserted.isEmpty()) {
+            return;
+        }
+        Map<String, Long> newIdByKey = new HashMap<>();
+        Set<Long> skuIds = new HashSet<>();
+        Set<Long> warehouseIds = new HashSet<>();
+        for (ReplenishmentItemEntity item : inserted) {
+            newIdByKey.put(keyOf(item.getSkuId(), item.getWarehouseId()), item.getId());
+            skuIds.add(item.getSkuId());
+            warehouseIds.add(item.getWarehouseId());
+        }
+
+        List<ReplenishmentItemEntity> candidates = itemMapper.selectList(
+                Wrappers.<ReplenishmentItemEntity>lambdaQuery()
+                        .in(ReplenishmentItemEntity::getSkuId, skuIds)
+                        .in(ReplenishmentItemEntity::getWarehouseId, warehouseIds)
+                        .in(ReplenishmentItemEntity::getStatus, SUPERSEDABLE_STATUS)
+                        .ne(ReplenishmentItemEntity::getRunId, runId));
+
+        int superseded = 0;
+        for (ReplenishmentItemEntity old : candidates) {
+            Long newId = newIdByKey.get(keyOf(old.getSkuId(), old.getWarehouseId()));
+            if (newId == null) {
+                continue;
+            }
+            old.setStatus(STATUS_SUPERSEDED);
+            old.setSupersededByItemId(newId);
+            old.setClosedAt(now);
+            old.setUpdatedBy(operatorId);
+            int affected = itemMapper.updateById(old);
+            if (affected == 0) {
+                log.info("旧建议版本已变（并发审批/撤回），跳过取代：id={}", old.getId());
+                continue;
+            }
+            superseded++;
+        }
+        log.info("旧建议取代完成：runId={} superseded={}", runId, superseded);
+    }
+
+    private static String keyOf(Long skuId, Long warehouseId) {
+        return skuId + ":" + warehouseId;
     }
 
     /**
