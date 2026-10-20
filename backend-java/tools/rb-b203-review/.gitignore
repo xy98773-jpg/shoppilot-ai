@@ -1,0 +1,9 @@
+app.log
+*.log
+proxy.out
+storage/
+q.err
+body.json
+headers.txt
+gs.txt
+seed.err

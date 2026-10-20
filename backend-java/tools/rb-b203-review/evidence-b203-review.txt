@@ -1,0 +1,109 @@
+JAR_SHA256=989a5e032065f70e2ec2517c572189edca40feab8400f9485760a0e68775f7e3
+JAR_SIZE=60030587
+PORTS_FREE 3362/18270/18280/18281
+MYSQL_READY=1
+SERVICE_AI_UP=1 (real container, port 18280)
+CAPTURE_PROXY_UP=1 (18281 -> 18280)
+APP_UP=1 (port 18270)
+-------------------------------------------------------------
+=== S 结构面 ===
+[PASS] fat jar 内含 V1.0.9__analysis.sql => 1
+[PASS] 迁移版本数（10） => 10
+[PASS] 种子导入成功 => 0
+[PASS] operator01 登录 => 1
+[PASS] viewer01 登录 => 1
+[PASS] owner8 登录 => 1
+-------------------------------------------------------------
+=== T1 创建 → 终态 → 真实落库（R139 必须由 writeService 写出） ===
+[PASS] T1a 创建 202 => 202
+[PASS] T1b 终态 SUCCEEDED => SUCCEEDED
+[PASS] T1c items 落库 5 行 => 5
+  NOTE run_id=1 / items=5
+-------------------------------------------------------------
+=== R139 三列结构（真实落库后 SQL 侧核） ===
+[PASS] R139-1 risk_detail_json 全部是 JSON 对象 => 0
+[PASS] R139-2 risk_detail_json 全部含 findings 数组 => 0
+[PASS] R141-1 risk_detail_json 不得含 warnings 键 => 0
+[PASS] R139-3 data_quality_json 全部是 JSON 对象 => 0
+[PASS] R139-4 data_quality_json 四键齐全 => 0
+[PASS] R139-5 旧键 grade 不残留 => 0
+[PASS] R141-2 旧键 warnings 不残留于 data_quality_json => 0
+[PASS] R140 outlier_days 全部为 JSON null => 0
+[PASS] R139-6 llm_detail_json 五键齐全 => 0
+[PASS] R139-7 旧键 llm_status 不残留 => 0
+[PASS] R139-8 prompt_version 与 run 顶层一致 => 0
+[PASS] R139-9 model_name 与 run 顶层一致 => 0
+[PASS] R140-2 missing_days 逐行 = max(0, 28−valid_days) => 0
+  NOTE missing_days>0 的行数=3（>0 即覆盖非零分支；=0 则说明种子 valid_days 全 28）
+[PASS] R139-10 level = valid_days 与等级自洽（不做枚举外断言） => 0
+-------------------------------------------------------------
+=== Q1 成功响应形态（§11.6） ===
+[PASS] Q1a HTTP 200 => 200
+[PASS] Q1b data 含 list 键 => 1
+[PASS] Q1c data 不含 items 键（铁律 list） => 0
+[PASS] Q1d total=5 => 5
+[PASS] Q1e page=1 / pageSize=20 => 1|20
+[PASS] Q1f list 长度 5 => 5
+[PASS] Q1g requestId 非空（信封完整） => 1
+  NOTE Q1 首个元素：SKU-A / risk=HIGH / avg=6.000
+-------------------------------------------------------------
+=== Q2 字段级（数量列字符串、cv 4 位、sku_code、JSON 拆解） ===
+[PASS] Q2a 数量列字符串 3 位 / cv 4 位 => OK
+[PASS] Q2b sku_code 全部回填非空 => 0
+[PASS] Q2c sku_code 与 skus 主数据逐条一致 => 0
+[PASS] Q2d 三个 JSON 列解析为对象/数组且 dq 四键 => OK
+[PASS] Q2e risk_findings 元素含 rule_code => 0
+[PASS] Q2f sales_window_days=28（params） => 0
+-------------------------------------------------------------
+=== Q3 过滤 / 排序 / 分页 ===
+[PASS] Q3a risk_level=HIGH total = DB HIGH 数 => 2
+[PASS] Q3b 过滤结果全为 HIGH => 0
+[PASS] Q3c risk_level=LOW total = DB LOW 数（非全量 5） => 0
+[PASS] Q3d sort=avg_daily_sales,desc 降序且 null 最后 => OK
+[PASS] Q3e sort 单字段默认 asc（开发未覆盖） => OK
+[PASS] Q3f page=2 pageSize=2 ⇒ 2 条 / total=5 => 2|5
+[PASS] Q3g pageSize=200 边界放行 => 200
+-------------------------------------------------------------
+=== Q4 参数校验（负向，开发未覆盖） ===
+[PASS] Q4a 非法 sort ⇒ 400 COM-0001 => 400|COM-0001
+[PASS] Q4b 非法方向 ⇒ 400 COM-0001 => 400|COM-0001
+[PASS] Q4c pageSize=201 ⇒ 400 COM-0001 => 400|COM-0001
+[PASS] Q4d pageSize=0 ⇒ 400 COM-0001（开发未覆盖） => 400|COM-0001
+[PASS] Q4e page=0 ⇒ 400 COM-0001（开发未覆盖） => 400|COM-0001
+[PASS] Q4f risk_level 非法值 ⇒ 400 COM-0001（开发未覆盖） => 400|COM-0001
+  NOTE Q4g 小写 risk_level=low 实测=400/COM-0001（大小写口径观察项，不作 FAIL）
+-------------------------------------------------------------
+=== Q5 就绪 / 存在性 / 权限 ===
+[PASS] Q5a progress=99 ⇒ 409 ANL-7012（边界） => 409|ANL-7012
+[PASS] Q5b 409 data 三字段 => 99
+[PASS] Q5c 409 data.run_id => 2
+[PASS] Q5d 409 data.status => RUNNING
+[PASS] Q5e 终态空 items ⇒ 200 => 200
+[PASS] Q5f 空 items ⇒ total=0 / list=[] => 0|0
+[PASS] Q5g 不存在 ⇒ 404 ANL-7005 => 404|ANL-7005
+[PASS] Q5h 跨团队（team8 查 team7 run）⇒ 404 ANL-7005 => 404|ANL-7005
+[PASS] Q5i 404 data=null（不泄漏） => null
+[PASS] Q5j VIEWER 可查 200 => 200
+[PASS] Q5k 未登录 ⇒ 401（开发未覆盖） => 401
+-------------------------------------------------------------
+=== Q6 租户线（items 表级隔离，开发未覆盖） ===
+[PASS] Q6a SQL 直插后表内 6 行 => 6
+[PASS] Q6b 快照仍只返回 5 行（租户线过滤 team_id=8） => 5
+[PASS] Q6c 快照不含 team_id=8 的那一行（sku 9002 + 仓 9103） => 0
+-------------------------------------------------------------
+=== Q7 warnings 非空拆出（开发只断言空数组） ===
+[PASS] Q7a warnings 非空行 DB 长度与快照一致 => 1|
+  NOTE Q7 warnings 内容：1|可用窗口仅 28 天（< 30 天），滞销判定按 28 天窗口执行
+-------------------------------------------------------------
+=== Q8 默认排序稳定性（重复查询同一顺序） ===
+[PASS] Q8a 两次默认查询顺序一致（id asc 稳定） => 1,2,3,4,5
+-------------------------------------------------------------
+=== Q9 JSON 内容与 DB 逐条一致 ===
+[PASS] Q9a risk_findings / llm_evidence 数量与 DB 一致 => OK
+[PASS] Q9b findings[0] 的 rule_code/result 与 DB 一致 => OK
+-------------------------------------------------------------
+=== Q10 page 非数字（观察项，不作 FAIL） ===
+  NOTE Q10 page=abc 实测 HTTP=500 code=COM-0002（契约 §2.3 期望 400 COM-0001；若 500 则为 common 全局出口既有缺口）
+-------------------------------------------------------------
+RB203_CHECK_TOTAL=67  RB203_FAIL_COUNT=0  RB203_RESULT=ALL PASS
+RUN_ID=1
