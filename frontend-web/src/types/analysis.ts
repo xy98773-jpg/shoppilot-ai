@@ -152,6 +152,60 @@ export interface AnalysisRunStatusResponse {
 }
 
 // ---------------------------------------------------------------------------
+// 运行列表（`GET /analysis/runs`，B22.1）
+// ---------------------------------------------------------------------------
+
+/**
+ * 列表单行（严格复用后端 `AnalysisRunStatusResponse`，不新建平行 DTO）。
+ *
+ * ★ 服务端 `@JsonInclude(NON_NULL)`：中间态缺省字段**不存在**，不要用 0 兜底。
+ * ★ 数量字段（`total_skus` / `processed_skus` / `progress` / `risk_sku_count`）
+ *   在该端点是 **number**，原样直显，禁止 `parseFloat()` 后再 `toFixed()`。
+ */
+export interface AnalysisRunListItem {
+  run_id: number
+  run_no: string
+  status: AnalysisRunStatus
+  scope_type: AnalysisScopeType
+  warehouse_id?: number | null
+  total_skus: number
+  processed_skus: number
+  progress: number
+  current_step?: string | null
+  llm_status?: AnalysisLlmStatus | null
+  llm_error_message?: string | null
+  risk_sku_count?: number | null
+  suggestion_count?: number | null
+  data_start_date?: string | null
+  data_end_date?: string | null
+  timeout_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  /**
+   * ★ 后端 `AnalysisRunStatusResponse` **暂未返回**该字段（B22.1-A4：列表复用该 DTO、
+   *   不得只返回子集），项目负责人待裁决；前端只做可选渲染，不以本地时间伪造。
+   */
+  created_at?: string | null
+}
+
+/**
+ * 列表查询参数（`GET /analysis/runs`）。
+ *
+ * - `page` 从 1 起，`pageSize` 上限 200；
+ * - `date_from` / `date_to` 为 `yyyy-MM-dd`，按 `created_at` 过滤；
+ * - `sort` 白名单 `created_at|status|finished_at` + `asc|desc`；
+ *   **默认不传**（服务端按 `created_at,desc`）。
+ */
+export interface AnalysisRunsQuery {
+  page: number
+  pageSize: number
+  status?: string
+  date_from?: string
+  date_to?: string
+  sort?: string
+}
+
+// ---------------------------------------------------------------------------
 // 结果明细（`GET /analysis/runs/{id}/items`）
 // ---------------------------------------------------------------------------
 

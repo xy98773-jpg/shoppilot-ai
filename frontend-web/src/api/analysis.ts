@@ -4,30 +4,37 @@
 // （前缀 `/api/v1/analysis`，`http.ts` 已带 `/api/v1`）。
 //
 // 已实现端点（契约 §11.5 / §11.6）：
+//   - GET  /analysis/runs              列表（任何已登录成员，分页 + 状态/日期筛选）
 //   - POST /analysis/runs              创建（OPERATOR+，202，必带 Idempotency-Key）
 //   - GET  /analysis/runs/{id}         状态与进度（任何已登录成员）
 //   - GET  /analysis/runs/{id}/items   结果快照（progress<100 ⇒ 409 ANL-7012）
 //   - POST /analysis/runs/{id}/cancel  取消（OPERATOR+，200；无请求体、幂等键非必填）
 //
-// ★ 列表 `GET /analysis/runs` **尚不存在**（属 B22）。`listAnalysisRuns` 是 M1 骨架遗留，
-//   本批**不调用**它（列表页只用本地「最近创建」+ 直接输入 run_id 跳转）。
+// ★ 列表 `GET /analysis/runs` 由 B22.1 交付；`list` 元素与 `GET /runs/{id}` 同构。
 // ★ 本层只搬运参数与结果，不做任何数量计算（口径铁律 ④）。
 import http, { postWithIdempotency, type ReplayableResult } from './http'
-import type { PageQuery, PageResult } from '@/types/common'
+import type { PageResult } from '@/types/common'
 import type {
   AnalysisItemsQuery,
   AnalysisItemView,
-  AnalysisRun,
+  AnalysisRunListItem,
+  AnalysisRunsQuery,
   AnalysisRunStatusResponse,
   CancelRunResponse,
   CreateAnalysisRunRequest,
   CreateRunResponse,
 } from '@/types/analysis'
 
-// TODO: 分析任务列表、详情相关接口。
-// ★ 后端尚无 `GET /analysis/runs`（B22），保留既有骨架签名，本批不调用。
-export function listAnalysisRuns(query: PageQuery): Promise<PageResult<AnalysisRun>> {
-  return http.get<unknown, PageResult<AnalysisRun>>('/analysis/runs', { params: query })
+/**
+ * 分析任务列表（`GET /analysis/runs`，任何已登录成员）。
+ *
+ * ★ 分页 + 可选 `status` / `date_from` / `date_to`（按 `created_at` 过滤）+
+ *   `sort`（白名单，默认不传即服务端 `created_at,desc`）。
+ */
+export function listAnalysisRuns(
+  query: AnalysisRunsQuery,
+): Promise<PageResult<AnalysisRunListItem>> {
+  return http.get<unknown, PageResult<AnalysisRunListItem>>('/analysis/runs', { params: query })
 }
 
 /**
