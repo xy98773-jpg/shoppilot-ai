@@ -575,3 +575,107 @@ def test_risk_rules_are_pure_functions() -> None:
     first = evaluate_risks(stats, item, params, DATE_TO)
     second = evaluate_risks(stats, item, params, DATE_TO)
     assert first.model_dump() == second.model_dump()
+
+
+# --------------------------------------------------------------------------- #
+# 三态补缺（M4-T15 / B21a）：每条规则补齐「命中 / 未命中 / 数据不足」
+#
+# 既有用例已覆盖 STOCKOUT/LOWSTOCK/OVERSTOCK/SLOWMOVING 的命中与未命中、SALESANOMALY
+# 的命中与未命中；本段只补缺口：
+# - 库存类三条与滞销、销量异常在 `D is None` 时的「数据不足」态（规则不输出 finding，
+#   只输出 `R-DATAINSUFFICIENT`，`§5.30 #13`）；
+# - `R-STOCKOUT` 的 `on_hand == D × L` 边界、`R-LOWSTOCK` 的 `IP == D × (L+R)` 边界；
+# - `R-SALESANOMALY` 的「近期下跌」命中方向；
+# - `R-DATAINSUFFICIENT` 的「有足够天数但零销量」未命中态（区别于 `n < MIN_DAYS`）。
+# --------------------------------------------------------------------------- #
+def test_stockout_boundary_at_leadtime_is_medium() -> None:
+    # D=5、L=7 ⇒ on_hand=35 恰好等于 D×L，按 `<= L` 命中 MEDIUM（不是 NOT_TRIGGERED）
+    evaluation = evaluate(make_stats("5.000"), make_item(on_hand="35.000"))
+    finding = finding_of(evaluation, "R-STOCKOUT")
+    assert finding is not None
+    assert finding.result == "MEDIUM"
+    assert "L(7)" in finding.threshold
+    assert evaluation.risk_level == "MEDIUM"
+
+
+def test_lowstock_boundary_equal_target_not_hit() -> None:
+    # D=2、L=R=7 ⇒ 阈值 28；IP=28 恰好相等，`IP < 目标` 严格小于 ⇒ 未命中
+    evaluation = evaluate(
+        make_stats("2.000", total="56.000"),
+        make_item(on_hand="28.000"),
+    )
+    finding = finding_of(evaluation, "R-LOWSTOCK")
+    assert finding is not None
+    assert finding.result == "NOT_TRIGGERED"
+    assert finding.inputs["IP"] == "28.000"
+    assert "28.000" in finding.threshold
+    assert "LOW_STOCK" not in evaluation.risk_types
+
+
+def test_lowstock_skipped_when_data_insufficient() -> None:
+    evaluation = evaluate(
+        make_stats(None, valid_days=6, cv=None, total="30.000"),
+        make_item(["5.000"] * 6, on_hand="10.000"),
+    )
+    assert finding_of(evaluation, "R-LOWSTOCK") is None
+    assert results(evaluation) == {"R-DATAINSUFFICIENT": "UNKNOWN"}
+    assert evaluation.risk_types == ["DATA_INSUFFICIENT"]
+    assert evaluation.risk_level == "UNKNOWN"
+
+
+def test_overstock_skipped_when_data_insufficient() -> None:
+    evaluation = evaluate(
+        make_stats(None, valid_days=6, cv=None, total="30.000"),
+        make_item(["5.000"] * 6, on_hand="181.000"),
+    )
+    assert finding_of(evaluation, "R-OVERSTOCK") is None
+    assert results(evaluation) == {"R-DATAINSUFFICIENT": "UNKNOWN"}
+    assert evaluation.risk_types == ["DATA_INSUFFICIENT"]
+
+
+def test_slowmoving_skipped_when_data_insufficient() -> None:
+    # 6 天全 0 也不判滞销：数据不足时五条规则一律不输出（`§5.30 #13`）
+    evaluation = evaluate(
+        make_stats(None, valid_days=6, cv=None, total="0.000"),
+        make_item(["0.000"] * 6, on_hand="50.000"),
+    )
+    assert finding_of(evaluation, "R-SLOWMOVING") is None
+    assert results(evaluation) == {"R-DATAINSUFFICIENT": "UNKNOWN"}
+    assert evaluation.risk_types == ["DATA_INSUFFICIENT"]
+
+
+def test_anomaly_skipped_when_data_insufficient() -> None:
+    evaluation = evaluate(
+        make_stats(None, valid_days=6, cv=None, total="30.000"),
+        make_item(["5.000"] * 6, on_hand="100.000"),
+    )
+    assert finding_of(evaluation, "R-SALESANOMALY") is None
+    assert results(evaluation) == {"R-DATAINSUFFICIENT": "UNKNOWN"}
+    assert evaluation.risk_types == ["DATA_INSUFFICIENT"]
+
+
+def test_anomaly_hit_when_recent_drops() -> None:
+    # 方向对称：基线 21 天日均 10（std 0），近 7 天日均 2 ⇒ |Δ|=8、变化率 80% ⇒ 命中 LOW
+    # on_hand=200 让库存类三条都不命中，孤立出 `SALES_ANOMALY` 的等级贡献
+    evaluation = evaluate(
+        make_stats("8.000", total="224.000"),
+        make_item(["10.000"] * 21 + ["2.000"] * 7, on_hand="200.000"),
+    )
+    finding = finding_of(evaluation, "R-SALESANOMALY")
+    assert finding is not None
+    assert finding.result == "LOW"
+    assert finding.inputs["last7_avg"] == "2.000"
+    assert finding.inputs["prev21_avg"] == "10.000"
+    assert evaluation.risk_level == "LOW"
+    assert evaluation.risk_types == ["SALES_ANOMALY"]
+
+
+def test_datainsufficient_not_hit_when_days_are_enough_but_sales_are_zero() -> None:
+    # 28 天都有记录（n=28 ≥ MIN_DAYS）但销量为 0：数据**充足**，不算 DATA_INSUFFICIENT
+    evaluation = evaluate(
+        make_stats("0.000", cv=None, total="0.000"),
+        make_item(["0.000"] * 28, on_hand="50.000"),
+    )
+    assert finding_of(evaluation, "R-DATAINSUFFICIENT") is None
+    assert "DATA_INSUFFICIENT" not in evaluation.risk_types
+    assert evaluation.risk_level != "UNKNOWN"
