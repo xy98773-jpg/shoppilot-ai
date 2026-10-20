@@ -1596,7 +1596,7 @@ X-Request-Id: req_anl_003
             "result": "MEDIUM"
           }
         ],
-        "data_quality_json": { "level": "GOOD", "valid_days": 26, "missing_days": 2, "outlier_days": 0 },
+        "data_quality_json": { "level": "GOOD", "valid_days": 26, "missing_days": 2, "outlier_days": null },
         "llm_explanation": "SKU-BAG-001-BLK 当前现有库存 8 件，近 28 天日均销量约 6.25 件，仅够支撑约 1.3 天销售（低于 2 天警戒线），判定为缺货高风险。按采购交期 7 天与覆盖天数 7 天计算，理论补货需求约 104.5 件，叠加最小起订量后建议补货 110 件。数据覆盖 26/28 天，质量良好，结论可信。",
         "llm_evidence": ["on_hand_qty", "avg_daily_sales", "lead_time_days", "coverage_days", "qty_suggest"],
         "llm_status": "SUCCEEDED",
@@ -1626,7 +1626,7 @@ X-Request-Id: req_anl_003
             "result": "UNKNOWN"
           }
         ],
-        "data_quality_json": { "level": "INSUFFICIENT", "valid_days": 3, "missing_days": 25, "outlier_days": 0 },
+        "data_quality_json": { "level": "INSUFFICIENT", "valid_days": 3, "missing_days": 25, "outlier_days": null },
         "llm_explanation": null,
         "llm_evidence": [],
         "llm_status": "SKIPPED",
@@ -1668,7 +1668,9 @@ X-Request-Id: req_anl_003
 }
 ```
 
-**业务行为与权限**：所有已登录成员（含 `VIEWER`）可查。数据来源 `analysis_items`（**不可变快照**）。`risk_findings` 对应 `analysis_items.risk_detail_json`；`data_quality_json` 为 `analysis_items.data_quality_json`；`llm_evidence` 与 `llm_status` 来源于 Python 返回并经 Java 落库（`llm_explanation` → `TEXT` 列）。查询 `RUNNING` 状态下的 items 返回部分结果或 `ANL-7012`（按 `processed_skus` 决定，建议 `progress<100` 时返回 `ANL-7012`）。
+**业务行为与权限**：所有已登录成员（含 `VIEWER`）可查。数据来源 `analysis_items`（**不可变快照**）。
+> **R140 注**：`data_quality_json.outlier_days` 恒为 `null`——Python `result` 不回显 `outlier_count`（只在 `validate` 端点的 `per_sku[]` 有），
+> `null` 表示「未知」而非 `0`「无异常」；本示例两处原写 `0` 为旧版，已按裁定修订（`DESIGN_REVIEW §5.41`/`§5.42`）。`risk_findings` 对应 `analysis_items.risk_detail_json`；`data_quality_json` 为 `analysis_items.data_quality_json`；`llm_evidence` 与 `llm_status` 来源于 Python 返回并经 Java 落库（`llm_explanation` → `TEXT` 列）。查询 `RUNNING` 状态下的 items 返回部分结果或 `ANL-7012`（按 `processed_skus` 决定，建议 `progress<100` 时返回 `ANL-7012`）。
 
 ---
 

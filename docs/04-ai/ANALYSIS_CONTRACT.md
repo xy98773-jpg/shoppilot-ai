@@ -435,7 +435,7 @@ avg-ma-3sigma-v1+risk-rules-v1+replen-calc-v1
 | `risk_level` | `risk_level` | VARCHAR(16) | `RiskLevel` |
 | `risk_types` | `risk_types` | JSON | 数组 |
 | `risk_findings` | `risk_detail_json` | JSON | 规则命中明细（规则代码 → 判定值）；**不含** LLM 信息 |
-| `data_quality` | `data_quality_json` | JSON | 包装为 `{"level": "...", "valid_days": n, "missing_days": m, "outlier_days": k}` |
+| `data_quality` | `data_quality_json` | JSON | 包装为 `{"level": "...", "valid_days": n, "missing_days": m, "outlier_days": null}`（`R140`：`outlier_days` 恒 `null`；`missing_days = max(0, window_days − valid_days)` 自算） |
 | `llm_explanation` | `llm_explanation` | TEXT | 降级为 `NULL` |
 | `llm_evidence` / `llm_status` / `warnings` | `llm_detail_json` | JSON | 独立列（`DESIGN_BASIS §8` 补充说明），见 §9.3 |
 
@@ -467,10 +467,12 @@ avg-ma-3sigma-v1+risk-rules-v1+replen-calc-v1
 {
   "findings": [
     { "rule_code": "R-STOCKOUT", "inputs": { "on_hand_qty": "8.000", "D": "6.250" }, "threshold": "on_hand_qty / D = 1.28 天 <= 2 天", "result": "HIGH" }
-  ],
-  "warnings": []
+  ]
 }
 ```
+
+> **R141 注**：`warnings` 归 `llm_detail_json`（以 §9.1 映射表为准）；`risk_detail_json` 只放 `findings`，
+> 本处旧示例的 `"warnings": []` 位置与映射表矛盾，已按裁定修订（`DESIGN_REVIEW §5.41` 三 #3 / `§5.42`）。
 
 `llm_detail_json`（条目级 LLM 结果）：
 
@@ -478,6 +480,7 @@ avg-ma-3sigma-v1+risk-rules-v1+replen-calc-v1
 {
   "status": "SUCCEEDED",
   "evidence": ["on_hand_qty", "avg_daily_sales", "lead_time_days", "coverage_days", "q_suggest"],
+  "warnings": [],
   "prompt_version": "explain_risk.v1",
   "model_name": "gpt-4o-mini"
 }
