@@ -58,3 +58,8 @@ htmlcov/
 logs/
 tmp/
 .tmp/
+
+# 验证脚本运行产物（不入仓，evidence-*.txt 保留）
+backend-java/tools/**/body-*.json
+backend-java/tools/**/hdr-*.txt
+backend-java/tools/m7-t02/data/
