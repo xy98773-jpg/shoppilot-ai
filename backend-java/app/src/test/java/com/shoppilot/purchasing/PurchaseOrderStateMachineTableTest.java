@@ -16,7 +16,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -47,12 +46,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * M6-T12a —— 采购单 / 补货建议<b>状态机表驱动</b> + <b>并发</b> + <b>对账收尾</b>。
  *
- * <h2>覆盖范围（T12a 段，无 T12b）</h2>
+ * <h2>覆盖范围（T12a 段 + T12b 补齐）</h2>
  * <ul>
  *   <li><b>A1</b> {@code TEST_STRATEGY §8.1} 第一张表（13 行）→ 扩为 <b>24 个参数</b>
  *       （合法 10 + 非法 14；终态「→任意」按目标态拆开，B0-1 要求）。
- *       ★ 其中 4 个「到货驱动」合法行只做<b>源态替代断言</b>并记为 SKIPPED
- *       ⇒ <b>真断通过 = 20 行</b>（6 合法 + 14 非法），台账见 {@code a1CoverageLedger}；</li>
+ *       ★ 4 个「到货驱动」合法行自 {@code M6-T12b} 起走<b>真实链路</b>
+ *       （{@code POST /receipts} 201 → {@code POST /receipts/{id}/confirm} 200）并断言<b>目标态</b>
+ *       ⇒ <b>真断通过 = 24 行</b>（10 合法 + 14 非法），台账见 {@code a1CoverageLedger}；</li>
  *   <li><b>A2</b> {@code §8.1} 第二段（{@code ReplenishmentItemStatus}）→
  *       5 个命令 × 7 个状态 = <b>35 个参数</b>全表；另加「驳回未填意见 ⇒ {@code RPL-8005}」；</li>
  *   <li><b>A3</b> 并发 confirm / cancel / order 各一例（两线程，恰好 1 胜）；</li>
@@ -71,14 +71,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *       {@code API_CONTRACT.md:601}、{@code PURCHASING_WORKFLOW.md:213/375} 同口径；
  *       既有生产测试 {@code PurchaseOrderFlowIntegrationTest#cancelGuards}（E7）已锁死该行为。
  *       ★ 项目负责人已裁定（F2）：该行期望 {@code PO-9009}，其余非法行仍 {@code PO-9003}。</li>
- *   <li><b>4 个「到货驱动」合法行断言在<b>源态</b>侧，且不计入 A1 通过行数</b>：
+ *   <li><b>4 个「到货驱动」合法行断言<b>目标态</b>（{@code M6-T12b} 已落地）</b>：
  *       {@code ORDERED→PARTIALLY_RECEIVED} / {@code ORDERED→RECEIVED} /
  *       {@code PARTIALLY_RECEIVED→PARTIALLY_RECEIVED} / {@code PARTIALLY_RECEIVED→RECEIVED}
- *       的目标态唯一生产者是到货<b>确认</b>，该端点在当前 worktree <b>不存在</b>
- *       （{@code GoodsReceiptAppService.java:45} 明写「本批不实现」；{@code GoodsReceiptController}
- *       无 {@code /confirm} 映射）。故本节做「到货登记入口接受该源态」的替代断言
- *       （替代断言<b>真跑真断</b>，失败即该用例失败），通过后 {@code Assumptions.abort} 记为
- *       <b>SKIPPED</b> ⇒ 项目负责人裁定（F3）要求「不得计入 A1 通过行数」在机器层即成立。
+ *       的唯一生产者是到货<b>确认</b>（{@code POST /receipts/{id}/confirm}，{@code GoodsReceiptController:127}）。
+ *       T12a 期间该端点未落地，故当时只做「到货登记入口接受该源态」的替代断言 + {@code Assumptions.abort}；
+ *       T12b 起改为<b>登记 201 → 确认 200 → 断言目标态</b>，四行计入 A1 通过行数。
  *       对称的非法行（{@code RECEIVED/CANCELLED → PARTIALLY_RECEIVED/RECEIVED} ⇒ 409
  *       {@code PO-9003}）反证「只有这两个源态合法」。</li>
  * </ol>
@@ -233,18 +231,32 @@ class PurchaseOrderStateMachineTableTest {
         /** {@code POST /orders/{id}/cancel}：{DRAFT,PENDING,ORDERED,PARTIALLY_RECEIVED} → CANCELLED。 */
         CANCEL,
         /**
-         * {@code POST /receipts}（到货<b>登记</b>）：源态守卫 ORDERED / PARTIALLY_RECEIVED 才放行。
+         * 到货<b>登记</b>（{@code POST /receipts}）：源态守卫 ORDERED / PARTIALLY_RECEIVED 才放行。
          *
-         * <p>★ 目标态（PARTIALLY_RECEIVED / RECEIVED）的唯一生产者是到货<b>确认</b>
-         * （{@code POST /receipts/{id}/confirm}），该端点在本 worktree 尚未落地
-         * （{@code GoodsReceiptAppService.java:45}「本批不实现」）⇒ 本驱动只验<b>源态合法性</b>。
+         * <p>★ 合法行在 T12b 起继续调<b>确认</b>（{@code POST /receipts/{id}/confirm}）以产生目标态；
+         * 非法行只走到登记（源态守卫即拒绝，{@code PO-9003}）。
          */
         RECEIPT
     }
 
+    /**
+     * A1 行构造器（非到货驱动）：{@code receiptQty} 缺省 {@code null}。
+     */
     private static Arguments poRow(String from, String to, boolean legal, Driver driver,
                                    int expectStatus, String expectCode, String note) {
-        return Arguments.of(from, to, legal, driver, expectStatus, expectCode, note);
+        return poRow(from, to, legal, driver, expectStatus, expectCode, null, note);
+    }
+
+    /**
+     * A1 行构造器（含到货数量）。
+     *
+     * <p>★ {@code receiptQty} 必须<b>参数化</b>：种子采购单固定 {@code ordered_qty = 100.000}
+     * （{@code PARTIALLY_RECEIVED} 时 {@code received_qty = 40.000}），若到货量写死则
+     * 「→ RECEIVED」两行永远到不了终态。四行依次取 10 / 100 / 10 / 60。
+     */
+    private static Arguments poRow(String from, String to, boolean legal, Driver driver,
+                                   int expectStatus, String expectCode, String receiptQty, String note) {
+        return Arguments.of(from, to, legal, driver, expectStatus, expectCode, receiptQty, note);
     }
 
     /**
@@ -261,15 +273,15 @@ class PurchaseOrderStateMachineTableTest {
                 poRow("DRAFT", "CANCELLED", true, Driver.CANCEL, 200, null, "§8.1:321"),
                 poRow("PENDING", "ORDERED", true, Driver.ORDER, 200, null, "§8.1:322"),
                 poRow("PENDING", "CANCELLED", true, Driver.CANCEL, 200, null, "§8.1:323"),
-                poRow("ORDERED", "PARTIALLY_RECEIVED", true, Driver.RECEIPT, 201, null,
-                        "§8.1:324 目标态待 T12b(R-1)"),
-                poRow("ORDERED", "RECEIVED", true, Driver.RECEIPT, 201, null,
-                        "§8.1:325 目标态待 T12b(R-2)"),
+                poRow("ORDERED", "PARTIALLY_RECEIVED", true, Driver.RECEIPT, 201, null, "10.000",
+                        "§8.1:324 部分到货（目标态由 confirm 产生）"),
+                poRow("ORDERED", "RECEIVED", true, Driver.RECEIPT, 201, null, "100.000",
+                        "§8.1:325 全部到货（目标态由 confirm 产生）"),
                 poRow("ORDERED", "CANCELLED", true, Driver.CANCEL, 200, null, "§8.1:326"),
-                poRow("PARTIALLY_RECEIVED", "PARTIALLY_RECEIVED", true, Driver.RECEIPT, 201, null,
-                        "§8.1:327 继续部分到货，目标态待 T12b"),
-                poRow("PARTIALLY_RECEIVED", "RECEIVED", true, Driver.RECEIPT, 201, null,
-                        "§8.1:328 目标态待 T12b"),
+                poRow("PARTIALLY_RECEIVED", "PARTIALLY_RECEIVED", true, Driver.RECEIPT, 201, null, "10.000",
+                        "§8.1:327 继续部分到货（40+10=50 < 100）"),
+                poRow("PARTIALLY_RECEIVED", "RECEIVED", true, Driver.RECEIPT, 201, null, "60.000",
+                        "§8.1:328 补齐剩余（40+60=100 ⇒ RECEIVED）"),
                 poRow("PARTIALLY_RECEIVED", "CANCELLED", true, Driver.CANCEL, 200, null, "§8.1:329"),
 
                 // ── 非法：终态 RECEIVED → 任意（§8.1:330）──
@@ -303,13 +315,14 @@ class PurchaseOrderStateMachineTableTest {
 
     @ParameterizedTest(name = "A1[{index}] {0} -> {1} legal={2} driver={3} expect={4}/{5}")
     @MethodSource("purchaseOrderTransitions")
-    @DisplayName("A1 采购单状态转换表驱动（13 行 → 24 参数）")
+    @DisplayName("A1 采购单状态转换表驱动（13 行 → 24 参数，全部真断）")
     void a1PurchaseOrderTransition(String from, String to, boolean legal, Driver driver,
-                                   int expectStatus, String expectCode, String note) throws Exception {
+                                   int expectStatus, String expectCode, String receiptQty,
+                                   String note) throws Exception {
         PoSeed po = createPurchaseOrder(from);
         String token = login("approver01");
 
-        ResponseEntity<String> res = drive(driver, po, token);
+        ResponseEntity<String> res = drive(driver, po, token, receiptQty);
         int actualStatus = res.getStatusCode().value();
         String actualCode = actualStatus >= 400 ? codeOf(res) : null;
         String statusAfter = poStatus(po.id());
@@ -319,27 +332,36 @@ class PurchaseOrderStateMachineTableTest {
                 + " | expect=" + expectStatus + "/" + (expectCode == null ? "-" : expectCode)
                 + " | actual=" + actualStatus + "/" + (actualCode == null ? "-" : actualCode)
                 + " | po.status after=" + statusAfter
-                + " | 计入A1通过行数=" + countedAsPass(driver, legal)
                 + " | " + note);
 
         if (legal) {
             if (driver == Driver.RECEIPT) {
-                // ★ 目标态断言由 T12b 承接（项目负责人裁定 F3）：本节只做「源态被正确接受」的替代断言，
-                //   替代断言<b>真跑真断</b>（失败即本用例失败），通过后 abort ⇒ JUnit 记 SKIPPED，
-                //   <b>不计入</b> A1 的「通过行数」。
+                // ★ T12b：真实链路 = 登记(201) → 确认(200) ⇒ 断言<b>目标态</b>与连带事实
                 assertEquals(expectStatus, actualStatus, "到货登记应被接受：" + res.getBody());
-                assertEquals(from, statusAfter,
-                        "登记到货只建 DRAFT 到货单，不推进 PO 状态（推进在 T12b 的 confirm）");
-                assertEquals("DRAFT", jdbc.queryForObject(
-                        "SELECT status FROM goods_receipts ORDER BY id DESC LIMIT 1", String.class),
-                        "到货单必须停在 DRAFT（未确认）");
-                assertEquals(1L, countOf("inventory_transactions"),
-                        "★ INV-03：登记到货不得写库存流水（种子那 1 条除外）");
+                long receiptId = json.readTree(res.getBody()).get("data").get("goods_receipt_id").asLong();
+                assertEquals("DRAFT", receiptStatus(receiptId), "登记后到货单必须为 DRAFT（未确认）");
+
+                ResponseEntity<String> confirmed = post(
+                        RECEIPTS + "/" + receiptId + "/confirm", "{}", token, null);
+                System.out.println("[M6T12-A1] confirm " + receiptId + " -> "
+                        + confirmed.getStatusCode().value() + " " + confirmed.getBody());
+                assertEquals(200, confirmed.getStatusCode().value(),
+                        "到货确认应成功：" + confirmed.getBody());
+
+                // 目标态：PO 由明细推导（PurchaseOrderAppService:364-365）
+                //   ★ 必须<b>重新读库</b>：statusAfter 是登记后（confirm 前）的快照。
+                assertEquals(to, poStatus(po.id()), "confirm 后采购单目标态不符");
+                // 到货单目标态（用本次 receiptId 精确查，不用 ORDER BY id DESC）
+                assertEquals("CONFIRMED",
+                        json.readTree(confirmed.getBody()).get("data").get("status").asText(),
+                        "确认响应体的到货单状态必须为 CONFIRMED");
+                assertEquals("CONFIRMED", receiptStatus(receiptId), "到货单必须推进到 CONFIRMED");
+                // 流水：种子 1 条 + 本单 1 条（限该 warehouse + sku，避免全表计数被其它数据污染）
+                assertEquals(2L, countInboundTxns(WH7, SKU7),
+                        "★ 确认后应有 2 笔 PURCHASE_INBOUND+INIT_IMPORT 流水（种子 1 + 本单 1）");
+                assertEquals(1L, countPurchaseInbound(receiptId),
+                        "★ 本单恰好产生 1 笔 PURCHASE_INBOUND 流水");
                 assertInventoryReconciled(TEAM7, WH7, SKU7);
-                System.out.println("[M6T12-A1] DEFERRED " + from + " -> " + to
-                        + " | 源态替代断言已通过 | 目标态断言待 T12b（POST /receipts/{id}/confirm 未落地）");
-                Assumptions.abort("目标态 " + to + " 待 T12b：到货确认端点 POST /receipts/{id}/confirm "
-                        + "在当前 worktree 未落地（GoodsReceiptAppService.java:45「本批不实现」）");
             } else {
                 assertEquals(expectStatus, actualStatus, "合法转换应成功：" + res.getBody());
                 assertEquals(to, statusAfter, "数据库中的目标状态不符");
@@ -359,11 +381,15 @@ class PurchaseOrderStateMachineTableTest {
     /**
      * A1 覆盖度台账（把「计入口径」变成可执行断言，杜绝汇报与实际执行偷偷漂移）。
      *
-     * <p>★ 项目负责人裁定 F3：4 个「到货驱动」合法行只做源态替代断言，<b>不计入</b> A1 通过行数
-     * （JUnit 记 SKIPPED）⇒ 真断通过 = 24 − 4 = <b>20</b> 行（6 合法 + 14 非法）。
+     * <p>★ {@code M6-T12b} 起 4 个「到货驱动」合法行改为目标态真断言并计入通过行数
+     * ⇒ 真断通过 = <b>24</b> 行（10 合法 + 14 非法），{@code 待补 = 0}。
+     *
+     * <p>「待补」的可执行口径 = 合法 + 到货驱动 + <b>{@code receiptQty} 为空</b>
+     * （空数量既无法构造到货单，也意味着该行还没接上真链路）。T12b 后必须为 0；
+     * 反向保证「4 行到货驱动都带了数量」，而不只是把常量改成 0。
      */
     @Test
-    @DisplayName("A1 覆盖度台账：10 合法 + 3 非法 = 13 行 → 24 参数；真断 20，待 T12b 4")
+    @DisplayName("A1 覆盖度台账：10 合法 + 3 非法 = 13 行 → 24 参数，全部真断")
     void a1CoverageLedger() {
         List<Arguments> rows = purchaseOrderTransitions().toList();
         long legal = rows.stream().filter(row -> Boolean.TRUE.equals(row.get()[2])).count();
@@ -371,22 +397,23 @@ class PurchaseOrderStateMachineTableTest {
         long receiptDriven = rows.stream()
                 .filter(row -> Boolean.TRUE.equals(row.get()[2]) && row.get()[3] == Driver.RECEIPT)
                 .count();
-        long asserted = rows.size() - receiptDriven;
+        long pending = rows.stream()
+                .filter(row -> Boolean.TRUE.equals(row.get()[2])
+                        && row.get()[3] == Driver.RECEIPT
+                        && row.get()[6] == null)
+                .count();
+        long asserted = rows.size() - pending;
 
         System.out.println("[M6T12-A1] 台账: 参数总数=" + rows.size() + " 合法=" + legal
-                + " 非法=" + illegal + "（3 行展开）| 真断通过=" + asserted
-                + " | 目标态待 T12b（替代断言，不计入通过）=" + receiptDriven);
+                + " 非法=" + illegal + "（3 行展开）| 到货驱动=" + receiptDriven
+                + " | 真断通过=" + asserted + " | 待补（不计入通过）=" + pending);
 
         assertEquals(24, rows.size(), "§8.1 的 13 行按目标态展开后应为 24 参数");
         assertEquals(10, legal, "SSOT TEST_STRATEGY.md:320-329 合法 10 行（B0-1 的「9」是令文笔误）");
         assertEquals(14, illegal, "SSOT 非法 3 行（终态→任意 / DRAFT→ORDERED / PENDING→RECEIVED）展开为 14 参数");
         assertEquals(4, receiptDriven, "到货驱动的合法行恰为 4 行");
-        assertEquals(20, asserted, "★ A1 真断通过行数 = 20（不含 4 行待 T12b）");
-    }
-
-    /** 该行是否计入 A1「通过行数」：到货驱动的合法行不计（目标态待 T12b）。 */
-    private static boolean countedAsPass(Driver driver, boolean legal) {
-        return !(legal && driver == Driver.RECEIPT);
+        assertEquals(0, pending, "★ T12b 后到货驱动 4 行均已携带 receiptQty、断言目标态，不再有待补行");
+        assertEquals(24, asserted, "★ A1 真断通过行数 = 24（10 合法 + 14 非法，无 SKIPPED）");
     }
 
     // =====================================================================
@@ -745,7 +772,7 @@ class PurchaseOrderStateMachineTableTest {
     // 辅助：驱动
     // =====================================================================
 
-    private ResponseEntity<String> drive(Driver driver, PoSeed po, String token) {
+    private ResponseEntity<String> drive(Driver driver, PoSeed po, String token, String receiptQty) {
         return switch (driver) {
             case CONFIRM -> post(ORDERS + "/" + po.id() + "/confirm",
                     "{\"expected_version\":" + po.version() + "}", token, null);
@@ -753,17 +780,21 @@ class PurchaseOrderStateMachineTableTest {
                     "{\"expected_version\":" + po.version() + "}", token, null);
             case CANCEL -> post(ORDERS + "/" + po.id() + "/cancel",
                     "{\"reason\":\"表驱动取消\"}", token, null);
-            case RECEIPT -> postReceipt(po, token);
+            case RECEIPT -> postReceipt(po, token, receiptQty);
         };
     }
 
-    /** {@code POST /receipts}：登记一张 10 数量的到货草稿（到货<b>确认</b>属 T12b）。 */
-    private ResponseEntity<String> postReceipt(PoSeed po, String token) {
+    /**
+     * {@code POST /receipts}：登记一张<b>数量由参数给定</b>的到货草稿（确认由 T12b 的调用方续做）。
+     *
+     * <p>★ 数量必须参数化（B0-8）：写死 {@code 10.000} 会让「→ RECEIVED」两行永远收不满。
+     */
+    private ResponseEntity<String> postReceipt(PoSeed po, String token, String receiptQty) {
         String body = "{\"purchase_order_id\":" + po.id()
                 + ",\"warehouse_id\":" + WH7
                 + ",\"receipt_date\":\"2026-10-20\""
                 + ",\"items\":[{\"purchase_order_item_id\":" + po.lineId()
-                + ",\"received_qty\":\"10.000\",\"unit_price\":\"10.0000\"}]}";
+                + ",\"received_qty\":\"" + receiptQty + "\",\"unit_price\":\"10.0000\"}]}";
         return post(RECEIPTS, body, token, "IDEM-RCPT-" + TEAM7 + "-" + (++idemSeq));
     }
 
@@ -864,6 +895,28 @@ class PurchaseOrderStateMachineTableTest {
 
     private long countOf(String table) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Long.class);
+    }
+
+    /** 到货单状态（按<b>精确 ID</b> 查；禁用 {@code ORDER BY id DESC LIMIT 1} 这类隐式定位）。 */
+    private String receiptStatus(long receiptId) {
+        return jdbc.queryForObject(
+                "SELECT status FROM goods_receipts WHERE id = ?", String.class, receiptId);
+    }
+
+    /** 指定 {@code (warehouse, sku)} 维度下的入库类流水条数（种子 {@code INIT_IMPORT} + {@code PURCHASE_INBOUND}）。 */
+    private long countInboundTxns(long warehouseId, long skuId) {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM inventory_transactions WHERE warehouse_id = ? AND sku_id = ? "
+                        + "AND txn_type IN ('INIT_IMPORT', 'PURCHASE_INBOUND')",
+                Long.class, warehouseId, skuId);
+    }
+
+    /** 指定到货单产生的 {@code PURCHASE_INBOUND} 流水条数（{@code biz_ref_id} = receiptId）。 */
+    private long countPurchaseInbound(long receiptId) {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM inventory_transactions "
+                        + "WHERE txn_type = 'PURCHASE_INBOUND' AND biz_ref_id = ?",
+                Long.class, receiptId);
     }
 
     /** ★ B0-12：审计计数一律 {@code biz_id} + {@code action} 差分，绝不全表计数（{@code /auth/login} 也写审计）。 */

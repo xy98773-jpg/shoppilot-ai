@@ -42,7 +42,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   <li>E1 正常确认（余额增、流水新增、采购汇总累加）；</li>
  *   <li>E2 全部到货 ⇒ {@code RECEIVED}；E3 部分到货 ⇒ {@code PARTIALLY_RECEIVED}；</li>
  *   <li>E4 跨单据累计超额 ⇒ {@code PO-9002} 且<b>无任何库存变更</b>；</li>
- *   <li>E5 重复确认 ⇒ {@code PO-9003} 且不产生第二条流水；</li>
+ *   <li>E5 重复确认 ⇒ <b>200 幂等成功</b>（SSOT：{@code DATABASE_CONSTRAINTS.md:85} 幂等 #5 +
+ *       {@code TEST_STRATEGY.md:343} §8.2 R-4），不产生第二条流水、不重复累加、不重复审计；</li>
  *   <li>E6 状态守卫（不存在/跨团队 {@code PO-9005}；采购单 {@code DRAFT} ⇒ {@code PO-9003}）；</li>
  *   <li>E7 角色（{@code VIEWER} ⇒ {@code TEAM-2003}；{@code OPERATOR} ⇒ 成功，验证 {@code OPERATOR+}）；</li>
  *   <li>E8 审计 {@code GOODS_RECEIPT_CONFIRM} ×1（按 {@code biz_id}+{@code action} 差分）；</li>
@@ -305,23 +306,45 @@ class GoodsReceiptConfirmIntegrationTest {
     // =====================================================================
 
     @Test
-    @DisplayName("E5 重复确认 ⇒ 409 PO-9003；不产生第二条流水")
-    void duplicateConfirmRejected() throws Exception {
+    @DisplayName("E5 重复确认 ⇒ 200 幂等成功（返回首次确认结果）；不产生第二条流水、不重复累加、不重复审计")
+    void duplicateConfirmIsIdempotent() throws Exception {
         long poId = createPo("ORDERED", "100.000", "0.000");
         long receiptId = createDraftReceipt(poId, firstLineId(poId), "40.000", "idem-e5");
         String token = login("operator01");
 
-        assertEquals(HttpStatus.OK, post(BASE + "/" + receiptId + "/confirm", token).getStatusCode());
+        ResponseEntity<String> first = post(BASE + "/" + receiptId + "/confirm", token);
+        assertEquals(HttpStatus.OK, first.getStatusCode(), first.getBody());
+        JsonNode firstData = json.readTree(first.getBody()).get("data");
         long txnAfterFirst = txnCount();
         String onHandAfterFirst = onHand(WH7, SKU7);
+        long auditAfterFirst = auditCount(receiptId, "GOODS_RECEIPT_CONFIRM");
+        int versionAfterFirst = jdbc.queryForObject(
+                "SELECT version FROM goods_receipts WHERE id = ?", Integer.class, receiptId);
 
         ResponseEntity<String> res = post(BASE + "/" + receiptId + "/confirm", token);
         System.out.println("[M6T05-EVIDENCE] E5 二次确认: " + res.getStatusCode().value() + " " + res.getBody());
-        assertEquals(HttpStatus.CONFLICT, res.getStatusCode());
-        assertEquals(ErrorCodes.PO_9003, codeOf(res));
+        // ★ 依 SSOT：DATABASE_CONSTRAINTS.md:85（幂等 #5 到货单「重复确认且已 CONFIRMED → 返回成功（幂等）」）
+        //   + TEST_STRATEGY.md:343（§8.2 R-4「幂等：只入库一次，返回已确认结果」）。
+        //   ⚠ 原 M6-T05+T06 令文要求 409 PO-9003，与这两条冲突，是实现侧缺陷，已订正（不改 SSOT）。
+        assertEquals(HttpStatus.OK, res.getStatusCode(), "★ 重复确认必须幂等成功：" + res.getBody());
+
+        JsonNode replay = json.readTree(res.getBody()).get("data");
+        assertEquals("CONFIRMED", replay.get("status").asText(), "返回已确认结果");
+        assertEquals(firstData.get("goods_receipt_id").asLong(),
+                replay.get("goods_receipt_id").asLong(), "必须是同一张到货单");
+        assertEquals(firstData.get("confirmed_at").asText(), replay.get("confirmed_at").asText(),
+                "★ 返回的是首次确认结果（confirmed_at 不变），不是「再确认一次」");
+        assertEquals(versionAfterFirst, replay.get("version").asInt(), "★ 幂等路径不得推进 version");
+        assertEquals(versionAfterFirst, jdbc.queryForObject(
+                "SELECT version FROM goods_receipts WHERE id = ?", Integer.class, receiptId),
+                "★ 库内 version 不得变");
+
         assertEquals(txnAfterFirst, txnCount(), "★ 重复确认不得产生第二条流水");
+        assertEquals(auditAfterFirst, auditCount(receiptId, "GOODS_RECEIPT_CONFIRM"),
+                "★ 重复确认不得重复写 GOODS_RECEIPT_CONFIRM 审计");
         assertEquals(onHandAfterFirst, onHand(WH7, SKU7), "★ 余额不得重复增加");
         assertEquals("40.000", qtyText(poRow(poId).get("received_qty")), "★ 不得重复累加");
+        assertEquals("PARTIALLY_RECEIVED", poRow(poId).get("status"), "★ 采购单状态不得变化");
         assertReconciled();
     }
 
@@ -412,7 +435,8 @@ class GoodsReceiptConfirmIntegrationTest {
     @DisplayName("E9 流水：txn_type=PURCHASE_INBOUND / biz_type=GOODS_RECEIPT / biz_ref_id=receiptId / 幂等键格式")
     void inboundTxnFields() throws Exception {
         long poId = createPo("ORDERED", "100.000", "0.000");
-        long receiptId = createDraftReceipt(poId, firstLineId(poId), "40.000", "idem-e9");
+        long poItemId = firstLineId(poId);
+        long receiptId = createDraftReceipt(poId, poItemId, "40.000", "idem-e9");
         assertEquals(HttpStatus.OK, post(BASE + "/" + receiptId + "/confirm", login("operator01")).getStatusCode());
 
         Map<String, Object> txn = jdbc.queryForMap(
@@ -423,8 +447,10 @@ class GoodsReceiptConfirmIntegrationTest {
         assertEquals("PURCHASE_INBOUND", txn.get("txn_type"));
         assertEquals("GOODS_RECEIPT", txn.get("biz_type"));
         assertEquals(receiptId, ((Number) txn.get("biz_ref_id")).longValue());
-        assertEquals("PURCHASE_INBOUND:GOODS_RECEIPT:" + receiptId + ":" + SKU7,
-                txn.get("idempotency_key"), "幂等键 = PURCHASE_INBOUND:GOODS_RECEIPT:<rid>:<skuId>（B0-4）");
+        // ★ R180：基序 4 段 + 必填后缀 :<purchase_order_item_id>（DATABASE_DESIGN §5.10 后缀用途 ③）
+        assertEquals("PURCHASE_INBOUND:GOODS_RECEIPT:" + receiptId + ":" + SKU7 + ":" + poItemId,
+                txn.get("idempotency_key"),
+                "幂等键 = PURCHASE_INBOUND:GOODS_RECEIPT:<rid>:<skuId>:<purchaseOrderItemId>（R180）");
         assertEquals("40.000", qtyText(txn.get("qty_delta")));
         assertEquals("100.000", qtyText(txn.get("qty_before")));
         assertEquals("140.000", qtyText(txn.get("qty_after")));
