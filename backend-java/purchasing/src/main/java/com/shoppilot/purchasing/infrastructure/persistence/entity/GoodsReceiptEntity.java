@@ -15,6 +15,25 @@ import java.time.LocalDateTime;
  *
  * <p>★ 本表带 {@code version}（乐观锁）：{@code purchase_order_items.received_qty} 累加是典型丢失更新场景（{@code §6-I}），实体必须带 {@code @Version}。
  *
+ * <p>★ <b>更新口径：默认 {@code updateById(entity)} + 判返回值；{@code update(null, wrapper)}
+ * 默认禁用</b>（那类调用无实体形态，{@code OptimisticLockerInnerInterceptor} 不触发 ⇒
+ * {@code @Version} 被绕过）。权威口径见 {@code common/MultiTenantConfig}（「不覆盖
+ * {@code update(null, wrapper)}——那类调用必须手写 CAS 条件」）。
+ *
+ * <p><b>逐处列明的例外</b>：{@code GoodsReceiptAppService} 的状态流转与草稿编辑
+ * （M6-T04 A2 编辑 / A3 作废）使用 {@code update(null, lambdaUpdate)}：
+ * <ul>
+ *   <li><b>为什么破例</b>：需把 {@code id} + {@code status=源态} + {@code version} 三个前提并进
+ *       <b>同一条 UPDATE</b> 做同语句状态守卫，而 MyBatis-Plus 的 {@code updateById} 只生成
+ *       {@code WHERE id=? AND version=?}（缺 {@code status} 条件）⇒ 无法在一条语句里
+ *       同时表达「状态仍为源态」与「版本未变」两个前提；</li>
+ *   <li><b>破例后如何保证正确性</b>：显式 {@code .eq(version, 读到的值)} + 手动
+ *       {@code set(version, version + 1)}（插件对 {@code entity == null} 不触发，故无重复自增/
+ *       漏自增风险），与插件的 {@code WHERE version=? SET version=version+1} 语义逐字等价
+ *       ⇒ 仍是真 CAS；</li>
+ *   <li><b>0 行语义是 {@code PO-9008}</b>（到货单已确认不可修改 / 乐观锁冲突），由调用方抛出。</li>
+ * </ul>
+ *
  * <p>★ <b>{@code team_id} 不接受客户端传入</b>：由租户插件从 {@code TeamContext} 注入；
  * 本表<b>不在</b> {@code TenantTables.WITHOUT_TEAM_ID} 黑名单。
  *
@@ -67,7 +86,13 @@ public class GoodsReceiptEntity {
     private Long createdBy;
     /** 更新人（集合 A） */
     private Long updatedBy;
-    /** 乐观锁版本 */
+    /**
+     * 乐观锁版本。
+     *
+     * <p>★ <b>自增口径</b>：实体形态更新（{@code updateById(entity)}）由插件自动
+     * {@code SET version = version + 1}；<b>wrapper 形态</b>（{@code update(null, wrapper)}，
+     * 见类 Javadoc 的「逐处列明例外」）插件<b>不触发</b>，须<b>手动自增</b>。
+     */
     @Version
     private Integer version;
 
