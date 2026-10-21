@@ -258,7 +258,7 @@ class AnalysisItemAssemblerTest {
     @DisplayName("SELECTED_SKUS：逐个校验团队与 ACTIVE，命中才装配")
     void assemblesSelectedSkus() {
         List<AiRunItem> items = assembler.assemble(TEAM_ID, WAREHOUSE_DEFAULT,
-                scope(AnalysisScopeType.SELECTED_SKUS, List.of(SKU_LEAD), null), DATE_FROM, DATE_TO);
+                scope(AnalysisScopeType.SELECTED_SKUS, List.of(SKU_LEAD), null), DATE_FROM, DATE_TO, AnalysisParams.resolve(null));
 
         assertEquals(1, items.size());
         assertEquals(SKU_LEAD, items.get(0).skuId());
@@ -270,7 +270,7 @@ class AnalysisItemAssemblerTest {
         BizException ex = assertThrows(BizException.class, () -> assembler.assemble(TEAM_ID,
                 WAREHOUSE_DEFAULT,
                 scope(AnalysisScopeType.SELECTED_SKUS, List.of(SKU_OTHER_TEAM), null),
-                DATE_FROM, DATE_TO));
+                DATE_FROM, DATE_TO, AnalysisParams.resolve(null)));
 
         assertEquals(ErrorCodes.COM_0001, ex.getErrorCode());
         assertEquals(SKU_OTHER_TEAM, ex.getDetails().get(0).rejectedValue());
@@ -283,7 +283,7 @@ class AnalysisItemAssemblerTest {
         BizException ex = assertThrows(BizException.class, () -> assembler.assemble(TEAM_ID,
                 WAREHOUSE_DEFAULT,
                 scope(AnalysisScopeType.SELECTED_SKUS, List.of(SKU_INACTIVE), null),
-                DATE_FROM, DATE_TO));
+                DATE_FROM, DATE_TO, AnalysisParams.resolve(null)));
 
         assertEquals(ErrorCodes.COM_0001, ex.getErrorCode());
         assertTrue(ex.getDetails().get(0).message().contains("INACTIVE"));
@@ -293,7 +293,7 @@ class AnalysisItemAssemblerTest {
     @DisplayName("ALL_ACTIVE：本团队 ACTIVE SKU（含 SKU 级配置），不含 INACTIVE 与他团队")
     void assemblesAllActive() {
         List<AiRunItem> items = assembler.assemble(TEAM_ID, WAREHOUSE_DEFAULT,
-                scope(AnalysisScopeType.ALL_ACTIVE, null, null), DATE_FROM, DATE_TO);
+                scope(AnalysisScopeType.ALL_ACTIVE, null, null), DATE_FROM, DATE_TO, AnalysisParams.resolve(null));
 
         List<Long> ids = items.stream().map(AiRunItem::skuId).toList();
         assertTrue(ids.contains(SKU_PLAIN) && ids.contains(SKU_LEAD) && ids.contains(SKU_POLICY));
@@ -307,9 +307,9 @@ class AnalysisItemAssemblerTest {
     @DisplayName("CATEGORY：按 products.category 等值取 SKU，不额外过滤 products.status")
     void assemblesByCategory() {
         List<AiRunItem> catA = assembler.assemble(TEAM_ID, WAREHOUSE_DEFAULT,
-                scope(AnalysisScopeType.CATEGORY, null, "CAT-A"), DATE_FROM, DATE_TO);
+                scope(AnalysisScopeType.CATEGORY, null, "CAT-A"), DATE_FROM, DATE_TO, AnalysisParams.resolve(null));
         List<AiRunItem> catB = assembler.assemble(TEAM_ID, WAREHOUSE_DEFAULT,
-                scope(AnalysisScopeType.CATEGORY, null, "CAT-B"), DATE_FROM, DATE_TO);
+                scope(AnalysisScopeType.CATEGORY, null, "CAT-B"), DATE_FROM, DATE_TO, AnalysisParams.resolve(null));
 
         assertEquals(List.of(SKU_PLAIN, SKU_LEAD, SKU_SUPPLIER),
                 catA.stream().map(AiRunItem::skuId).sorted().toList());
@@ -350,13 +350,16 @@ class AnalysisItemAssemblerTest {
     }
 
     @Test
-    @DisplayName("有余额行 ⇒ 原样出站（含 R124 的 in_transit_qty）")
+    @DisplayName("有余额行 ⇒ 三项取余额；★ 有效在途不再取余额列（退役，§5.78）⇒ 无采购单时为 0.000")
     void balanceRowIsEchoed() {
         AiRunItem item = onlyItem(SKU_LEAD);
 
         assertEquals("8.000", item.onHandQty());
         assertEquals("1.000", item.committedQty());
-        assertEquals("5.000", item.effectiveInTransitQty());
+        // ★ R178/M6-T10：余额行里 in_transit_qty=5.000，但该列已退役（零读写）⇒ 出站走 §10.4 派生，
+        //   本夹具无采购单 ⇒ 0.000。若仍读到 5.000，说明物化列没退役。
+        assertEquals("0.000", item.effectiveInTransitQty(),
+                "有效在途必须来自采购派生（无 PO ⇒ 0），不得再读 inventory_balances.in_transit_qty");
         assertEquals(3, item.leadTimeDays());
         assertEquals("SKU", item.leadTimeSource());
     }
@@ -427,11 +430,11 @@ class AnalysisItemAssemblerTest {
     void emptyCategoryAndAllActiveAreAllowed() {
         // CATEGORY 命中为空
         assertEquals(List.of(), assembler.assemble(TEAM_ID, WAREHOUSE_DEFAULT,
-                scope(AnalysisScopeType.CATEGORY, null, "NO-SUCH-CATEGORY"), DATE_FROM, DATE_TO));
+                scope(AnalysisScopeType.CATEGORY, null, "NO-SUCH-CATEGORY"), DATE_FROM, DATE_TO, AnalysisParams.resolve(null)));
         // ALL_ACTIVE 命中为空（本团队没有任何 ACTIVE SKU）
         jdbc.update("UPDATE skus SET status = 'INACTIVE' WHERE team_id = ?", TEAM_ID);
         assertEquals(List.of(), assembler.assemble(TEAM_ID, WAREHOUSE_DEFAULT,
-                scope(AnalysisScopeType.ALL_ACTIVE, null, null), DATE_FROM, DATE_TO));
+                scope(AnalysisScopeType.ALL_ACTIVE, null, null), DATE_FROM, DATE_TO, AnalysisParams.resolve(null)));
     }
 
     @Test
@@ -496,7 +499,7 @@ class AnalysisItemAssemblerTest {
         AnalysisScope scope = scope(AnalysisScopeType.SELECTED_SKUS, List.of(SKU_LEAD), null);
         AnalysisParams params = AnalysisParams.resolve(null);
         Long warehouseId = assembler.resolveWarehouseId(TEAM_ID, null);
-        List<AiRunItem> items = assembler.assemble(TEAM_ID, warehouseId, scope, DATE_FROM, DATE_TO);
+        List<AiRunItem> items = assembler.assemble(TEAM_ID, warehouseId, scope, DATE_FROM, DATE_TO, AnalysisParams.resolve(null));
 
         AiValidateRequest validateRequest = AiValidateRequest.of(
                 TEAM_ID, warehouseId, scope, DATE_FROM, DATE_TO, params, items);
@@ -523,7 +526,7 @@ class AnalysisItemAssemblerTest {
     void evidencePrint() throws Exception {
         List<AiRunItem> items = assembler.assemble(TEAM_ID, WAREHOUSE_DEFAULT,
                 scope(AnalysisScopeType.SELECTED_SKUS, List.of(SKU_LEAD, SKU_POLICY), null),
-                DATE_FROM, DATE_TO);
+                DATE_FROM, DATE_TO, AnalysisParams.resolve(null));
         System.out.println("[V4] outbound items (2 SKUs) = "
                 + springJson.writeValueAsString(items));
 
@@ -546,7 +549,7 @@ class AnalysisItemAssemblerTest {
     // =====================================================================
     private AiRunItem onlyItem(long skuId) {
         List<AiRunItem> items = assembler.assemble(TEAM_ID, WAREHOUSE_DEFAULT,
-                scope(AnalysisScopeType.SELECTED_SKUS, List.of(skuId), null), DATE_FROM, DATE_TO);
+                scope(AnalysisScopeType.SELECTED_SKUS, List.of(skuId), null), DATE_FROM, DATE_TO, AnalysisParams.resolve(null));
         assertEquals(1, items.size());
         return items.get(0);
     }

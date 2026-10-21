@@ -189,7 +189,7 @@ public class AnalysisAppService {
         //     跨团队/非 ACTIVE SKU、无默认仓、SKU 超限都是纯客户端校验错误，
         //     它们不应留下一个 FAILED 的 run 与一条 FINISH 审计。
         List<AiRunItem> items = itemAssembler.assemble(snapshot.teamId(), resolvedWarehouseId,
-                scope, request.dateFrom(), request.dateTo());
+                scope, request.dateFrom(), request.dateTo(), params);
 
         // e. 落库（PENDING 快照；run_no 撞键重取序列，上限 3 次）
         //    ★ R108/A2：撞键后若回查到同键 run（并发窗口），必须回到 c 的幂等判定——

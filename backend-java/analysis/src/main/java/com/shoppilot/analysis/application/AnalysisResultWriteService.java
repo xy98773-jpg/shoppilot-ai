@@ -256,7 +256,8 @@ public class AnalysisResultWriteService {
         if (warehouseOwner == null || !Objects.equals(warehouseOwner, run.getTeamId())) {
             throw new ValidationFailed(null, "#3 warehouse_id 不属于该团队：run=" + run.getWarehouseId());
         }
-        Map<Long, BigDecimal> inTransit = assembler.loadInTransitQty(skuIds, run.getWarehouseId());
+        Map<Long, BigDecimal> inTransit = assembler.loadInTransitQty(
+                run.getTeamId(), run.getWarehouseId(), skuIds);
 
         // 逐 item 校验 + 映射
         List<AnalysisItemEntity> rows = new ArrayList<>(items.size());

@@ -1,6 +1,7 @@
 package com.shoppilot.analysis.infrastructure.sampling;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.shoppilot.analysis.domain.AnalysisParams;
 import com.shoppilot.analysis.domain.AnalysisScope;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiRunItem;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiSalesPoint;
@@ -15,6 +16,7 @@ import com.shoppilot.catalog.infrastructure.persistence.mapper.WarehouseMapper;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
+import com.shoppilot.inventory.application.InventoryInTransitQueryService;
 import com.shoppilot.inventory.infrastructure.persistence.entity.InventoryBalanceEntity;
 import com.shoppilot.inventory.infrastructure.persistence.entity.ReplenishmentPolicyEntity;
 import com.shoppilot.inventory.infrastructure.persistence.mapper.InventoryBalanceMapper;
@@ -23,6 +25,7 @@ import com.shoppilot.sales.application.SalesQueryService;
 import com.shoppilot.sales.application.dto.SalesSeriesPoint;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -30,8 +33,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
@@ -65,13 +66,12 @@ import org.springframework.stereotype.Component;
  *   <li><b>幂等指纹</b>（§5.36 裁定 #13）：装配结果会进入 Python 的 {@code request_hash}
  *       （Java 侧幂等键是请求体指纹的类比），因此<b>库存/销量变化会让同一 {@code Idempotency-Key}
  *       的重投被判异体 {@code COM-0009}</b>。这是既有语义（请求体即指纹），本批<b>不改</b>。</li>
- *   <li><b>{@code effective_in_transit_qty} 是临时口径（R124）</b>：本批取
- *       {@code inventory_balances.in_transit_qty}（余额列口径，<b>没有到货窗口过滤</b>），
- *       会高估 {@code IP}、低估补货量。{@code DESIGN_BASIS §10.4} 的
- *       {@code Σ(poi.ordered_qty − poi.received_qty)}（按 PO 状态 + 到货窗口过滤）需要
- *       {@code purchase_orders/purchase_order_items}，而采购模块 <b>M6 才建</b>
- *       （{@code InventoryInTransitQueryServiceImpl} 现为空占位）。
- *       <b>M6 落地后必须换回 §10.4 口径并重算</b>，本类会为每次装配打一条 WARN。</li>
+ *   <li><b>{@code effective_in_transit_qty} 走 {@code DESIGN_BASIS §10.4} 口径（{@code M6-T10}，
+ *       {@code R124} 已闭环）</b>：由 {@link InventoryInTransitQueryService#batchGetEffectiveInTransit}
+ *       提供——按 SKU 的 {@code today + L + R} 窗口过滤（{@code L} 走本类四级回退，
+ *       {@code R = params.coverageDays}），<b>不再</b>读 {@code inventory_balances.in_transit_qty}
+ *       （该列已退役，{@code §5.78} 方案 B′）。窗口规则本身在 {@code inventory} 实现，本类只算边界日。
+ *       窗口末日<b>逐 SKU</b>不同（{@code L} 各异），因此传 {@code Map<skuId, windowEndDate>}。</li>
  *   <li><b>默认仓只读 {@code warehouses}（R125）</b>：{@code is_default=1 AND status='ACTIVE'}，
  *       <b>不读 {@code teams.default_warehouse_id}</b>——analysis 的模块白名单不含 identity
  *       （{@code MODULE_BOUNDARIES §1.1}），且两套机制可能互相不一致；命中多于一行按
@@ -86,13 +86,11 @@ import org.springframework.stereotype.Component;
 @Component
 public class AnalysisItemAssembler {
 
-    private static final Logger log = LoggerFactory.getLogger(AnalysisItemAssembler.class);
-
     /** 主数据「启用」状态值（{@code skus/warehouses.status}；catalog 内为私有常量，此处按字面取值）。 */
     private static final String STATUS_ACTIVE = "ACTIVE";
 
-    /** 交期兜底值（{@code DESIGN_BASIS §10.6} 的 {@code DEFAULT_LEAD_TIME_DAYS}）。 */
-    private static final int DEFAULT_LEAD_TIME_DAYS = 7;
+    /** 交期兜底值（{@code DESIGN_BASIS §10.6} 的 {@code DEFAULT_LEAD_TIME_DAYS}；{@code params} 缺失时才用）。 */
+    private static final int DEFAULT_LEAD_TIME_DAYS = AnalysisParams.DEFAULT_LEAD_TIME_DAYS;
 
     /** 批量查询分片大小（§5.36 裁定 #12：≤500/批，沿用 inventory/sales 的 chunk 惯例）。 */
     public static final int QUERY_CHUNK_SIZE = 500;
@@ -107,6 +105,7 @@ public class AnalysisItemAssembler {
     private final InventoryBalanceMapper inventoryBalanceMapper;
     private final ReplenishmentPolicyMapper replenishmentPolicyMapper;
     private final SalesQueryService salesQueryService;
+    private final InventoryInTransitQueryService inTransitQueryService;
 
     public AnalysisItemAssembler(SkuMapper skuMapper,
                                  ProductMapper productMapper,
@@ -114,7 +113,8 @@ public class AnalysisItemAssembler {
                                  WarehouseMapper warehouseMapper,
                                  InventoryBalanceMapper inventoryBalanceMapper,
                                  ReplenishmentPolicyMapper replenishmentPolicyMapper,
-                                 SalesQueryService salesQueryService) {
+                                 SalesQueryService salesQueryService,
+                                 InventoryInTransitQueryService inTransitQueryService) {
         this.skuMapper = skuMapper;
         this.productMapper = productMapper;
         this.supplierMapper = supplierMapper;
@@ -122,6 +122,7 @@ public class AnalysisItemAssembler {
         this.inventoryBalanceMapper = inventoryBalanceMapper;
         this.replenishmentPolicyMapper = replenishmentPolicyMapper;
         this.salesQueryService = salesQueryService;
+        this.inTransitQueryService = inTransitQueryService;
     }
 
     // =====================================================================
@@ -182,6 +183,8 @@ public class AnalysisItemAssembler {
      * @param scope       分析范围
      * @param dateFrom    数据窗口起
      * @param dateTo      数据窗口止
+     * @param params      已解析的运行参数（{@code lead_time_default} 兜底交期、{@code coverage_days} 即 {@code R}）；
+     *                    {@code null} 时按 {@link AnalysisParams#resolve} 的默认值兜底
      * @return 按 SKU id 升序的出站 items（可能为空列表——范围命中 0 个 SKU 时交由 Python 判 AI-2002）
      * @throws BizException {@code COM-0001}（跨团队 / 非 ACTIVE SKU）/ {@code ANL-7007}（SKU 超 2000）
      */
@@ -189,7 +192,8 @@ public class AnalysisItemAssembler {
                                     Long warehouseId,
                                     AnalysisScope scope,
                                     LocalDate dateFrom,
-                                    LocalDate dateTo) {
+                                    LocalDate dateTo,
+                                    AnalysisParams params) {
         List<SkuEntity> skus = selectSkus(teamId, scope);
         assertSkuLimit(skus.size());
 
@@ -198,17 +202,34 @@ public class AnalysisItemAssembler {
         Map<Long, ReplenishmentPolicyEntity> policies = policiesOf(warehouseId, skuIds);
         Map<Long, SupplierEntity> suppliers = suppliersOf(skus);
 
-        log.warn("effective_in_transit_qty 使用临时口径（inventory_balances.in_transit_qty，"
-                + "无到货窗口过滤，会高估 IP）：R124，M6 落地后换回 DESIGN_BASIS §10.4 口径并重算。"
-                + "teamId={} warehouseId={} skuCount={}",
-                teamId, warehouseId, skus.size());
+        int leadTimeFallback = params == null || params.leadTimeDefault() == null
+                ? DEFAULT_LEAD_TIME_DAYS : params.leadTimeDefault();
+        int coverageDays = params == null || params.coverageDays() == null
+                ? AnalysisParams.DEFAULT_COVERAGE_DAYS : params.coverageDays();
+        // ★ today 用 UTC（与 DATETIME(3) UTC 存储口径一致）；窗口末日逐 SKU 计算（L 各异）
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        Map<Long, LeadTime> leadTimes = new LinkedHashMap<>();
+        Map<Long, LocalDate> windowEnds = new LinkedHashMap<>();
+        for (SkuEntity sku : skus) {
+            LeadTime leadTime = resolveLeadTime(sku, policies.get(sku.getId()),
+                    sku.getSupplierId() == null ? null : suppliers.get(sku.getSupplierId()),
+                    leadTimeFallback);
+            leadTimes.put(sku.getId(), leadTime);
+            windowEnds.put(sku.getId(), today.plusDays((long) leadTime.days() + coverageDays));
+        }
+        // §10.4 有效在途：口径在 inventory 单点实现，这里只给「每个 SKU 的窗口末日」
+        Map<Long, BigDecimal> effectiveInTransit = warehouseId == null
+                ? Map.of()
+                : inTransitQueryService.batchGetEffectiveInTransit(teamId, warehouseId, windowEnds);
 
         List<AiRunItem> items = new ArrayList<>(skus.size());
         for (SkuEntity sku : skus) {
             // ★ 供应商 map 的键是 supplier_id（不是 sku_id）
             items.add(toItem(sku, warehouseId, dateFrom, dateTo,
                     balances.get(sku.getId()), policies.get(sku.getId()),
-                    sku.getSupplierId() == null ? null : suppliers.get(sku.getSupplierId())));
+                    sku.getSupplierId() == null ? null : suppliers.get(sku.getSupplierId()),
+                    leadTimes.get(sku.getId()),
+                    effectiveInTransit.getOrDefault(sku.getId(), BigDecimal.ZERO)));
         }
         return List.copyOf(items);
     }
@@ -253,30 +274,28 @@ public class AnalysisItemAssembler {
     }
 
     /**
-     * 回读在途库存余额（{@code R132}：Python 的 {@code ResultItem} <b>不回显</b>
-     * {@code in_transit_qty}，而该列 {@code NOT NULL}）。
+     * 回读在途量，用于落库 {@code analysis_items.in_transit_qty} 快照（{@code R132}：Python 的
+     * {@code ResultItem} <b>不回显</b> {@code in_transit_qty}，而该列 {@code NOT NULL}）。
      *
-     * <p>★ 与出站的 {@code effective_in_transit_qty} <b>口径不同</b>：本方法给的是
-     * 「快照当时的余额列原值」，出站给的是「本次分析使用的有效在途」（R124 临时口径下两者相等，
-     * M6 换回 {@code §10.4} 后会产生差异）。缺行不报错，由调用方兜 {@code 0}。
+     * <p>★ 与出站的 {@code effective_in_transit_qty} <b>口径不同</b>（{@code DESIGN_BASIS §10.4}）：
+     * <ul>
+     *   <li>本方法 = <b>原始在途</b>（{@code batchGetInTransit}，<b>不</b>应用到货窗口）——
+     *       快照列要的是「当时的在途事实」，不是「本次计算的窗口内有效在途」；</li>
+     *   <li>出站 = <b>有效在途</b>（{@code batchGetEffectiveInTransit}，已按 {@code today + L + R} 过滤）。</li>
+     * </ul>
+     * 二者不再相等（{@code M6-T10} 前都读余额列所以恒等，现由 {@code R178} 起分道）。
+     * 缺在途不报错，由调用方兜 {@code 0}。
      *
-     * @return {@code sku_id -> in_transit_qty}；缺余额行的 sku <b>不在 map 中</b>
+     * @param teamId      当前团队（租户隔离；不接受客户端传入）
+     * @param warehouseId 仓库；{@code null} ⇒ 空 map
+     * @param skuIds      关心的 SKU
+     * @return {@code sku_id -> 原始在途}；无在途的 sku <b>不在 map 中</b>
      */
-    public Map<Long, BigDecimal> loadInTransitQty(Collection<Long> skuIds, Long warehouseId) {
-        Map<Long, BigDecimal> bySku = new LinkedHashMap<>();
-        if (warehouseId == null) {
-            return bySku;
+    public Map<Long, BigDecimal> loadInTransitQty(long teamId, Long warehouseId, Collection<Long> skuIds) {
+        if (warehouseId == null || skuIds == null || skuIds.isEmpty()) {
+            return Map.of();
         }
-        for (List<Long> chunk : chunks(skuIds)) {
-            for (InventoryBalanceEntity balance : inventoryBalanceMapper.selectList(
-                    Wrappers.<InventoryBalanceEntity>lambdaQuery()
-                            .in(InventoryBalanceEntity::getSkuId, chunk)
-                            .eq(InventoryBalanceEntity::getWarehouseId, warehouseId)
-                            .select(InventoryBalanceEntity::getSkuId, InventoryBalanceEntity::getInTransitQty))) {
-                bySku.put(balance.getSkuId(), balance.getInTransitQty());
-            }
-        }
-        return bySku;
+        return inTransitQueryService.batchGetInTransit(teamId, warehouseId, skuIds);
     }
 
     /**
@@ -436,20 +455,20 @@ public class AnalysisItemAssembler {
                              LocalDate dateTo,
                              InventoryBalanceEntity balance,
                              ReplenishmentPolicyEntity policy,
-                             SupplierEntity supplier) {
+                             SupplierEntity supplier,
+                             LeadTime leadTime,
+                             BigDecimal effectiveInTransit) {
         // ★ 缺余额行**不是错误**（裁定 #6）：三项一律兜 0.000，而不是省略字段——
         //   Python 侧 Item 这三项是必填，省略会直接 400 AI-1001。
         BigDecimal onHand = balance == null ? BigDecimal.ZERO : balance.getOnHandQty();
         BigDecimal committed = balance == null ? BigDecimal.ZERO : balance.getCommittedQty();
-        BigDecimal inTransit = balance == null ? BigDecimal.ZERO : balance.getInTransitQty();
-
-        LeadTime leadTime = resolveLeadTime(sku, policy, supplier);
+        // ★ 在途**不再**取 balance.getInTransitQty()（物化列已退役，§5.78）：由调用方传入 §10.4 有效在途
+        BigDecimal inTransit = effectiveInTransit == null ? BigDecimal.ZERO : effectiveInTransit;
 
         return new AiRunItem(
                 sku.getId(),
                 decimal3(onHand),
                 decimal3(committed),
-                // ★ R124 临时口径（见类注释 ③）：余额列 in_transit_qty，无到货窗口过滤
                 decimal3(inTransit),
                 leadTime.days(),
                 leadTime.source(),
@@ -466,11 +485,13 @@ public class AnalysisItemAssembler {
 
     /**
      * 交期来源优先级（§5.36 裁定 #7）：
-     * {@code policies(POLICY) → skus(SKU) → suppliers(SUPPLIER) → 7(DEFAULT)}，取第一个非空。
+     * {@code policies(POLICY) → skus(SKU) → suppliers(SUPPLIER) → params.lead_time_default(DEFAULT)}，
+     * 取第一个非空。★ 兜底值取请求参数 {@code lead_time_default}（{@code M6-T10} 前误用硬编码 7）。
      */
     private LeadTime resolveLeadTime(SkuEntity sku,
                                      ReplenishmentPolicyEntity policy,
-                                     SupplierEntity supplier) {
+                                     SupplierEntity supplier,
+                                     int leadTimeDefault) {
         if (policy != null && policy.getLeadTimeDays() != null) {
             return new LeadTime(policy.getLeadTimeDays(), "POLICY");
         }
@@ -480,7 +501,7 @@ public class AnalysisItemAssembler {
         if (supplier != null && supplier.getLeadTimeDays() != null) {
             return new LeadTime(supplier.getLeadTimeDays(), "SUPPLIER");
         }
-        return new LeadTime(DEFAULT_LEAD_TIME_DAYS, "DEFAULT");
+        return new LeadTime(leadTimeDefault, "DEFAULT");
     }
 
     /** 销量序列：<b>只含有记录的日子</b>（{@code ANALYSIS_CONTRACT §1.2}），空数组合法。 */

@@ -262,7 +262,9 @@ class AnalysisResultWriteServiceTest {
         assertEquals(2L, count("analysis_items"));
         Map<String, Object> item = itemRow(runId, SKU_A);
         assertEquals(PRODUCT_A, ((Number) item.get("product_id")).longValue(), "R132：product_id 回读主数据");
-        assertEquals(new BigDecimal("5.000"), strip(item.get("in_transit_qty")), "R132：在途回读余额列");
+        assertEquals(new BigDecimal("0.000"), strip(item.get("in_transit_qty")),
+                "R178/M6-T10：in_transit_qty 改由采购派生（本夹具无采购单 ⇒ 0），"
+                        + "余额列 5.000 已退役不再被读取");
         assertEquals(new BigDecimal("8.000"), strip(item.get("on_hand_qty")));
         assertEquals(new BigDecimal("7.000"), strip(item.get("available_qty")),
                 "available = on_hand − committed = 7（R67：仅展示，不入 Q_base/IP）");
