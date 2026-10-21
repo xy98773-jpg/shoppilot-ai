@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shoppilot.TestCredentials;
 import com.shoppilot.app.ShopPilotApplication;
-import com.shoppilot.common.error.ErrorCodes;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -232,29 +231,39 @@ class GoodsReceiptDuplicateSkuLinesIntegrationTest {
     // =====================================================================
 
     @Test
-    @DisplayName("R180-D3 同 receipt 再 confirm 一次：不新增流水、received_qty 与余额不变（实测 409 PO-9003）")
-    void replayConfirmIsRefusedWithoutSideEffects() throws Exception {
+    @DisplayName("R180-D3 同 receipt 再 confirm 一次：200 幂等成功（返回首次结果），不新增流水、不重复累加")
+    void replayConfirmIsIdempotent() throws Exception {
         long[] items = createPo(TEAM7, WH7, new String[] {"100.000", "100.000"});
         long receiptId = createReceiptViaApi(items, new String[] {"10.000", "30.000"});
         String token = login("approver01");
 
-        assertEquals(HttpStatus.OK, confirm(receiptId, token).getStatusCode());
+        ResponseEntity<String> first = confirm(receiptId, token);
+        assertEquals(HttpStatus.OK, first.getStatusCode(), first.getBody());
+        JsonNode firstData = json.readTree(first.getBody()).get("data");
         long txnAfterFirst = inboundTxns(receiptId).size();
         String receivedAfterFirst = qtyText(poReceivedQty(poIdOf(items)));
         String onHandAfterFirst = onHand(WH7, SKU7);
+        int versionAfterFirst = jdbc.queryForObject(
+                "SELECT version FROM goods_receipts WHERE id = ?", Integer.class, receiptId);
 
         ResponseEntity<String> replay = confirm(receiptId, token);
         System.out.println("[R180-EVIDENCE] D3 二次 confirm（原始响应）: "
                 + replay.getStatusCode().value() + " " + replay.getBody());
 
-        // ★ 实测行为 = 409 + PO-9003（不是 200）：到货单已 CONFIRMED 时
-        //   GoodsReceiptAppService#confirm 在<b>写库存之前</b>按状态机拒绝
-        //   （GoodsReceiptAppService.java:407-410），既有 E5 已锁死该行为
-        //   （GoodsReceiptConfirmIntegrationTest#duplicateConfirmRejected）。
-        //   与 DATABASE_CONSTRAINTS.md:85「重复确认且已 CONFIRMED → 返回成功（幂等）」口径不一致，
-        //   已作为偏差上报（R180 不在本批改该契约）。
-        assertEquals(HttpStatus.CONFLICT, replay.getStatusCode(), "实测：重复确认被状态机拒绝");
-        assertEquals(ErrorCodes.PO_9003, codeOf(replay), "实测错误码 PO-9003");
+        // ★ 依 SSOT：DATABASE_CONSTRAINTS.md:85（幂等 #5「重复确认且已 CONFIRMED → 返回成功（幂等）」）
+        //   + TEST_STRATEGY.md:343（§8.2 R-4「幂等：只入库一次，返回已确认结果」）。
+        //   ⚠ 原 M6-T05+T06 实现在此抛 409 PO-9003，是令文缺陷，现已按 SSOT 订正为幂等成功。
+        assertEquals(HttpStatus.OK, replay.getStatusCode(), "★ 重复确认必须幂等成功：" + replay.getBody());
+        JsonNode replayData = json.readTree(replay.getBody()).get("data");
+        assertEquals("CONFIRMED", replayData.get("status").asText());
+        assertEquals(firstData.get("goods_receipt_id").asLong(),
+                replayData.get("goods_receipt_id").asLong(), "同一张到货单");
+        assertEquals(firstData.get("confirmed_at").asText(), replayData.get("confirmed_at").asText(),
+                "★ 返回首次确认结果（confirmed_at 不变）");
+        assertEquals(versionAfterFirst, replayData.get("version").asInt(), "★ 幂等路径不得推进 version");
+        assertEquals(versionAfterFirst, jdbc.queryForObject(
+                "SELECT version FROM goods_receipts WHERE id = ?", Integer.class, receiptId),
+                "★ 库内 version 不得变");
 
         assertEquals(txnAfterFirst, inboundTxns(receiptId).size(), "★ 不得新增流水");
         assertEquals(receivedAfterFirst, qtyText(poReceivedQty(poIdOf(items))), "★ 不得重复累加");
@@ -401,12 +410,6 @@ class GoodsReceiptDuplicateSkuLinesIntegrationTest {
             headers.set("Idempotency-Key", idempotencyKey);
         }
         return rest.exchange(path, HttpMethod.POST, new HttpEntity<>(body, headers), String.class);
-    }
-
-    private String codeOf(ResponseEntity<String> res) throws Exception {
-        JsonNode body = json.readTree(res.getBody());
-        JsonNode code = body.get("code");
-        return code == null ? null : code.asText();
     }
 
     private String login(String username) throws Exception {

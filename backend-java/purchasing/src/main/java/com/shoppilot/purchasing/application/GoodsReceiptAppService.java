@@ -391,9 +391,17 @@ public class GoodsReceiptAppService {
      * <p>★ <b>不留 {@code PENDING} 悬挂</b>：任何一步失败都抛异常 ⇒ 整事务回滚 ⇒
      * 到货单仍为 {@code DRAFT}、无流水、无余额变更（{@code M6-T12b} 的 R-7 即验此）。
      *
+     * <p>★ <b>重复确认＝幂等成功（R-4）</b>：到货单已是 {@code CONFIRMED} 时<b>返回已确认结果</b>
+     * （{@code DATABASE_CONSTRAINTS.md:85} 幂等 #5 + {@code TEST_STRATEGY.md:343} §8.2 R-4
+     * 「只入库一次，返回已确认结果」）：不写库存、不写审计、不改 {@code version}。
+     * 并发同单确认（CAS 落空后重读已 {@code CONFIRMED}）走同一条幂等路径。
+     * ★ 与之区别：{@code CANCELLED} 是<b>另一个</b>终态，仍按状态机拒绝（{@code PO-9003}）。
+     *
      * @param receiptId 到货单 ID
-     * @return 确认后的到货单详情（含 {@code confirmed_at}/{@code confirmed_by}）
-     * @throws BizException {@code PO-9005}（不存在/跨团队）、{@code PO-9003}（状态不允许）、
+     * @return 确认后的到货单详情（含 {@code confirmed_at}/{@code confirmed_by}）；
+     *         重复确认时返回<b>首次</b>确认的同一份结果
+     * @throws BizException {@code PO-9005}（不存在/跨团队）、
+     *                      {@code PO-9003}（状态不允许：{@code CANCELLED}／非 {@code DRAFT}／采购单状态不符）、
      *                      {@code PO-9002}（超额）、{@code PO-9006}（无明细）、
      *                      {@code PO-9012}（数量非法）、{@code INV-5002}（库存乐观锁冲突）
      */
@@ -406,11 +414,16 @@ public class GoodsReceiptAppService {
         }
         String receiptStatus = receipt.getStatus();
         if (STATUS_CONFIRMED.equals(receiptStatus)) {
-            // 已确认：按状态机拒绝（B0-19）。★ 本判断发生在写库存之前 ⇒ 不会产生第二条流水。
-            throw new BizException(ErrorCodes.PO_9003, "到货单已确认，请勿重复确认");
+            // ★ 幂等（R-4）：重复确认<b>成功</b>返回已确认结果（200），
+            //   依 DATABASE_CONSTRAINTS.md:85「幂等 #5 到货单：重复确认且已 CONFIRMED → 返回成功（幂等）」
+            //   + TEST_STRATEGY.md:343（§8.2 R-4「幂等：只入库一次，返回已确认结果」）。
+            //   ★ 本分支<b>不写库存、不写审计、不改 version</b>（不是「再来一次确认」，是「返回上次结果」）。
+            //   ⚠ 原实现（M6-T05+T06）在此抛 PO-9003，与该两条 SSOT 冲突，已订正。
+            return goodsReceiptQueryService.getReceipt(receiptId);
         }
         if (STATUS_CANCELLED.equals(receiptStatus)) {
-            // CONFIRMED 的直接作废已被 A3 拒绝；CANCELLED 亦不可再确认（§9.14 DRAFT→CONFIRMED 单向）
+            // CANCELLED 是<b>另一个</b>终态，不是同一个幂等请求 ⇒ 仍拒绝
+            // （§9.14 DRAFT→CONFIRMED 单向；CONFIRMED 的直接作废已被 A3 拒绝）
             throw new BizException(ErrorCodes.PO_9003, "到货单已作废，不可确认");
         }
         if (!STATUS_DRAFT.equals(receiptStatus)) {
@@ -480,7 +493,13 @@ public class GoodsReceiptAppService {
                         .set(GoodsReceiptEntity::getVersion, receipt.getVersion() + 1)
                         .set(GoodsReceiptEntity::getUpdatedBy, operatorId));
         if (affected == 0) {
-            // 并发同单确认：另一请求已先提交 ⇒ 按状态机拒绝（不重复入库）
+            // 并发同单确认：另一请求已先提交。★ 这是<b>正常收敛</b>，不是异常：
+            // 重读一次，若此刻已是 CONFIRMED ⇒ 按同一幂等语义返回已确认结果（R-4），
+            // 绝不重复入库；只有「既不是 CONFIRMED 又没抢到 CAS」才按状态机拒绝。
+            GoodsReceiptEntity latest = receiptMapper.selectById(receiptId);
+            if (latest != null && STATUS_CONFIRMED.equals(latest.getStatus())) {
+                return goodsReceiptQueryService.getReceipt(receiptId);
+            }
             throw new BizException(ErrorCodes.PO_9003, "到货单状态已变化，请刷新后重试");
         }
 
