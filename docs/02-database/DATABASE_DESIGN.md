@@ -456,7 +456,12 @@
   4. **幂等键的构造**：`<txn_type>:<biz_type>:<biz_ref_id>:<sku_id>`（对盘点/手工调整追加操作人+时间戳）。**禁止**用 `UUID` 作幂等键——那样永远不冲突，等于没有幂等。
      **后缀的用途（`§10.4` 的 `[:<suffix>]`，`R80` 订正）**：余额与流水都是 **`(team_id, warehouse_id, sku_id)` 三键**维度，故凡「业务单据粒度不足以唯一确定一行流水」的场景，后缀**必须**补足缺失维度：
      ① `INIT_IMPORT`（来源导入批次）→ **追加 `:<warehouse_id>`**，即 `INIT_IMPORT:IMPORT:<batch_id>:<sku_id>:<warehouse_id>`（同一批次内同一 SKU 可合法出现在多个仓库，缺此后缀会让第二个仓库的行被误判为重复提交）；
-     ② 盘点 / 手工调整 → 追加操作人 + 时间戳（同一人同一时刻多次调整需可区分）。
+     ② 盘点 / 手工调整 → 追加操作人 + 时间戳（同一人同一时刻多次调整需可区分）；
+     ③ `PURCHASE_INBOUND`（确认到货）→ **追加 `:<purchase_order_item_id>`**，即
+        `PURCHASE_INBOUND:GOODS_RECEIPT:<receipt_id>:<sku_id>:<purchase_order_item_id>`
+        （`R180` 订正：`purchase_order_items` **无** `(po_id, sku_id)` 唯一键，`goods_receipt_items`
+        只约束 `(receipt_id, purchase_order_item_id)` ⇒ 同一张到货单**可以合法**出现「同 SKU、不同
+        采购明细行」两行；缺此后缀时第二行会被误判为重复提交，且采购单 `received_qty` 会多算）。
      **判定口径**：若不加后缀会导致「两条合法业务行同键」，则该后缀是**必填**而非可选。
 
 ---
@@ -1114,7 +1119,7 @@ HAVING diff <> 0;
 | --- | --- |
 | 事务失败（抛异常） | 流水与余额**同时回滚**，不产生半成品（这是"同事务"的核心价值） |
 | 重复请求（同一操作重发） | 幂等键 `(team_id, idempotency_key)` 命中：**内容一致** → 返回原流水并视为成功（HTTP 200）；**内容不一致** → `INV-5003`（HTTP 409） |
-| 幂等键构造 | `<txn_type>:<biz_type>:<biz_ref_id>:<sku_id>[:<suffix>]`；同一到货单的同一 SKU 只有一条 `PURCHASE_INBOUND` 流水 |
+| 幂等键构造 | `<txn_type>:<biz_type>:<biz_ref_id>:<sku_id>[:<suffix>]`；同一到货单的同一**采购明细行**（`purchase_order_item_id`）只有一条 `PURCHASE_INBOUND` 流水（`R180`：同 SKU 多行须由后缀区分，见 `§5.3` 后缀用途 ③） |
 | 并发首次建行 | 两个请求同时尝试插入同一 `(team_id, wh, sku)` 余额行 → 一个成功、一个撞 `uk_invbal_team_wh_sku` → **捕获后改为读取再走乐观锁路径**（不报错） |
 
 ---
