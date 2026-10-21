@@ -79,7 +79,7 @@
 | 量 | 字段 / 计算 | 是否落库 | 前端展示口径 | 更新时机 | 是否参与补货 |
 | --- | --- | --- | --- | --- | --- |
 | 现有库存 | `on_hand_qty` | 落库（`§5.9`） | 直接展示 | **只能由流水驱动**（同事务写 `inventory_transactions` + 更新余额） | 参与（经 `IP`） |
-| 在途库存 | `in_transit_qty` | 落库 | 展示"在途" | **由采购单驱动**（创建/确认收货/取消时增减），**不产生库存流水** | 不直接参与；经 `effective_in_transit_qty` |
+| 在途库存 | `in_transit_qty` | **派生**（列已废弃，`R178`） | 展示"在途"（`batchGetInTransit`，不应用窗口） | 由采购明细数量/状态自动派生（`ordered − received`），**无写入点、无流水** | 不直接参与；经 `effective_in_transit_qty` |
 | 已承诺库存 | `committed_qty` | 落库（首期默认 0） | 展示"已承诺" | 由业务占用/释放驱动（首期仅保留通道） | 参与（经 `IP` 扣减） |
 | 可用库存 | `available_qty = on_hand − committed` | **`STORED` 生成列** | 展示"可用" | 随 `on_hand_qty`/`committed_qty` 自动维护 | **禁止参与补货判断**（`§3.1` 第 3 条） |
 | 有效在途 | `effective_in_transit_qty` | **不落库**（快照进 `analysis_items`） | 不直接展示（可在分析明细中查看） | 查询侧按 `§10.4` 窗口过滤计算 | 参与（经 `IP`） |
@@ -177,10 +177,9 @@ flowchart TD
     D --> E["txn_type = PURCHASE_INBOUND<br/>biz_type = GOODS_RECEIPT<br/>biz_ref_id = goods_receipt_id"]
     E --> F["写 inventory_transactions<br/>qty_before / qty_after / qty_delta = +本次到货"]
     F --> G["更新 inventory_balances<br/>on_hand_qty = qty_after（乐观锁）"]
-    G --> H["扣减 inventory_balances.in_transit_qty"]
-    H --> I["回写 purchase_order_items.received_qty（悲观锁）"]
-    I --> J["重算 purchase_orders 汇总与状态（乐观锁）"]
-    J --> K["写审计 GOODS_RECEIPT_CONFIRM"]
+    G --> H["回写 purchase_order_items.received_qty（悲观锁）<br/>★ 在途随之派生减少（无写入点）"]
+    H --> I["重算 purchase_orders 汇总与状态（乐观锁）"]
+    I --> J["写审计 GOODS_RECEIPT_CONFIRM"]
 ```
 
 | 步骤 | 执行方 | 输入 | 输出 | 状态变化 | 事务边界 | 失败处理 |
@@ -190,7 +189,7 @@ flowchart TD
 | 3 | Java（`purchasing`） | 本次到货量 | `received_qty` 累加、采购单状态重算 | 采购单 `ORDERED/PARTIALLY_RECEIVED→PARTIALLY_RECEIVED/RECEIVED` | 同事务 | 见 `PURCHASING_WORKFLOW.md §8` |
 
 - **幂等键**：`PURCHASE_INBOUND:GOODS_RECEIPT:<receipt_id>:<sku_id>:<purchase_order_item_id>`（`DATABASE_DESIGN.md §6-I.2`；后缀**必填**，见 `§5.3` 后缀用途 ③）；粒度按**采购明细行**，一条到货明细行对应一条流水（同 SKU 多行各自独立，`R180`）。
-- **在途扣减**：确认到货时同步减少 `in_transit_qty`（`in_transit_qty` 由采购单驱动，但**不在本流程产生流水**，见 §4）。
+- **在途（派生）**：确认到货时 `poi.received_qty` 累加 ⇒ 派生在途**自动减少**；**没有任何代码去改在途**（`inventory_balances.in_transit_qty` 列已废弃，`R178`/`M6-T10`，见 `DESIGN_BASIS §10.4.1`）。
 
 ---
 
@@ -465,7 +464,7 @@ flowchart TD
 | # | 操作 | 事务边界 | 主要步骤（同一本地事务） | 锁策略 | 回滚条件 / 冲突行为 |
 | --- | --- | --- | --- | --- | --- |
 | 1 | 初始库存导入（分批） | `ImportBatchAppService.importData()` 每批 | 首行插入 + `INIT_IMPORT` 流水 + 余额更新 | 唯一约束 + 乐观锁 | 单批失败回滚该批，不影响其他批 |
-| 2 | 采购入库 | `GoodsReceiptAppService.confirm()` | 到货单状态守卫 + 每条：流水 INSERT + 余额 UPDATE + `in_transit_qty` 扣减 + `poi.received_qty` + 采购单汇总与状态 | 状态守卫 + 悲观锁（`poi`）+ 余额乐观锁 | 超额 `PO-9002`；余额冲突 `INV-5002`（重试 3 次） |
+| 2 | 采购入库 | `GoodsReceiptAppService.confirm()` | 到货单状态守卫 + 每条：流水 INSERT + 余额 UPDATE（`on_hand_qty`）+ `poi.received_qty` 累加（在途随之派生）+ 采购单汇总与状态 | 状态守卫 + 悲观锁（`poi`）+ 余额乐观锁 | 超额 `PO-9002`；余额冲突 `INV-5002`（重试 3 次） |
 | 3 | 销售出库 | `InventoryWriteService.applyOutbound()` | 校验 `on_hand − qty ≥ 0` + `SALE_OUTBOUND` 流水 + 余额 UPDATE | 余额乐观锁 | 库存不足 `INV-5001`；并发 `INV-5002` |
 | 4 | 盘点调整 | `InventoryCountAppService.adjust()` | 批量读目标余额 + 逐行差额 + `COUNT_ADJUST` 流水 + 余额 UPDATE | 同一 SKU 多行：悲观锁；跨 SKU 升序加锁 | 差额 0 → 不写流水（幂等）；冲突 `INV-5002` |
 | 5 | 手工调整 | `InventoryWriteService.applyManualAdjust()` | 权限（`ADMIN`+）+ `reason` 必填 + `MANUAL_ADJUST` 流水 + 余额 UPDATE + 审计 | 余额乐观锁 | 原因缺失 `COM-0001`/`INV-5011`；无权限 `TEAM-2003` |
