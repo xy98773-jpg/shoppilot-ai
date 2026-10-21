@@ -119,12 +119,12 @@ class AuditChannelIntegrationTest {
     }
 
     // =====================================================================
-    // §6-1 Flyway 全链：V1.0.0 → V1.0.10 共 11 行 success
+    // §6-1 Flyway 全链：V1.0.0 → V1.0.12 共 13 行 success
     // =====================================================================
 
     @Test
     @DisplayName("§6-1 Flyway 全链：V1.0.0→V1.0.12 共 13 行、全部 success=1")
-    void flywayChainAppliedThroughV109() {
+    void flywayChainAppliedThroughV1012() {
         List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT version, success FROM flyway_schema_history ORDER BY installed_rank");
         assertEquals(13, rows.size(),

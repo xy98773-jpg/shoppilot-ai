@@ -36,15 +36,27 @@ public interface ReplenishmentItemMapper extends BaseMapper<ReplenishmentItemEnt
      * 没有余额行、无行可锁）时，降级改为锁本表 {@code APPROVED} 行——「同 SKU×仓库是否还有别的
      * 已审批建议」这个判定的输入就在本表，锁它等价于锁住判定的输入。
      *
-     * <p>★ <b>SQL 契约一字不改</b>：{@code WHERE team_id=? AND warehouse_id=? AND sku_id IN (…)
-     * AND status='APPROVED' ORDER BY sku_id ASC FOR UPDATE}。索引最左列 {@code team_id} 必须在条件里
-     * （{@code idx_repl_team_sku_time (team_id, sku_id, created_at)}），否则退化为全表扫描 + 全表行锁。
+     * <p>★ <b>SQL 谓词段契约一字不改</b>：{@code WHERE team_id=? AND warehouse_id=? AND sku_id IN (…)
+     * AND status='APPROVED' ORDER BY sku_id ASC FOR UPDATE}。
+     *
+     * <p>★ <b>为什么 {@code FORCE INDEX (idx_repl_team_wh_sku)}</b>（M6-T02-E / R169 闭环，
+     * 依据 {@code DESIGN_REVIEW §5.69.2} 的 9 组实测）：
+     * <ol>
+     *   <li><b>这是正确性不变量，不是性能优化</b>：{@code ORDER BY sku_id ASC} 的确定性加锁序是
+     *       死锁预防的硬不变量（{@code DATABASE_CONSTRAINTS §7.3} ①）。实测（组 E，2 行小数据量）
+     *       优化器会改选更窄的 {@code idx_repl_team_status_time} 并对 {@code sku_id}
+     *       <b>filesort</b> ⇒ 锁序失效 ⇒ 多 SKU 并发转采购可能死锁。<b>不应依赖优化器的成本估算</b>；
+     *       {@code FORCE INDEX} 在 2 行与 20 000 行两种规模下均确定性无 filesort（组 F/H）。</li>
+     *   <li><b>性能等价</b>：20 000 行下自然选择（组 G）与 FORCE INDEX（组 H）的 key/rows/Extra
+     *       完全一致（均为 {@code idx_repl_team_wh_sku}, rows=3, 无 filesort）⇒ 无代价。</li>
+     *   <li><b>fail-fast 语义</b>：索引若被误删/误改，SQL 直接 {@code ERROR 1176} 报错（组 I）
+     *       而非静默降级全表扫描 ⇒ 适合承载不变量。</li>
+     * </ol>
      *
      * <p>★ {@code @InterceptorIgnore(tenantLine = "true")}：本 SQL 已自带显式 {@code team_id}，
      * 租户线会重复追加等值谓词 {@code team_id = ?} ⇒ 必须忽略租户线；已登记白名单（理由见类 Javadoc）。
      *
-     * <p>★ 显式 {@link Select} + {@code ORDER BY sku_id ASC}（固定加锁序，防死锁）。
-     * 该方法无副作用：只加锁、不写数据、不写审计。
+     * <p>★ 该方法无副作用：只加锁、不写数据、不写审计。
      *
      * @param teamId      团队 ID
      * @param warehouseId 仓库 ID
@@ -53,7 +65,7 @@ public interface ReplenishmentItemMapper extends BaseMapper<ReplenishmentItemEnt
      */
     @InterceptorIgnore(tenantLine = "true")
     @Select("<script>"
-            + "SELECT id FROM replenishment_items "
+            + "SELECT id FROM replenishment_items FORCE INDEX (idx_repl_team_wh_sku) "
             + "WHERE team_id = #{teamId} AND warehouse_id = #{warehouseId} "
             + "AND sku_id IN "
             + "<foreach collection='skuIds' item='skuId' open='(' separator=',' close=')'>#{skuId}</foreach> "

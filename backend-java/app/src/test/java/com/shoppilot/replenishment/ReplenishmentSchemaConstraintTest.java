@@ -128,7 +128,7 @@ class ReplenishmentSchemaConstraintTest {
     // =====================================================================
 
     @Test
-    @DisplayName("T1 迁移链到 V1.0.10（11 条）：两表存在，关键列类型/可空/默认值正确")
+    @DisplayName("T1 迁移链到 V1.0.12（13 条）：两表存在，关键列类型/可空/默认值正确")
     void migrationAppliesThroughV110AndCreatesBothTables() throws Exception {
         List<String> tables = queryStrings("SELECT table_name FROM information_schema.tables "
                 + "WHERE table_schema = DATABASE()");
@@ -238,6 +238,9 @@ class ReplenishmentSchemaConstraintTest {
                 indexColumns("replenishment_items", "idx_repl_team_run"));
         assertEquals(List.of("team_id", "source_analysis_item_id"),
                 indexColumns("replenishment_items", "idx_repl_team_source"));
+        // ★ V1.0.12 / R165：降级锚点行锁的专用索引（列序写错 ⇒ 锁序失效，必须逐字断言）
+        assertEquals(List.of("team_id", "warehouse_id", "sku_id"),
+                indexColumns("replenishment_items", "idx_repl_team_wh_sku"));
         assertEquals(List.of("team_id", "replenishment_item_id", "occurred_at"),
                 indexColumns("replenishment_reviews", "idx_rr_team_item_time"));
         assertEquals(List.of("team_id", "reviewer_id", "occurred_at"),

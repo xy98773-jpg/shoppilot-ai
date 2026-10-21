@@ -115,7 +115,7 @@ class PurchasingSchemaConstraintTest {
     // =====================================================================
 
     @Test
-    @DisplayName("C1 四表存在且迁移版本 12；幂等键 NULL 性相反；集合 B 表无 version；精度列正确")
+    @DisplayName("C1 四表存在且迁移版本 13；幂等键 NULL 性相反；集合 B 表无 version；精度列正确")
     void tablesColumnsAndVersionCount() throws Exception {
         List<String> tables = queryStrings("SELECT table_name FROM information_schema.tables "
                 + "WHERE table_schema = DATABASE()");

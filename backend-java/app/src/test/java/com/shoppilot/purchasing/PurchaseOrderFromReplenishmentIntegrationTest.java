@@ -604,11 +604,11 @@ class PurchaseOrderFromReplenishmentIntegrationTest {
     }
 
     // =====================================================================
-    // E13：降级锁 SQL 索引可达性
+    // E13：降级锁 SQL 索引确定性（FORCE INDEX 后，与生产语句等价）
     // =====================================================================
 
     @Test
-    @DisplayName("E13【未覆盖/N-A】降级锁 EXPLAIN 观测（不证明优化器选中 idx_repl_team_sku_time）")
+    @DisplayName("E13 降级锁索引确定性：EXPLAIN（含 FORCE INDEX，与生产等价）key=idx_repl_team_wh_sku 且无 filesort")
     void degradeLockUsesIndex() {
         long runId = insertRun(TEAM7, "RUN-EXPLAIN");
         jdbc.update("INSERT INTO analysis_items (team_id, run_id, sku_id, product_id, warehouse_id, "
@@ -627,30 +627,22 @@ class PurchaseOrderFromReplenishmentIntegrationTest {
                         + "VALUES (?, ?, ?, ?, ?, ?, 'APPROVED', 20.000, 20.000, 'LOW')",
                 TEAM7, srcId, runId, SKU_NO_BALANCE, PRODUCT7, WH7);
 
-        // ★ EXPLAIN 补 FOR UPDATE：与生产加锁语句逐字等价（上一轮省略它是「未覆盖」的另一个原因）
+        // ★ EXPLAIN 与生产加锁语句逐字等价（含 FORCE INDEX——生产 SQL 在 M6-T02-E 也加了它，
+        //   上一轮「省略 FOR UPDATE」与「本轮不加 FORCE INDEX」都是未覆盖的来源）
         Map<String, Object> explain = jdbc.queryForMap(
-                "EXPLAIN SELECT id FROM replenishment_items "
+                "EXPLAIN SELECT id FROM replenishment_items FORCE INDEX (idx_repl_team_wh_sku) "
                         + "WHERE team_id = ? AND warehouse_id = ? AND sku_id IN (?, ?) "
                         + "AND status = 'APPROVED' ORDER BY sku_id ASC FOR UPDATE",
                 TEAM7, WH7, SKU_WITH_BALANCE, SKU_NO_BALANCE);
-        System.out.println("[M6T02-EVIDENCE] E13 EXPLAIN(V1.0.12 后): " + explain);
-        // ★ 【仍未覆盖/N-A】如实记录（M6-T02-D，V1.0.12 迁移后复验）：
-        //   实测 key=idx_repl_team_status_time（key_len=138, rows=2）+ Extra=Using where; Using filesort
-        //   —— 优化器**仍未选中** idx_repl_team_wh_sku。原因：rows=2 的小数据量下，
-        //   status='APPROVED' 等值前缀走 idx_repl_team_status_time 估算成本更低；
-        //   **这不是索引不可达**——idx_repl_team_wh_sku 已进入 possible_keys（⇒ V1.0.12 迁移生效），
-        //   而是优化器的成本估算选择。
-        //   登记 R169：ORDER BY sku_id 的确定性加锁序仍未由优化器保证；
-        //   正解候选（FORCE INDEX / 调整索引列序）需独立批次，本批不得改索引设计、
-        //   不得把 possible_keys 硬改成 key 断言、不得改迁移。
-        assertTrue(!"ALL".equals(explain.get("type")),
-                "不得全表扫描（R2 修复的最低目标），实际 type=" + explain.get("type"));
-        assertTrue(String.valueOf(explain.get("possible_keys")).contains("idx_repl_team_wh_sku"),
-                "V1.0.12 的 idx_repl_team_wh_sku 必须可达（在 possible_keys 中），实际："
-                        + explain.get("possible_keys"));
-        assertTrue(String.valueOf(explain.get("possible_keys")).contains("idx_repl_team_sku_time"),
-                "既有 idx_repl_team_sku_time 必须仍可达，实际："
-                        + explain.get("possible_keys"));
+        System.out.println("[M6T02-EVIDENCE] E13 EXPLAIN(FORCE INDEX 后): " + explain);
+        // ★ R169 已闭环（M6-T02-E / DESIGN_REVIEW §5.69.2）：生产 SQL 加 FORCE INDEX 后，
+        //   确定性加锁序不再依赖优化器成本估算；断言随之升级为「key 必须命中 + 无 filesort」。
+        assertEquals("idx_repl_team_wh_sku", explain.get("key"),
+                "FORCE INDEX 后 key 必须确定性命中 idx_repl_team_wh_sku，实际："
+                        + explain.get("key"));
+        String extra = String.valueOf(explain.get("Extra"));
+        assertTrue(!extra.contains("Using filesort"),
+                "FORCE INDEX 后不得出现 filesort（ORDER BY sku_id ASC 走索引前缀），实际 Extra=" + extra);
     }
 
     // =====================================================================

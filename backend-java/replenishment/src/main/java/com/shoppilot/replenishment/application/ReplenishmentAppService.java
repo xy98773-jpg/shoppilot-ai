@@ -154,7 +154,8 @@ public class ReplenishmentAppService {
 
         // ★ 同语句状态守卫（R3 / 契约 MODULE_BOUNDARIES:238–239）：
         //   WHERE id=? AND status='APPROVED' AND version=?
-        //   —— 读到的 version 一并作为条件，杜绝「读完到更新之间被并发改掉」的 TOCTOU。
+        //   —— 读到的 version 与状态一并作为条件。注意口径（与方法级 Javadoc 一致）：
+        //   version=? 本身已是完备 CAS；补 status='APPROVED' 是纵深防御 + 语义自解释。
         //   本处**故意**不用 updateById：MP 生成的 WHERE 只有 id + version，缺 status 条件。
         //   同时手动 set(version, version + 1)（插件对 update(null, wrapper) 不触发——
         //   与 MultiTenantConfig 权威口径一致：插件只改写实体形态的更新；entity == null 时
