@@ -18,7 +18,8 @@ import java.util.List;
  *
  * <p>★ Python <b>不</b>回显的三个值由 Java 回读主数据补齐（{@code R132}）：
  * {@code product_id}（← {@code skus.product_id}）、{@code in_transit_qty}
- * （← {@code inventory_balances.in_transit_qty}，与 {@code R124} 同源）、
+ * （← {@code InventoryInTransitQueryService.batchGetInTransit}，未过滤窗口的派生原始在途；
+ * {@code M6-T10} 前读 {@code inventory_balances.in_transit_qty} 物化列，该列已退役）、
  * {@code sales_window_days}（← 请求 {@code params.window_days}）。
  *
  *

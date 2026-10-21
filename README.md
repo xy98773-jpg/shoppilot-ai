@@ -2,9 +2,12 @@
 
 **电商库存决策与采购协同平台**
 
-> 当前状态：**M1（工程骨架与本地运行）已完成**。
-> 全栈可经 Docker Compose 一键启动（mysql / backend-java / service-ai / frontend-web / nginx 五服务均 healthy），CI 流水线（GitHub Actions）已就位且全绿。
-> 业务接口（登录、补货、采购、导入等）尚未实现，将在 M2 落地；M1 已包含骨架、安全拦截（401）、健康检查、Flyway 基线、MySQL 版本守卫与可重复测试。
+> 当前状态：**M0–M6 已完成，M7（集成与交付）待启动**。
+> 已落地：登录/团队隔离、主数据、CSV 导入、库存余额与流水（含盘点与冲销）、销售日数据、Python 确定性分析内核、
+> 补货建议状态机与 LLM 解释（可降级）、采购单与部分到货入库、审计查询；前端 4 大业务域页面齐备。
+> 验收证据：全量 `mvn verify` **843 用例 / 0 失败 / 0 跳过**（74 个测试类，含 Testcontainers 真库集成），
+> 另跑独立真栈探针 28 断言 0 失败（`backend-java/tools/m6-t13/`，详见 `docs/06-development/DESIGN_REVIEW.md §5.79`）。
+> 已知缺口：Python 侧 LLM 输出 Schema 校验未实现（`R155`，Java 二次校验兜底），详见 `DESIGN_REVIEW` 风险台账。
 
 ---
 
