@@ -12,8 +12,9 @@
 //       · 管理页（矩阵 #11/#12/#13）→ ['OWNER','ADMIN']。
 //
 // ★ 已实现：登录页、布局壳、工作台、主数据四页、403/404（M2-T12）；
-//   导入两页 + 库存三页 + 销售一页（M3-B10 / T18）。
-//   其余页面**保持 Placeholder 不动**（属后续里程碑：分析 / 补货 / 采购 / 团队 / 审计）。
+//   导入两页 + 库存三页 + 销售一页（M3-B10 / T18）；
+//   分析三页（M4）+ 采购两页（列表/详情，M6-T11）。
+//   其余页面**保持 Placeholder 不动**（属后续里程碑：补货 / 团队 / 审计）。
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { defineComponent, h } from 'vue'
 
@@ -165,18 +166,32 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '补货审核', roles: ['OWNER', 'ADMIN', 'APPROVER'] },
       },
 
+      // ---- 采购（M6-T11：采购单 / 到货单；列表与详情均为只读页，写操作按钮在页面内按角色显隐） ----
       { path: 'purchasing', redirect: '/purchasing/orders' },
+      // ★ 静态段必须排在 `:id` 之前（与 analysis 段同规则）
       {
         path: 'purchasing/orders',
         name: 'purchasing-orders',
-        component: () => Promise.resolve(Placeholder),
-        meta: { title: '采购订单', roles: WRITE_ROLES },
+        component: () => import('@/views/purchasing/PurchaseOrderList.vue'),
+        meta: { title: '采购单' },
+      },
+      {
+        path: 'purchasing/orders/:id',
+        name: 'purchasing-order-detail',
+        component: () => import('@/views/purchasing/PurchaseOrderDetail.vue'),
+        meta: { title: '采购单详情' },
       },
       {
         path: 'purchasing/receipts',
         name: 'purchasing-receipts',
-        component: () => Promise.resolve(Placeholder),
-        meta: { title: '收货记录', roles: WRITE_ROLES },
+        component: () => import('@/views/purchasing/GoodsReceiptList.vue'),
+        meta: { title: '到货单' },
+      },
+      {
+        path: 'purchasing/receipts/:id',
+        name: 'purchasing-receipt-detail',
+        component: () => import('@/views/purchasing/GoodsReceiptDetail.vue'),
+        meta: { title: '到货单详情' },
       },
 
       {

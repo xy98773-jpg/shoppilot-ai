@@ -12,7 +12,7 @@
     </el-header>
     <el-container class="app-layout__body">
       <el-aside width="200px" class="app-layout__aside">
-        <!-- 侧栏：已实现页面（工作台 / 主数据 / 导入 / 库存 / 销售）；
+        <!-- 侧栏：已实现页面（工作台 / 主数据 / 导入 / 库存 / 采购 / 销售）；
              写页按角色显隐（体验层，服务端仍是唯一安全边界）。 -->
         <el-menu :default-active="activePath" router class="app-layout__menu">
           <el-menu-item index="/dashboard">工作台</el-menu-item>
@@ -25,6 +25,8 @@
           <el-menu-item index="/inventory/overview">库存概览</el-menu-item>
           <el-menu-item index="/inventory/transactions">库存流水</el-menu-item>
           <el-menu-item v-if="canWrite" index="/inventory/count-adjust">盘点调整</el-menu-item>
+          <el-menu-item index="/purchasing/orders">采购单</el-menu-item>
+          <el-menu-item index="/purchasing/receipts">到货单</el-menu-item>
           <el-menu-item index="/sales">销售记录</el-menu-item>
         </el-menu>
       </el-aside>
