@@ -27,10 +27,12 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 到货单端点（M6-T04；{@code API_CONTRACT §11.9}）。
  *
- * <h2>本批端点（4 个）</h2>
+ * <h2>端点（5 个）</h2>
  * <ul>
  *   <li>{@code POST /api/v1/purchasing/receipts} —— 登记到货（草稿 DRAFT，201）；</li>
  *   <li>{@code PATCH /api/v1/purchasing/receipts/{id}} —— 编辑到货草稿（200）；</li>
+ *   <li>{@code POST /api/v1/purchasing/receipts/{id}/confirm} —— <b>确认到货入库</b>
+ *       （{@code DRAFT→CONFIRMED}，触发 {@code PURCHASE_INBOUND}，200；M6-T05+T06）；</li>
  *   <li>{@code POST /api/v1/purchasing/receipts/{id}/cancel} —— 作废到货草稿（200）；</li>
  *   <li>{@code GET /api/v1/purchasing/receipts/{id}} + {@code GET /api/v1/purchasing/receipts}
  *       —— 详情 / 列表（200）。</li>
@@ -42,8 +44,8 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>★ {@code Idempotency-Key} 请求头在<b>登记</b>时必填（{@code goods_receipts.idempotency_key}
  * 是 {@code NOT NULL}）⇒ 缺失 {@code COM-0010}（400）。
  *
- * <p>★ <b>草稿绝不写库存（INV-03）</b>：本 Controller 的四个端点都不产生库存流水；
- * 入库只发生在 M6-T05 的 {@code POST /receipts/{id}/confirm}（本批不实现）。
+ * <p>★ <b>草稿绝不写库存（INV-03）</b>：登记 / 编辑 / 作废 / 查询四个端点都不产生库存流水；
+ * 入库只发生在 {@code POST /receipts/{id}/confirm}（M6-T05+T06 已实现，见 {@link #confirm(long)}）。
  */
 @RestController
 @RequestMapping("/api/v1/purchasing/receipts")

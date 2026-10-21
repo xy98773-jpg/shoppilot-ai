@@ -38,20 +38,23 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 到货单服务（M6-T04 A1–A3：登记 / 编辑 / 作废）。
+ * 到货单服务（M6-T04 A1–A3：登记 / 编辑 / 作废；M6-T05+T06 A5：确认到货入库）。
  *
- * <p>★ <b>草稿绝不写库存（INV-03）</b>：本服务<b>不注入</b> {@code inventory} 的任何 Mapper /
- * Service，<b>不产生</b>任何 {@code inventory_transactions} 记录，<b>不触达</b>
- * {@code inventory_balances}。真正的入库只发生在 <b>M6-T05</b> 的
- * {@code POST /receipts/{id}/confirm}（本批不实现）。
+ * <p>★ <b>草稿绝不写库存（INV-03）</b>：{@code create} / {@code update} / {@code cancel}
+ * <b>不产生</b>任何 {@code inventory_transactions} 记录，<b>不触达</b> {@code inventory_balances}。
+ * 唯一的入库路径是 {@link #confirm(long)}——它按 {@code DATABASE_DESIGN §6-I.3} 的单事务六步，
+ * 经 {@link InventoryWriteService#applyInbound} 写流水与余额（<b>不直写</b>库存表）。
  *
  * <p>★ <b>不写审计（R172）</b>：审计 35 条清单（{@code DATABASE_DESIGN §9.17}）<b>无</b>
  * 「到货单创建」「到货单编辑」动作 ⇒ 沿用 SSOT 现状，<b>不新增 {@code AuditAction} 枚举值</b>。
- * 唯一例外是 <b>作废</b>（A3）——{@code GOODS_RECEIPT_CANCEL}（§9.17 #27）已存在于清单中。
+ * 例外两处：<b>作废</b>（A3，{@code GOODS_RECEIPT_CANCEL}，§9.17 #27）与
+ * <b>确认入库</b>（A5，{@code GOODS_RECEIPT_CONFIRM}，§9.17 #26），均已存在于清单中。
  *
- * <p>★ <b>与 M6-T03 的唯一依赖</b>：读采购单一律经 {@link PurchaseOrderQueryService#getOrder(long)}，
+ * <p>★ <b>与 M6-T03 的依赖</b>：读采购单一律经 {@link PurchaseOrderQueryService#getOrder(long)}；
  * <b>不注入</b> {@code PurchaseOrderMapper} / {@code PurchaseOrderItemMapper}
- * （跨类 Mapper 红线；{@code MODULE_BOUNDARIES §2.9}）。
+ * （跨类 Mapper 红线；{@code MODULE_BOUNDARIES §2.9}）；④⑤ 步的明细回写与状态推导
+ * 委托 {@link PurchaseOrderAppService#applyReceivedQuantities}——
+ * {@code purchase_orders}/{@code purchase_order_items} 的写权限归该服务。
  */
 @Service
 public class GoodsReceiptAppService {
