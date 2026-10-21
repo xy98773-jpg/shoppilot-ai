@@ -375,7 +375,8 @@ public class GoodsReceiptAppService {
      *       乐观锁 {@code version}）；</li>
      *   <li>② {@code goods_receipt_items} 校验并固化（<b>不新增/不删除明细行</b>，本表无 {@code version}）；</li>
      *   <li>③ 每条明细调 {@link InventoryWriteService#applyInbound}（幂等键
-     *       {@code PURCHASE_INBOUND:GOODS_RECEIPT:<receiptId>:<skuId>}，按 SKU 1:1）；</li>
+     *       {@code PURCHASE_INBOUND:GOODS_RECEIPT:<receiptId>:<skuId>:<purchaseOrderItemId>}，
+     *       后缀 {@code :<purchase_order_item_id>} 见 {@code R180}；同一到货单允许「同 SKU 多行」）；</li>
      *   <li>④ {@code purchase_order_items.received_qty += 本次}（<b>悲观锁</b> {@code FOR UPDATE}，
      *       由 {@link PurchaseOrderAppService#applyReceivedQuantities} 承担）；</li>
      *   <li>⑤ {@code purchase_orders.received_qty = Σ} 与 {@code status} <b>由明细推导</b>（乐观锁）；</li>
@@ -485,8 +486,12 @@ public class GoodsReceiptAppService {
 
         // ---- ③ 逐条入库（InventoryWriteService.applyInbound 内部写流水 + 余额，并扣减 in_transit_qty）----
         for (GoodsReceiptItemEntity line : lines) {
+            // ★ R180：末尾补 :<purchase_order_item_id> 后缀。purchase_order_items 无 (po_id, sku_id)
+            //   唯一键 ⇒ 同一张到货单可合法出现「同 SKU、不同采购明细行」，缺后缀会让第二行命中
+            //   同键（同键不同内容 ⇒ INV-5003 409；若内容恰相同则静默少入库）。
+            //   基序仍是「4 段 + 可选后缀」（DATABASE_CONSTRAINTS §幂等 2 / DATABASE_DESIGN §5.10）。
             String idempotencyKey = "PURCHASE_INBOUND:GOODS_RECEIPT:"
-                    + receipt.getId() + ":" + line.getSkuId();
+                    + receipt.getId() + ":" + line.getSkuId() + ":" + line.getPurchaseOrderItemId();
             inventoryWriteService.applyInbound(line.getSkuId(), receipt.getWarehouseId(),
                     line.getReceivedQty(), BIZ_TYPE, receipt.getId(), idempotencyKey);
         }

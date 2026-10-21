@@ -412,7 +412,8 @@ class GoodsReceiptConfirmIntegrationTest {
     @DisplayName("E9 流水：txn_type=PURCHASE_INBOUND / biz_type=GOODS_RECEIPT / biz_ref_id=receiptId / 幂等键格式")
     void inboundTxnFields() throws Exception {
         long poId = createPo("ORDERED", "100.000", "0.000");
-        long receiptId = createDraftReceipt(poId, firstLineId(poId), "40.000", "idem-e9");
+        long poItemId = firstLineId(poId);
+        long receiptId = createDraftReceipt(poId, poItemId, "40.000", "idem-e9");
         assertEquals(HttpStatus.OK, post(BASE + "/" + receiptId + "/confirm", login("operator01")).getStatusCode());
 
         Map<String, Object> txn = jdbc.queryForMap(
@@ -423,8 +424,10 @@ class GoodsReceiptConfirmIntegrationTest {
         assertEquals("PURCHASE_INBOUND", txn.get("txn_type"));
         assertEquals("GOODS_RECEIPT", txn.get("biz_type"));
         assertEquals(receiptId, ((Number) txn.get("biz_ref_id")).longValue());
-        assertEquals("PURCHASE_INBOUND:GOODS_RECEIPT:" + receiptId + ":" + SKU7,
-                txn.get("idempotency_key"), "幂等键 = PURCHASE_INBOUND:GOODS_RECEIPT:<rid>:<skuId>（B0-4）");
+        // ★ R180：基序 4 段 + 必填后缀 :<purchase_order_item_id>（DATABASE_DESIGN §5.10 后缀用途 ③）
+        assertEquals("PURCHASE_INBOUND:GOODS_RECEIPT:" + receiptId + ":" + SKU7 + ":" + poItemId,
+                txn.get("idempotency_key"),
+                "幂等键 = PURCHASE_INBOUND:GOODS_RECEIPT:<rid>:<skuId>:<purchaseOrderItemId>（R180）");
         assertEquals("40.000", qtyText(txn.get("qty_delta")));
         assertEquals("100.000", qtyText(txn.get("qty_before")));
         assertEquals("140.000", qtyText(txn.get("qty_after")));
