@@ -153,6 +153,22 @@ docker compose -f deploy/docker-compose.dev.yml up -d --build
   `docker exec shoppilot-dev-backend-java-1 curl -s http://127.0.0.1:8080/actuator/health` → `{"status":"UP"}`
 - AI 服务内部健康：仅容器内 `service-ai:8000/internal/v1/health`，**不暴露到宿主**（PROJECT_STRUCTURE §7.1）
 
+### 首跑：全新库没有用户（必须先建第一个团队与 OWNER）
+
+Flyway 迁移**只建表结构、不建业务数据** ⇒ 全新库 `teams` / `users` 为空，此时登录会得到
+`401 AUTH-1002`（这是正确行为，不是故障）。系统**不提供自助注册端点**（`/api/v1/auth` 只有
+`login` / `refresh` / `logout` / `me`），第一个团队与 OWNER 只能由 DBA/运维直接入库：
+
+```bash
+# 开发用种子：团队 7（星海优选）+ 团队 8 + 5 个用户 + team_members；口令统一 S3cret!Passw0rd
+docker exec -i shoppilot-dev-mysql-1 mysql -ushoppilot -pchangeme_app_password shoppilot \
+  --default-character-set=utf8mb4 < backend-java/tools/evi/seed-b7.sql
+```
+
+> 生产首跑请自行准备「首个团队 + 首个 OWNER」的插入脚本（BCrypt 哈希可用
+> `backend-java/tools/evi/GenHash.java` 生成），**不要**把任何真实口令写进入仓文件
+> （CODING_STANDARDS：密钥不入仓）。
+
 ### 部署验证（M7-T05，可复跑）
 ```bash
 bash backend-java/tools/m7-t05/verify-compose.sh                 # 6 项：服务数/健康/nginx/内网可达/不对外/迁移

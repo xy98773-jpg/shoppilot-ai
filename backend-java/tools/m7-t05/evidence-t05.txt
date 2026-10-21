@@ -1,14 +1,14 @@
-M7-T05 Compose 部署验证  2026-10-21 18:12:21
+M7-T05 Compose 部署验证  2026-10-21 19:01:25
 compose 文件：/d/Desktop/ShopPilot-AI/deploy/docker-compose.dev.yml
 compose 版本：2.40.3-desktop.1
 -------------------------------------------------------------
 [1] 当前服务清单
 SERVICE        STATE     STATUS
-backend-java   running   Up About a minute (healthy)
-frontend-web   running   Up About a minute (healthy)
-mysql          running   Up About an hour (healthy)
-nginx          running   Up About an hour (healthy)
-service-ai     running   Up About a minute (healthy)
+backend-java   running   Up 3 minutes (healthy)
+frontend-web   running   Up 50 minutes (healthy)
+mysql          running   Up 2 hours (healthy)
+nginx          running   Up 15 minutes (healthy)
+service-ai     running   Up 50 minutes (healthy)
 [PASS] 1 服务数（mysql/backend-java/service-ai/frontend-web/nginx） => 5
 -------------------------------------------------------------
 [2] 健康状态
@@ -38,7 +38,11 @@ service-ai     running   Up About a minute (healthy)
 [PASS] 6 成功迁移数 => 13
 [PASS] 6 最新版本 => 1.0.12
 -------------------------------------------------------------
-[7] down/up 数据保留：未执行（需 --with-recreate；避免中断并行任务）
+[7] down（保留卷）→ up → 数据保留
+    重启前快照：users=6,skus=10010,txns=150000,audit=118,flyway=13
+    重启后快照：users=6,skus=10010,txns=150000,audit=118,flyway=13
+[PASS] 7 down/up 后数据快照不变（users/skus/txns/audit/flyway） => users=6,skus=10010,txns=150000,audit=118,flyway=13
+[PASS] 7 重启后 backend healthy => healthy
 -------------------------------------------------------------
-TOTAL: PASS=13 FAIL=0
+TOTAL: PASS=15 FAIL=0
 RESULT: ALL PASS

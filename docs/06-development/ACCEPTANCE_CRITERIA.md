@@ -106,7 +106,7 @@
 
 - [ ] **导入成功**：导入合法 SKU 文件 → `COMPLETED`
 - [ ] **重复导入被拒**：重复上传同文件 → `IMP-4004`，并写 `DUPLICATE_REJECTED`
-- [ ] **部分失败**：含错误行的文件 → `PARTIAL_SUCCESS`，错误报告可下载
+- [ ] **部分失败**：含错误行的文件 → 校验期 `error_rows>0`，**确认被 `422 IMP-4009` 阻断（零落库）**；错误报告可下载。`PARTIAL_SUCCESS` 只在**确认期行级失败**（并发撞键、写库异常等）出现<br>↳ 口径订正（2026-10-21，`R188`）：原写「含错误行 → `PARTIAL_SUCCESS`」与实现不符——`ImportConfirmService` 对**任何**校验期错误行一律阻断确认。按原文验收会把「安全行为」判成 FAIL。裁定：保留实现（不产生半份数据），订正文档
 - [ ] **清单校验**：缺少必填列 → `IMP-4003`；非法文件类型 → `IMP-4001`；格式错误 → `IMP-4002`
 - [ ] **库存余额查询**：`GET /api/v1/inventory/balances` → 返回 `on_hand_qty` 与 `available_qty`
 - [ ] **流水查询**：`GET /api/v1/inventory/transactions` → 可见 `INIT_IMPORT`/`COUNT_ADJUST` 等类型
@@ -222,7 +222,7 @@
 | AC-IMP-01 | 导入 6 类业务数据 | 已登录 `OPERATOR` | 依次上传商品/SKU/供应商/仓库/库存快照/销售模板文件 | 各批次 `COMPLETED` | F-IMP-01 |
 | AC-IMP-02 | 字段映射 | 上传含非标准表头的文件 | 上传 → 确认映射 | 批次 `MAPPED`；数据按映射落库 | F-IMP-02 |
 | AC-IMP-03 | 预览与全量校验 | 上传含错误行文件 | 上传 → 校验 | 产出错误报告；批次 `VALIDATED` | F-IMP-03 |
-| AC-IMP-04 | 错误报告下载 | 存在错误行 | 下载错误报告 | 报告含行号与错误原因；批次 `PARTIAL_SUCCESS` | F-IMP-03 |
+| AC-IMP-04 | 错误报告下载 | 存在错误行 | 下载错误报告 | 报告含行号与错误原因；批次仍 `VALIDATED`（确认才会被 `IMP-4009` 阻断） | F-IMP-03 |
 | AC-IMP-05 | 批次查询 | 存在历史批次 | `GET /imports` | 可按状态筛选、分页 | F-IMP-04 |
 | AC-IMP-06 | 文件级幂等 | 已成功导入同文件 | 再次上传同文件 | `IMP-4004`；不产生重复数据 | F-IMP-05 |
 | AC-IMP-07 | 文件类型/大小校验 | — | 上传非法类型/超大文件 | `IMP-4001` | F-IMP-01 |
@@ -387,7 +387,7 @@
 | 7 | 导入库存快照 | 批次 `COMPLETED`；余额成立（流水 `INIT_IMPORT`） |
 | 8 | 导入 28 天历史销售 | 批次 `COMPLETED` |
 | 9 | 重复上传销售文件 | `IMP-4004`；无重复数据 |
-| 10 | 上传含错误行文件 | `PARTIAL_SUCCESS`；错误报告可下载 |
+| 10 | 上传含错误行文件 | 校验 `error_rows>0`；确认返回 `422 IMP-4009`、零落库；错误报告可下载 |
 | 11 | 查看库存总览 | `on_hand_qty`/`available_qty` 正确展示 |
 | 12 | 创建分析任务 | `run_id` 返回；`PENDING→RUNNING` |
 | 13 | 轮询进度至完成 | `progress` 递增；任务达 `SUCCEEDED`/`DEGRADED` |
