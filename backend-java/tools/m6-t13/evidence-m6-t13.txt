@@ -1,0 +1,53 @@
+JAR_SIZE=60228233  JAR_MTIME=2026-10-21 16:38:28
+-------------------------------------------------------------
+[0] 启动 MySQL 容器（m6t13-mysql :3361）
+[1] 启动 service-ai（宿主机 py3.11 源码 :18251；镜像 shoppilot-dev-service-ai 仍是 2026-10-15 骨架，无 analysis 路由）
+    service-ai up=1
+[2] 启动 fat jar（:18250）
+    app ready（health code=405）
+[3] 灌种子
+[PASS] 种子：purchase_orders 2 行 => 2
+[PASS] 种子：purchase_order_items 2 行 => 2
+-------------------------------------------------------------
+[P1] 登录 operator01
+[PASS] P1 login HTTP => 200
+[PASS] P1 accessToken 是 JWT（2 个点） => 2
+-------------------------------------------------------------
+[P2] GET /inventory/balances ⇒ in_transit_qty = 130（派生原始在途）
+[PASS] P2 HTTP => 200
+[PASS] P2 total => 1
+[PASS] P2 in_transit_qty => 130.000
+[PASS] P2 on_hand_qty => 10.000
+[P3] DB：物化列 in_transit_qty 仍为 0.000（零写入）
+[PASS] P3 inventory_balances.in_transit_qty => 0.000
+[PASS] P3 非零行数 => 0
+-------------------------------------------------------------
+[P4] POST /purchasing/receipts（到货 10 件）
+[PASS] P4 创建到货单 HTTP => 201
+[PASS] P4 status => DRAFT
+[P5] POST /purchasing/receipts/1/confirm
+[PASS] P5 确认到货 HTTP => 200
+[PASS] P5 status => CONFIRMED
+-------------------------------------------------------------
+[P6] 确认后 GET balances ⇒ in_transit_qty = 120（30−10 + 100）
+[PASS] P6 HTTP => 200
+[PASS] P6 in_transit_qty => 120.000
+[P7] DB：poi.received_qty=10、余额列仍 0（派生自动跟随）
+[PASS] P7 poi.received_qty => 10.000
+[PASS] P7 余额列 => 0.000
+[PASS] P7 po.received_qty => 10.000
+-------------------------------------------------------------
+[P8] 分析运行（enable_llm=false）：effective=20 / in_transit=120
+[PASS] P8 创建运行 HTTP => 202
+[PASS] P8 run 终态 => SUCCEEDED
+[PASS] P8 items HTTP => 200
+[PASS] P8 items.total => 1
+[PASS] P8 effective_in_transit_qty => 20.000
+[PASS] P8 in_transit_qty（未过滤快照） => 120.000
+[PASS] P8 lead_time_source => DEFAULT
+[P9] DB analysis_items 两列
+[PASS] P9 analysis_items.effective_in_transit_qty => 20.000
+[PASS] P9 analysis_items.in_transit_qty => 120.000
+-------------------------------------------------------------
+TOTAL: PASS=28 FAIL=0 SKIP=0
+RESULT: ALL PASS
