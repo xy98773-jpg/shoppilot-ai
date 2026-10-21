@@ -1,0 +1,178 @@
+E2E 基线：JAR_MTIME=2026-10-21 17:44:53  SIZE=60231025
+-------------------------------------------------------------
+[0] 启动 MySQL 容器（e2e-mysql :3362）
+[1] 启动 service-ai 容器（:18253）
+    service-ai up=1
+[2] 启动 fat jar（:18252）
+[PASS] S1 Flyway 成功迁移数 => 13
+    app ready
+-------------------------------------------------------------
+[3] 灌种子（团队 + 用户；主数据全部走导入接口，不预置）
+[PASS] S3 teams => 2
+[PASS] S3 users => 5
+-------------------------------------------------------------
+[S2] 登录四种角色
+[PASS] S2 OWNER 登录 => ok
+[PASS] S2 VIEWER 登录 => ok
+-------------------------------------------------------------
+[S3] SUPPLIER 导入
+[PASS] S3 供应商 上传 => 201
+[PASS] S3 供应商 预览 => 200
+[PASS] S3 供应商 总行数 => 1
+[PASS] S3 供应商 映射 => 200
+[PASS] S3 供应商 校验 => 200
+[PASS] S3 供应商 错误行 => 0
+[PASS] S3 供应商 确认 => 200
+[PASS] S3 供应商 终态 => COMPLETED
+[S4] PRODUCT 导入
+[PASS] S4 商品 上传 => 201
+[PASS] S4 商品 预览 => 200
+[PASS] S4 商品 总行数 => 1
+[PASS] S4 商品 映射 => 200
+[PASS] S4 商品 校验 => 200
+[PASS] S4 商品 错误行 => 0
+[PASS] S4 商品 确认 => 200
+[PASS] S4 商品 终态 => COMPLETED
+[S5] SKU 导入
+[PASS] S5 SKU 上传 => 201
+[PASS] S5 SKU 预览 => 200
+[PASS] S5 SKU 总行数 => 1
+[PASS] S5 SKU 映射 => 200
+[PASS] S5 SKU 校验 => 200
+[PASS] S5 SKU 错误行 => 0
+[PASS] S5 SKU 确认 => 200
+[PASS] S5 SKU 终态 => COMPLETED
+[S6] WAREHOUSE 导入
+[PASS] S6 仓库 上传 => 201
+[PASS] S6 仓库 预览 => 200
+[PASS] S6 仓库 总行数 => 1
+[PASS] S6 仓库 映射 => 200
+[PASS] S6 仓库 校验 => 200
+[PASS] S6 仓库 错误行 => 0
+[PASS] S6 仓库 确认 => 200
+[PASS] S6 仓库 终态 => COMPLETED
+[S7] INVENTORY_SNAPSHOT 导入
+[PASS] S7 库存快照 上传 => 201
+[PASS] S7 库存快照 预览 => 200
+[PASS] S7 库存快照 总行数 => 1
+[PASS] S7 库存快照 映射 => 200
+[PASS] S7 库存快照 校验 => 200
+[PASS] S7 库存快照 错误行 => 0
+[PASS] S7 库存快照 确认 => 200
+[PASS] S7 库存快照 终态 => COMPLETED
+[S8] SALES_DAILY 导入（28 天）
+[PASS] S8 销售 上传 => 201
+[PASS] S8 销售 预览 => 200
+[PASS] S8 销售 总行数 => 28
+[PASS] S8 销售 映射 => 200
+[PASS] S8 销售 校验 => 200
+[PASS] S8 销售 错误行 => 0
+[PASS] S8 销售 确认 => 200
+[PASS] S8 销售 终态 => COMPLETED
+-------------------------------------------------------------
+[PASS] S8 suppliers 行数 => 1
+[PASS] S8 products 行数 => 1
+[PASS] S8 skus 行数 => 1
+[PASS] S8 warehouses 行数 => 1
+[PASS] S8 sales_daily 行数 => 28
+[PASS] S8 balances 行数 => 1
+[PASS] S8 INIT_IMPORT 流水 => 1
+    WH_ID=1 SKU_ID=1
+-------------------------------------------------------------
+[S9] 重复上传同一销售文件 ⇒ 409 IMP-4004
+[PASS] S9 重复上传 HTTP => 409
+[PASS] S9 错误码 => IMP-4004
+[PASS] S9 无重复数据 => 28
+-------------------------------------------------------------
+[S10] 含错误行文件 ⇒ 校验期 error_rows=1 ⇒ 确认被 IMP-4009 阻断 ⇒ 错误报告可导出
+[PASS] S10 上传 => 201
+[PASS] S10 校验 HTTP => 200
+[PASS] S10 错误行数 => 1
+[PASS] S10 确认被阻断 HTTP => 422
+[PASS] S10 阻断码 => IMP-4009
+[PASS] S10 阻断 details.error_rows => 1
+[PASS] S10 错误报告导出 => 200
+[PASS] S10 未落库（仍 28 行） => 28
+-------------------------------------------------------------
+[S11] 库存总览
+[PASS] S11 HTTP => 200
+[PASS] S11 on_hand_qty => 10.000
+[PASS] S11 in_transit_qty（无采购单） => 0.000
+[PASS] S11 available_qty => 10.000
+-------------------------------------------------------------
+[S12] 创建分析运行（ALL_ACTIVE, enable_llm=false）
+[PASS] S12 创建运行 => 202
+[S13] 轮询至终态
+[PASS] S13 run 终态 => SUCCEEDED
+[PASS] S13 progress => 100
+-------------------------------------------------------------
+[S14] 分析明细（D / IP / Q_suggest）
+[PASS] S14 items HTTP => 200
+[PASS] S14 total => 1
+[PASS] S14 on_hand => 10.000
+[PASS] S14 avg_daily_sales（D） => 3.000
+[PASS] S14 lead_time_days => 7
+[PASS] S14 coverage_days（R） => 7
+[PASS] S14 safety_stock（SS=3×4） => 12.000
+[PASS] S14 qty_base => 44.000
+[PASS] S14 qty_suggest（44 向上取整到 10 的倍数） => 50.000
+[PASS] S14 risk_level => MEDIUM
+-------------------------------------------------------------
+[S15] 建议生成（E-2 事件编排）→ 改量 30 → 提交审核
+[PASS] S15 建议列表 HTTP => 200
+[PASS] S15 建议条数（分析完成自动派生） => 1
+[PASS] S15 初始状态 => SUGGESTED
+[PASS] S15 改量 HTTP => 200
+[PASS] S15 改后 qty => 30.000
+[PASS] S15 提交审核 => 200
+[PASS] S15 状态 => PENDING_REVIEW
+-------------------------------------------------------------
+[S16] 审批通过（OWNER）
+[PASS] S16 审批 HTTP => 200
+[PASS] S16 状态 => APPROVED
+[PASS] S16 审核时间线 => 200
+[PASS] S16 审核记录数（SUBMIT+APPROVE） => 2
+-------------------------------------------------------------
+[S17] 转采购单 → 确认 → 下单；库存必须不变
+[PASS] S17 转单 HTTP => 201
+[PASS] S17 转单状态 => DRAFT
+[PASS] S17 采购数量 => 30.000
+[PASS] S17 确认 HTTP => 200
+[PASS] S17 确认后状态 => PENDING
+[PASS] S17 下单 HTTP => 200
+[PASS] S17 下单后状态 => ORDERED
+[PASS] S17 建议已转单 => CONVERTED
+[PASS] S17 库存不变 => 10.000
+[PASS] S17 在途物化列仍 0（零写入） => 0.000
+[PASS] S17 API in_transit => 30.000
+-------------------------------------------------------------
+[S18] 部分到货 20 件 → 确认 → PARTIALLY_RECEIVED
+[PASS] S18 建到货单 => 201
+[PASS] S18 到货单初始态 => DRAFT
+[PASS] S18 确认到货 => 200
+[PASS] S18 到货单状态 => CONFIRMED
+[PASS] S18 采购单状态 => PARTIALLY_RECEIVED
+[PASS] S18 on_hand 10+20 => 30.000
+[PASS] S18 剩余在途 10 => 10.000
+[PASS] S18 PURCHASE_INBOUND 流水 => 1
+-------------------------------------------------------------
+[S19] 剩余到货 10 件 → 确认 → RECEIVED
+[PASS] S19 建到货单 => 201
+[PASS] S19 确认到货 => 200
+[PASS] S19 采购单终态 => RECEIVED
+[PASS] S19 on_hand 10+30 => 40.000
+[PASS] S19 在途归零 => 0.000
+[PASS] S19 PURCHASE_INBOUND 流水 => 2
+-------------------------------------------------------------
+[S20] 对账 + 审计 + 只读 + 越权
+[PASS] S20 对账差额行数 => 0
+[PASS] S20 在途物化列非零行（零写入） => 0
+[PASS] S20 审计查询 HTTP => 200
+[PASS] S20 审计记录数 => 32 (> 10)
+[PASS] S20 审计动作种类 => 15 (> 6)
+[PASS] S20 VIEWER 写操作 HTTP => 403
+[PASS] S20 跨团队读采购单 HTTP => 404
+[PASS] S20 跨团队错误码 => PO-9004
+-------------------------------------------------------------
+TOTAL: PASS=132 FAIL=0 SKIP=0
+RESULT: ALL PASS

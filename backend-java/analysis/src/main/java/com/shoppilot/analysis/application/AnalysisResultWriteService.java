@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.shoppilot.analysis.application.event.AnalysisRunCompletedEvent;
 import com.shoppilot.analysis.domain.AnalysisParams;
 import com.shoppilot.analysis.domain.AnalysisRunStatus;
 import com.shoppilot.analysis.domain.AnalysisScope;
@@ -44,6 +45,7 @@ import java.util.Objects;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -121,6 +123,7 @@ public class AnalysisResultWriteService {
     private final AnalysisItemAssembler assembler;
     private final AiServiceClient aiServiceClient;
     private final AuditWriteService auditWriteService;
+    private final ApplicationEventPublisher eventPublisher;
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -128,12 +131,14 @@ public class AnalysisResultWriteService {
                                       AnalysisItemMapper itemMapper,
                                       AnalysisItemAssembler assembler,
                                       AiServiceClient aiServiceClient,
-                                      AuditWriteService auditWriteService) {
+                                      AuditWriteService auditWriteService,
+                                      ApplicationEventPublisher eventPublisher) {
         this.runMapper = runMapper;
         this.itemMapper = itemMapper;
         this.assembler = assembler;
         this.aiServiceClient = aiServiceClient;
         this.auditWriteService = auditWriteService;
+        this.eventPublisher = eventPublisher;
     }
 
     // =====================================================================
@@ -198,7 +203,12 @@ public class AnalysisResultWriteService {
             log.warn("结果二次校验失败（整批零落库）：runId={} item={} reason={}",
                     locked.getId(), ex.skuId(), ex.getMessage());
             markValidationFailed(locked, ex.skuId());
+            return;
         }
+        // ★ 编排出口（MODULE_BOUNDARIES §8.2 E-2）：终态已在本事务内推进，提交后由
+        //   replenishment 侧（@TransactionalEventListener AFTER_COMMIT）派发补货建议。
+        //   analysis 不反向依赖 replenishment，故只能发事件、不能直接调用。
+        eventPublisher.publishEvent(new AnalysisRunCompletedEvent(locked.getId(), locked.getTeamId()));
     }
 
     /** 校验 + 落库 + 终态（已持锁、已确认进行中）。 */

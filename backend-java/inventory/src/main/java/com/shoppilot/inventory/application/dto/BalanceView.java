@@ -22,6 +22,15 @@ import lombok.Data;
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public class BalanceView {
 
+    /**
+     * 数量零值（<b>固定 3 位小数</b>）。
+     *
+     * <p>★ 与 {@code DECIMAL(18,3)} 的库内标度对齐：若用 {@code BigDecimal.ZERO}（标度 0），
+     * 在途缺省值会被序列化成 {@code "0"}，与其余行的 {@code "0.000"} 不一致，
+     * 前端按字符串比对/解析时会出现「同字段两种形态」。派生值缺省一律用本常量。
+     */
+    private static final BigDecimal ZERO_QTY = new BigDecimal("0.000");
+
     private Long id;
     private Long warehouseId;
     private Long skuId;
@@ -62,7 +71,7 @@ public class BalanceView {
         v.setSkuId(e.getSkuId());
         v.setSkuCode(skuCode);
         v.setOnHandQty(e.getOnHandQty());
-        v.setInTransitQty(inTransitQty == null ? BigDecimal.ZERO : inTransitQty);
+        v.setInTransitQty(inTransitQty == null ? ZERO_QTY : inTransitQty);
         v.setCommittedQty(e.getCommittedQty());
         v.setAvailableQty(e.getAvailableQty());
         v.setLastTxnAt(e.getLastTxnAt());

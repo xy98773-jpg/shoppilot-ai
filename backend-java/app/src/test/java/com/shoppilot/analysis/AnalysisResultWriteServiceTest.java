@@ -134,6 +134,10 @@ class AnalysisResultWriteServiceTest {
 
     @BeforeEach
     void seed() {
+        // ★ 顺序：先清补货建议（M7-T01 起，分析终态会经 AnalysisRunCompletedEvent 派生建议，
+        //   fk_repl_source 外键会阻断 analysis_items 的删除）
+        jdbc.execute("DELETE FROM replenishment_reviews");
+        jdbc.execute("DELETE FROM replenishment_items");
         jdbc.execute("DELETE FROM analysis_items");
         jdbc.execute("DELETE FROM analysis_runs");
         jdbc.execute("DELETE FROM audit_logs");
@@ -839,6 +843,8 @@ class AnalysisResultWriteServiceTest {
     }
 
     private void resetTables() {
+        jdbc.execute("DELETE FROM replenishment_reviews");
+        jdbc.execute("DELETE FROM replenishment_items");
         jdbc.execute("DELETE FROM analysis_items");
         jdbc.execute("DELETE FROM analysis_runs");
         jdbc.execute("DELETE FROM audit_logs");

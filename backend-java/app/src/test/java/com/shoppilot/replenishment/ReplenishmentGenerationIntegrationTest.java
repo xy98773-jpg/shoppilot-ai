@@ -98,6 +98,12 @@ class ReplenishmentGenerationIntegrationTest {
     private ReplenishmentGenerationService generationService;
 
     @Autowired
+    private org.springframework.context.ApplicationEventPublisher eventPublisher;
+
+    @Autowired
+    private org.springframework.transaction.support.TransactionTemplate transactionTemplate;
+
+    @Autowired
     private TestRestTemplate rest;
 
     private final ObjectMapper json = new ObjectMapper();
@@ -359,6 +365,43 @@ class ReplenishmentGenerationIntegrationTest {
         System.out.println("[M5T02-EVIDENCE] HTTP ok      : " + ok.getStatusCode().value() + " " + ok.getBody());
         assertEquals(HttpStatus.OK, ok.getStatusCode());
         assertEquals(1, json.readTree(ok.getBody()).get("createdCount").asInt());
+    }
+
+    // =====================================================================
+    // E-2 编排出口：AnalysisRunCompletedEvent → 建议生成（M7-T01 补）
+    // =====================================================================
+
+    @Test
+    @DisplayName("E-2 事件提交后自动生成建议；重放同一事件幂等（仍 1 条）")
+    void completedEventTriggersGenerationIdempotently() {
+        long runId = insertRun(TEAM7, "RUN-GEN-EVT", "SUCCEEDED");
+        insertItem(runId, SKU_WITH_SUPPLIER, PRODUCT_DEFAULT_SUPPLIER, "110.000", "HIGH", null, 7);
+        assertEquals(0L, countItems(runId), "事件发布前不得有建议");
+
+        // AFTER_COMMIT 监听器只在事务提交后触发，因此必须在事务内发布
+        transactionTemplate.executeWithoutResult(status ->
+                eventPublisher.publishEvent(
+                        new com.shoppilot.analysis.application.event.AnalysisRunCompletedEvent(runId, TEAM7)));
+        assertEquals(1L, countItems(runId), "事件提交后应生成 1 条建议");
+
+        // 重放：generateFromRun 先查后插，幂等
+        transactionTemplate.executeWithoutResult(status ->
+                eventPublisher.publishEvent(
+                        new com.shoppilot.analysis.application.event.AnalysisRunCompletedEvent(runId, TEAM7)));
+        assertEquals(1L, countItems(runId), "重复事件不得重复插入");
+    }
+
+    @Test
+    @DisplayName("E-2 非成功态 run 的事件被吞掉：不生成建议、不抛异常（不污染已成功的分析）")
+    void completedEventOnNonGeneratableRunIsSwallowed() {
+        long runId = insertRun(TEAM7, "RUN-GEN-EVT-F", "FAILED");
+        insertItem(runId, SKU_WITH_SUPPLIER, PRODUCT_DEFAULT_SUPPLIER, "110.000", "HIGH", null, 7);
+
+        // 监听器内部 catch RuntimeException 只记 ERROR：不得向上抛
+        transactionTemplate.executeWithoutResult(status ->
+                eventPublisher.publishEvent(
+                        new com.shoppilot.analysis.application.event.AnalysisRunCompletedEvent(runId, TEAM7)));
+        assertEquals(0L, countItems(runId), "FAILED run 不得生成建议");
     }
 
     // =====================================================================
