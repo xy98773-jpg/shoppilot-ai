@@ -45,14 +45,24 @@ public class BalanceView {
 
     private Integer version;
 
-    public static BalanceView of(InventoryBalanceEntity e, String skuCode) {
+    /**
+     * 组装响应体。
+     *
+     * <p>★ {@code in_transit_qty} <b>不再取实体列</b>：物化列
+     * {@code inventory_balances.in_transit_qty} 自 {@code M6-T10}（{@code R178}）起退役（零写零读），
+     * 展示值由 {@code InventoryInTransitQueryService.batchGetInTransit} 派生（<b>不</b>应用到货窗口，
+     * 与 {@code API_CONTRACT #27} 的「在途库存」语义一致）。见 {@code DESIGN_BASIS §10.4.1}。
+     *
+     * @param inTransitQty 派生在途量（{@code null} ⇒ 兜 {@code 0}）
+     */
+    public static BalanceView of(InventoryBalanceEntity e, String skuCode, BigDecimal inTransitQty) {
         BalanceView v = new BalanceView();
         v.setId(e.getId());
         v.setWarehouseId(e.getWarehouseId());
         v.setSkuId(e.getSkuId());
         v.setSkuCode(skuCode);
         v.setOnHandQty(e.getOnHandQty());
-        v.setInTransitQty(e.getInTransitQty());
+        v.setInTransitQty(inTransitQty == null ? BigDecimal.ZERO : inTransitQty);
         v.setCommittedQty(e.getCommittedQty());
         v.setAvailableQty(e.getAvailableQty());
         v.setLastTxnAt(e.getLastTxnAt());

@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.shoppilot.catalog.application.SkuQueryService;
 import com.shoppilot.catalog.infrastructure.persistence.entity.SkuEntity;
+import com.shoppilot.common.context.TeamContext;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
@@ -72,21 +73,36 @@ public class InventoryQueryService {
     private final InventoryTransactionMapper transactionMapper;
     private final SkuQueryService skuQueryService;
     private final ReplenishmentPolicyMapper policyMapper;
+    private final InventoryInTransitQueryService inTransitQueryService;
 
     public InventoryQueryService(InventoryBalanceMapper balanceMapper,
                                  InventoryTransactionMapper transactionMapper,
                                  SkuQueryService skuQueryService,
-                                 ReplenishmentPolicyMapper policyMapper) {
+                                 ReplenishmentPolicyMapper policyMapper,
+                                 InventoryInTransitQueryService inTransitQueryService) {
         this.balanceMapper = balanceMapper;
         this.transactionMapper = transactionMapper;
         this.skuQueryService = skuQueryService;
         this.policyMapper = policyMapper;
+        this.inTransitQueryService = inTransitQueryService;
     }
 
     // =====================================================================
     // balances 列表（F-INV-01）
     // =====================================================================
 
+    /**
+     * 余额列表（{@code F-INV-01}）。
+     *
+     * <p>★ <b>在途换源（{@code R178}/{@code §5.78}）</b>：{@code in_transit_qty} 不再读
+     * {@code inventory_balances.in_transit_qty}（该列已退役、恒 0），改为按<b>本页 SKU 一次</b>
+     * 调用 {@link InventoryInTransitQueryService#batchGetInTransit} 派生填充
+     * （<b>不</b>应用到货窗口——展示口径与补货口径不同，见 {@code DESIGN_BASIS §10.4}）。
+     *
+     * <p><b>已知限制（R184）</b>：{@code warehouseId} 为空时（跨仓查询）<b>不</b>填充在途
+     * （保持 {@code 0}），不发明跨仓聚合语义；需要跨仓在途时应显式传 {@code warehouse_id}。
+     * 该分支只多一次按页聚合查询，不做 N+1。
+     */
     @Transactional(readOnly = true)
     public PageResult<BalanceView> listBalances(InventoryPageQuery query, Long warehouseId, Long skuId) {
         List<InventoryPageQuery.SortSpec> sort = query.validatedSort(BALANCE_SORT_WHITELIST);
@@ -102,10 +118,16 @@ public class InventoryQueryService {
 
         Page<InventoryBalanceEntity> page = balanceMapper.selectPage(
                 new Page<>(query.getPage(), query.getPageSize()), wrapper);
-        Map<Long, String> skuCodes = skuCodesOf(page.getRecords().stream()
-                .map(InventoryBalanceEntity::getSkuId).collect(Collectors.toSet()));
+        Set<Long> pageSkuIds = page.getRecords().stream()
+                .map(InventoryBalanceEntity::getSkuId).collect(Collectors.toSet());
+        Map<Long, String> skuCodes = skuCodesOf(pageSkuIds);
+        Map<Long, BigDecimal> inTransit = (warehouseId == null || pageSkuIds.isEmpty())
+                ? Map.of()
+                : inTransitQueryService.batchGetInTransit(
+                        TeamContext.require().teamId(), warehouseId, pageSkuIds);
         List<BalanceView> list = page.getRecords().stream()
-                .map(e -> BalanceView.of(e, skuCodes.getOrDefault(e.getSkuId(), null)))
+                .map(e -> BalanceView.of(e, skuCodes.getOrDefault(e.getSkuId(), null),
+                        inTransit.get(e.getSkuId())))
                 .toList();
         return PageResult.of(page.getTotal(), query.getPage(), query.getPageSize(), list);
     }
