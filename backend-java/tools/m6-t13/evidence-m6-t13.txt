@@ -1,7 +1,7 @@
 JAR_SIZE=60228233  JAR_MTIME=2026-10-21 16:38:28
 -------------------------------------------------------------
 [0] 启动 MySQL 容器（m6t13-mysql :3361）
-[1] 启动 service-ai（宿主机 py3.11 源码 :18251；镜像 shoppilot-dev-service-ai 仍是 2026-10-15 骨架，无 analysis 路由）
+[1] 启动 service-ai 容器（:18251，镜像 shoppilot-dev-service-ai:latest；R186 已于 2026-10-21 重建）
     service-ai up=1
 [2] 启动 fat jar（:18250）
     app ready（health code=405）

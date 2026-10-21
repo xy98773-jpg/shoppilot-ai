@@ -97,18 +97,31 @@ for i in $(seq 1 60); do
 done
 sql "SELECT 1" >/dev/null && log "    MySQL ready"
 
-log "[1] 启动 service-ai（宿主机 py3.11 源码 :$AI_PORT；镜像 shoppilot-dev-service-ai 仍是 2026-10-15 骨架，无 analysis 路由）"
-PY311="py -3.11"
-AI_INTERNAL_TOKEN="$TOKEN" \
-JAVA_BACKEND_BASE_URL="http://127.0.0.1:$APP_PORT" \
-PYTHONPATH="$ROOT/service-ai/src" \
-$PY311 -m uvicorn shoppilot_ai.app.main:app --host 127.0.0.1 --port "$AI_PORT" > "$OUT/ai.log" 2>&1 &
-AI_PID=$!
+log "[1] 启动 service-ai 容器（:$AI_PORT，镜像 shoppilot-dev-service-ai:latest；R186 已于 2026-10-21 重建）"
+docker rm -f "$AI_NAME" >/dev/null 2>&1
 AI_UP=0
-for i in $(seq 1 40); do
-  if curl -s --noproxy '*' -o /dev/null "http://127.0.0.1:$AI_PORT/internal/v1/health"; then AI_UP=1; break; fi
-  sleep 1
-done
+if docker run -d --name "$AI_NAME" -p "127.0.0.1:$AI_PORT:8000" \
+     -e AI_INTERNAL_TOKEN="$TOKEN" \
+     -e JAVA_BACKEND_BASE_URL="http://host.docker.internal:$APP_PORT" \
+     shoppilot-dev-service-ai:latest >/dev/null 2>&1; then
+  for i in $(seq 1 40); do
+    if curl -s --noproxy '*' -o /dev/null "http://127.0.0.1:$AI_PORT/internal/v1/health"; then AI_UP=1; break; fi
+    sleep 1
+  done
+fi
+if [ "$AI_UP" = "0" ]; then
+  log "    WARN: 容器未就绪，回落宿主机 py3.11 源码"
+  docker rm -f "$AI_NAME" >/dev/null 2>&1
+  AI_INTERNAL_TOKEN="$TOKEN" \
+  JAVA_BACKEND_BASE_URL="http://127.0.0.1:$APP_PORT" \
+  PYTHONPATH="$ROOT/service-ai/src" \
+  py -3.11 -m uvicorn shoppilot_ai.app.main:app --host 127.0.0.1 --port "$AI_PORT" > "$OUT/ai.log" 2>&1 &
+  AI_PID=$!
+  for i in $(seq 1 40); do
+    if curl -s --noproxy '*' -o /dev/null "http://127.0.0.1:$AI_PORT/internal/v1/health"; then AI_UP=1; break; fi
+    sleep 1
+  done
+fi
 log "    service-ai up=$AI_UP"
 
 log "[2] 启动 fat jar（:$APP_PORT）"
