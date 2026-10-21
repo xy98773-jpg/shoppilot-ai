@@ -1,5 +1,7 @@
 package com.shoppilot.purchasing.application;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.shoppilot.audit.application.AuditWriteService;
 import com.shoppilot.audit.domain.model.AuditAction;
@@ -14,7 +16,10 @@ import com.shoppilot.common.web.BizException;
 import com.shoppilot.inventory.application.InventoryWriteService;
 import com.shoppilot.inventory.application.dto.AnchorLockResult;
 import com.shoppilot.purchasing.application.dto.CreatePurchaseOrderFromReplenishmentRequest;
+import com.shoppilot.purchasing.application.dto.PurchaseOrderActionResponse;
+import com.shoppilot.purchasing.application.dto.PurchaseOrderDetail;
 import com.shoppilot.purchasing.application.dto.PurchaseOrderFromReplenishmentResponse;
+import com.shoppilot.purchasing.application.dto.UpdatePurchaseOrderRequest;
 import com.shoppilot.purchasing.infrastructure.persistence.entity.PurchaseOrderEntity;
 import com.shoppilot.purchasing.infrastructure.persistence.entity.PurchaseOrderItemEntity;
 import com.shoppilot.purchasing.infrastructure.persistence.mapper.PurchaseOrderItemMapper;
@@ -71,11 +76,18 @@ public class PurchaseOrderAppService {
     private static final String STATUS_CONVERTED = "CONVERTED";
 
     private static final String PO_STATUS_DRAFT = "DRAFT";
+    private static final String PO_STATUS_PENDING = "PENDING";
+    private static final String PO_STATUS_ORDERED = "ORDERED";
+    private static final String PO_STATUS_PARTIALLY_RECEIVED = "PARTIALLY_RECEIVED";
+    private static final String PO_STATUS_RECEIVED = "RECEIVED";
+    private static final String PO_STATUS_CANCELLED = "CANCELLED";
     private static final String PO_SOURCE_REPLENISHMENT = "REPLENISHMENT";
     private static final String BIZ_TYPE = "PURCHASE_ORDER";
+    private static final int CANCEL_REASON_MAX_LENGTH = 255;
 
     private final PurchaseOrderMapper orderMapper;
     private final PurchaseOrderItemMapper orderItemMapper;
+    private final PurchaseOrderQueryService orderQueryService;
     private final InventoryWriteService inventoryWriteService;
     private final ReplenishmentQueryService replenishmentQueryService;
     private final ReplenishmentAppService replenishmentAppService;
@@ -85,6 +97,7 @@ public class PurchaseOrderAppService {
 
     public PurchaseOrderAppService(PurchaseOrderMapper orderMapper,
                                    PurchaseOrderItemMapper orderItemMapper,
+                                   PurchaseOrderQueryService orderQueryService,
                                    InventoryWriteService inventoryWriteService,
                                    ReplenishmentQueryService replenishmentQueryService,
                                    ReplenishmentAppService replenishmentAppService,
@@ -93,12 +106,335 @@ public class PurchaseOrderAppService {
                                    AuditWriteService auditWriteService) {
         this.orderMapper = orderMapper;
         this.orderItemMapper = orderItemMapper;
+        this.orderQueryService = orderQueryService;
         this.inventoryWriteService = inventoryWriteService;
         this.replenishmentQueryService = replenishmentQueryService;
         this.replenishmentAppService = replenishmentAppService;
         this.warehouseQueryService = warehouseQueryService;
         this.supplierQueryService = supplierQueryService;
         this.auditWriteService = auditWriteService;
+    }
+
+    // =====================================================================
+    // M6-T03：采购单状态机动作（A1–A3）+ 草稿编辑（A4）
+    // =====================================================================
+
+    /**
+     * A1 确认采购单：{@code DRAFT → PENDING}（契约 §11.8 请求 B）。
+     *
+     * <p>角色 {@code OWNER/ADMIN/APPROVER}（{@code @RequireRole}，OPERATOR 不足 ⇒ {@code TEAM-2003}）。
+     *
+     * <p><b>判因顺序</b>（契约两个失败响应）：① 查不到/跨团队 ⇒ {@code PO-9004}（404）；
+     * ② 读到 {@code status != DRAFT} ⇒ {@code PO-9003}（409）；③ UPDATE 带 {@code version} 守卫，
+     * 0 行 ⇒ {@code PO-9003}（并发推进）。
+     *
+     * <p>★ <b>不写库存</b>（{@code INV-03}）：本方法不触达 {@code inventory_balances} /
+     * {@code inventory_transactions}。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public PurchaseOrderActionResponse confirm(long id, Integer expectedVersion) {
+        PurchaseOrderEntity order = requireOrder(id);
+        if (!PO_STATUS_DRAFT.equals(order.getStatus())) {
+            throw new BizException(ErrorCodes.PO_9003, "当前采购单状态不允许该操作");
+        }
+        int expected = requireExpectedVersion(expectedVersion);
+        if (expected != order.getVersion()) {
+            throw new BizException(ErrorCodes.PO_9003, "当前采购单状态不允许该操作");
+        }
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        Long operatorId = currentUserId();
+        int affected = orderMapper.update(null, itemUpdateGuard(order, PO_STATUS_DRAFT)
+                .set(PurchaseOrderEntity::getStatus, PO_STATUS_PENDING)
+                .set(PurchaseOrderEntity::getConfirmedBy, operatorId)
+                .set(PurchaseOrderEntity::getConfirmedAt, now)
+                .set(PurchaseOrderEntity::getVersion, order.getVersion() + 1)
+                .set(PurchaseOrderEntity::getUpdatedBy, operatorId));
+        if (affected == 0) {
+            throw new BizException(ErrorCodes.PO_9003, "当前采购单状态不允许该操作");
+        }
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("status", PO_STATUS_PENDING);
+        after.put("confirmed_by", operatorId);
+        after.put("confirmed_at", now.toString());
+        recordAudit(order.getId(), AuditAction.PURCHASE_ORDER_CONFIRM, after,
+                "采购单已确认：" + order.getPoNo());
+        log.info("采购单已确认 id={} poNo={}", order.getId(), order.getPoNo());
+        return new PurchaseOrderActionResponse(order.getId(), order.getPoNo(), PO_STATUS_PENDING,
+                operatorId, now, null, null, null, order.getVersion() + 1);
+    }
+
+    /**
+     * A2 下单：{@code PENDING → ORDERED}。
+     *
+     * <p>角色同 {@link #confirm}。判因顺序同构（不存在 ⇒ {@code PO-9004}；非 {@code PENDING} ⇒
+     * {@code PO-9003}；CAS 0 行 ⇒ {@code PO-9003}）。
+     *
+     * <p>★ <b>{@code effective_in_transit_qty} 口径归属</b>：契约 §11.8 末段「此时该 PO 的
+     * {@code ordered_qty − received_qty} 进入 {@code effective_in_transit_qty} 口径」是
+     * <b>inventory 侧读口径</b>，属 <b>M6-T10</b>（在途口径闭环）——<b>本批不实现</b>，
+     * 也不改 {@code inventory}（R124 现状保持）。
+     *
+     * <p>★ <b>不写库存</b>（{@code INV-03}）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public PurchaseOrderActionResponse order(long id, Integer expectedVersion) {
+        PurchaseOrderEntity order = requireOrder(id);
+        if (!PO_STATUS_PENDING.equals(order.getStatus())) {
+            throw new BizException(ErrorCodes.PO_9003, "当前采购单状态不允许该操作");
+        }
+        int expected = requireExpectedVersion(expectedVersion);
+        if (expected != order.getVersion()) {
+            throw new BizException(ErrorCodes.PO_9003, "当前采购单状态不允许该操作");
+        }
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        Long operatorId = currentUserId();
+        int affected = orderMapper.update(null, itemUpdateGuard(order, PO_STATUS_PENDING)
+                .set(PurchaseOrderEntity::getStatus, PO_STATUS_ORDERED)
+                .set(PurchaseOrderEntity::getOrderedAt, now)
+                .set(PurchaseOrderEntity::getVersion, order.getVersion() + 1)
+                .set(PurchaseOrderEntity::getUpdatedBy, operatorId));
+        if (affected == 0) {
+            throw new BizException(ErrorCodes.PO_9003, "当前采购单状态不允许该操作");
+        }
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("status", PO_STATUS_ORDERED);
+        after.put("ordered_at", now.toString());
+        recordAudit(order.getId(), AuditAction.PURCHASE_ORDER_ORDERED, after,
+                "采购单已下单：" + order.getPoNo());
+        log.info("采购单已下单 id={} poNo={}", order.getId(), order.getPoNo());
+        return new PurchaseOrderActionResponse(order.getId(), order.getPoNo(), PO_STATUS_ORDERED,
+                null, null, now, null, null, order.getVersion() + 1);
+    }
+
+    /**
+     * A3 取消采购单：{@code DRAFT|PENDING|ORDERED|PARTIALLY_RECEIVED → CANCELLED}（终态）。
+     *
+     * <p>角色同 {@link #confirm}。{@code reason} 必填（≤255，对齐 {@code cancel_reason VARCHAR(255)}；
+     * 缺失/超长 ⇒ {@code COM-0001}）。
+     *
+     * <p><b>源态守卫</b>：已 {@code RECEIVED} ⇒ {@code PO-9009}（409，已全部到货不可取消）；
+     * 其它非法态（含已 {@code CANCELLED}）⇒ {@code PO-9003}（409）。
+     *
+     * <p>★ <b>不得把补货建议改回 {@code APPROVED}</b>（{@code DATABASE_DESIGN:1442} 规则 4：
+     * 采购单取消<b>不</b>把建议改回 {@code APPROVED}——建议的 {@code CONVERTED} 事实不变）。
+     * <b>本方法不碰 {@code replenishment}。</b>
+     *
+     * <p>{@code closed_at} = 进入终态时间（{@code DATABASE_DESIGN §5.18}：状态流转时写入）。
+     * ★ <b>不写库存</b>（{@code INV-03}）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public PurchaseOrderActionResponse cancel(long id, String reason) {
+        PurchaseOrderEntity order = requireOrder(id);
+        if (reason == null || reason.isBlank()) {
+            throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                    List.of(ApiErrorDetail.of("reason", "取消原因必填")));
+        }
+        if (reason.length() > CANCEL_REASON_MAX_LENGTH) {
+            throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                    List.of(ApiErrorDetail.of("reason", "取消原因长度不得超过 255 字符")));
+        }
+        if (PO_STATUS_RECEIVED.equals(order.getStatus())) {
+            throw new BizException(ErrorCodes.PO_9009, "采购单已全部到货，不可取消");
+        }
+        String fromStatus = order.getStatus();
+        if (!Set.of(PO_STATUS_DRAFT, PO_STATUS_PENDING, PO_STATUS_ORDERED,
+                PO_STATUS_PARTIALLY_RECEIVED).contains(fromStatus)) {
+            throw new BizException(ErrorCodes.PO_9003, "当前采购单状态不允许该操作");
+        }
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        Long operatorId = currentUserId();
+        int affected = orderMapper.update(null, itemUpdateGuard(order, fromStatus)
+                .set(PurchaseOrderEntity::getStatus, PO_STATUS_CANCELLED)
+                .set(PurchaseOrderEntity::getCancelledAt, now)
+                .set(PurchaseOrderEntity::getCancelReason, reason)
+                .set(PurchaseOrderEntity::getClosedAt, now)
+                .set(PurchaseOrderEntity::getVersion, order.getVersion() + 1)
+                .set(PurchaseOrderEntity::getUpdatedBy, operatorId));
+        if (affected == 0) {
+            throw new BizException(ErrorCodes.PO_9003, "当前采购单状态不允许该操作");
+        }
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("status", PO_STATUS_CANCELLED);
+        after.put("from_status", fromStatus);
+        after.put("cancel_reason", reason);
+        recordAudit(order.getId(), AuditAction.PURCHASE_ORDER_CANCEL, after,
+                "采购单已取消：" + order.getPoNo());
+        log.info("采购单已取消 id={} poNo={} from={}", order.getId(), order.getPoNo(), fromStatus);
+        return new PurchaseOrderActionResponse(order.getId(), order.getPoNo(), PO_STATUS_CANCELLED,
+                null, null, null, now, reason, order.getVersion() + 1);
+    }
+
+    /**
+     * A4 编辑采购单草稿（<b>仅 {@code DRAFT}</b>）。
+     *
+     * <p>角色 {@code OPERATOR}+（契约 {@code :598}；不足 ⇒ {@code TEAM-2003}）。
+     *
+     * <p><b>部分更新语义</b>：未传/{@code null} ⇒ 不改；{@code remark=""} ⇒ 落库空串；
+     * 数值/日期不支持清空（{@code null} = 不改）。
+     *
+     * <p><b>可改</b>：{@code supplier_id} / {@code warehouse_id} / {@code expected_arrival_date} /
+     * {@code remark}（≤500）/ 明细行（{@code ordered_qty}/{@code unit_price}/
+     * {@code expected_arrival_date}，按 {@code purchase_order_item_id} 定位）。
+     * <b>不可改</b>：{@code status}、{@code source}、{@code po_no}、{@code idempotency_key}、
+     * {@code total_*}（服务端同事务重算）。
+     *
+     * <p><b>校验</b>：全字段未传 ⇒ {@code COM-0001}(field=body)；
+     * {@code expected_version} 必填（缺失 ⇒ {@code COM-0001}(field=expected_version)；
+     * 与库内不一致 ⇒ {@code PO-9003}）；非 {@code DRAFT} ⇒ {@code PO-9003}；
+     * {@code supplier_id} 跨团队 ⇒ {@code PO-9007}（经 {@code SupplierQueryService#existsInTeam}）；
+     * {@code warehouse_id} 跨团队 ⇒ {@code TEAM-2001}/不存在 ⇒ {@code CAT-3003}
+     * （经 {@code WarehouseQueryService#requireInTeam}）；
+     * {@code items} 传了但为空 ⇒ {@code PO-9006}；明细 {@code unit_price} &lt; 0 或小数位 &gt; 4
+     * ⇒ {@code PO-9011}；{@code ordered_qty} ≤ 0 ⇒ {@code COM-0001}。
+     *
+     * <p>明细变更后<b>同事务重算</b> {@code total_qty}/{@code total_amount}
+     * （{@code unit_price} 为 null ⇒ 该行 {@code amount} 为 null，汇总跳过）。
+     *
+     * <p>★ <b>不写审计</b>：审计 35 条清单（{@code DATABASE_DESIGN §9.17}）<b>无</b>
+     * 「采购单草稿编辑」动作（{@code R172}）⇒ 沿用 SSOT 现状，不新增 {@code AuditAction} 枚举值。
+     *
+     * <p>★ <b>不写库存</b>（{@code INV-03}）。
+     *
+     * @return 更新后的采购单详情（A5 形态，含明细与到货进度）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public PurchaseOrderDetail updateDraft(long id, UpdatePurchaseOrderRequest request) {
+        PurchaseOrderEntity order = requireOrder(id);
+        if (!PO_STATUS_DRAFT.equals(order.getStatus())) {
+            throw new BizException(ErrorCodes.PO_9003, "当前采购单状态不允许该操作");
+        }
+        if (request == null) {
+            throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                    List.of(ApiErrorDetail.of("body", "请求体必填")));
+        }
+        if (request.getExpectedVersion() == null) {
+            throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                    List.of(ApiErrorDetail.of("expected_version", "expected_version 必填")));
+        }
+        if (request.getExpectedVersion() != order.getVersion()) {
+            throw new BizException(ErrorCodes.PO_9003, "当前采购单状态不允许该操作");
+        }
+        if (request.getSupplierId() == null && request.getWarehouseId() == null
+                && request.getExpectedArrivalDate() == null && request.getRemark() == null
+                && request.getItems() == null) {
+            throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                    List.of(ApiErrorDetail.of("body", "至少提供一个可修改字段")));
+        }
+        if (request.getRemark() != null && request.getRemark().length() > REMARK_MAX_LENGTH) {
+            throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                    List.of(ApiErrorDetail.of("remark", "remark 长度不得超过 500 字符")));
+        }
+        Long nextSupplierId = order.getSupplierId();
+        if (request.getSupplierId() != null) {
+            if (!supplierQueryService.existsInTeam(request.getSupplierId())) {
+                throw new BizException(ErrorCodes.PO_9007, "所选供应商不属于当前团队");
+            }
+            nextSupplierId = request.getSupplierId();
+        }
+        if (request.getWarehouseId() != null) {
+            // 不存在 ⇒ CAT-3003(404)；跨团队 ⇒ TEAM-2001(403)（DESIGN_BASIS §5.1 规则 1：隔离优先）
+            warehouseQueryService.requireInTeam(request.getWarehouseId());
+        }
+        Long operatorId = currentUserId();
+        List<PurchaseOrderItemEntity> lines = orderItemMapper.selectList(
+                new LambdaQueryWrapper<PurchaseOrderItemEntity>()
+                        .eq(PurchaseOrderItemEntity::getPurchaseOrderId, order.getId())
+                        .orderByAsc(PurchaseOrderItemEntity::getLineNo));
+        Map<Long, PurchaseOrderItemEntity> lineById = new LinkedHashMap<>();
+        for (PurchaseOrderItemEntity line : lines) {
+            lineById.put(line.getId(), line);
+        }
+        if (request.getItems() != null && request.getItems().isEmpty()) {
+            throw BizException.withDetails(ErrorCodes.PO_9006, "采购单至少需要一条明细",
+                    List.of(ApiErrorDetail.of("items", "明细行不能为空")));
+        }
+        if (request.getItems() != null) {
+            for (UpdatePurchaseOrderRequest.LineInput input : request.getItems()) {
+                if (input.getPurchaseOrderItemId() == null
+                        || !lineById.containsKey(input.getPurchaseOrderItemId())) {
+                    throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                            List.of(ApiErrorDetail.of("items",
+                                    "明细行必须属于本采购单（purchase_order_item_id 无效）")));
+                }
+                if (input.getOrderedQty() == null) {
+                    throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                            List.of(ApiErrorDetail.of("items", "ordered_qty 必填")));
+                }
+                if (input.getOrderedQty().signum() <= 0) {
+                    throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                            List.of(ApiErrorDetail.of("items", "ordered_qty 必须大于 0")));
+                }
+                if (input.getUnitPrice() != null) {
+                    if (input.getUnitPrice().signum() < 0) {
+                        throw BizException.withDetails(ErrorCodes.PO_9011, "单价非法",
+                                List.of(ApiErrorDetail.of("unit_price", "单价不得为负")));
+                    }
+                    if (input.getUnitPrice().stripTrailingZeros().scale() > 4) {
+                        throw BizException.withDetails(ErrorCodes.PO_9011, "单价非法",
+                                List.of(ApiErrorDetail.of("unit_price", "单价小数位不得超过 4")));
+                    }
+                }
+            }
+            // 逐行改（按 id + 父单双条件定位，防跨单篡改；不动 sku/来源，DRAFT 态无收货并发）
+            for (UpdatePurchaseOrderRequest.LineInput input : request.getItems()) {
+                PurchaseOrderItemEntity line = lineById.get(input.getPurchaseOrderItemId());
+                BigDecimal qty = input.getOrderedQty();
+                BigDecimal price = input.getUnitPrice() == null ? line.getUnitPrice() : input.getUnitPrice();
+                BigDecimal amount = lineAmount(qty, price);
+                orderItemMapper.update(null, Wrappers.<PurchaseOrderItemEntity>lambdaUpdate()
+                        .eq(PurchaseOrderItemEntity::getId, line.getId())
+                        .eq(PurchaseOrderItemEntity::getPurchaseOrderId, order.getId())
+                        .set(PurchaseOrderItemEntity::getOrderedQty, qty)
+                        .set(PurchaseOrderItemEntity::getUnitPrice, price)
+                        .set(PurchaseOrderItemEntity::getAmount, amount)
+                        .set(PurchaseOrderItemEntity::getExpectedArrivalDate,
+                                input.getExpectedArrivalDate() == null
+                                        ? line.getExpectedArrivalDate()
+                                        : input.getExpectedArrivalDate())
+                        .set(PurchaseOrderItemEntity::getRemark,
+                                input.getRemark() == null ? line.getRemark() : input.getRemark())
+                        .set(PurchaseOrderItemEntity::getVersion, line.getVersion() + 1)
+                        .set(PurchaseOrderItemEntity::getUpdatedBy, operatorId));
+                line.setOrderedQty(qty);
+                line.setUnitPrice(price);
+                line.setAmount(amount);
+            }
+        }
+        // 同事务重算汇总（unit_price 为空 ⇒ amount null，跳过）
+        BigDecimal totalQty = BigDecimal.ZERO.setScale(3);
+        BigDecimal totalAmount = BigDecimal.ZERO.setScale(2);
+        for (PurchaseOrderItemEntity line : lines) {
+            if (line.getOrderedQty() != null) {
+                totalQty = totalQty.add(line.getOrderedQty());
+            }
+            if (line.getAmount() != null) {
+                totalAmount = totalAmount.add(line.getAmount());
+            }
+        }
+        var headUpdater = itemUpdateGuard(order, PO_STATUS_DRAFT)
+                .set(PurchaseOrderEntity::getTotalQty, totalQty)
+                .set(PurchaseOrderEntity::getTotalAmount, totalAmount)
+                .set(PurchaseOrderEntity::getVersion, order.getVersion() + 1)
+                .set(PurchaseOrderEntity::getUpdatedBy, operatorId);
+        if (nextSupplierId != null) {
+            headUpdater.set(PurchaseOrderEntity::getSupplierId, nextSupplierId);
+        }
+        if (request.getWarehouseId() != null) {
+            headUpdater.set(PurchaseOrderEntity::getWarehouseId, request.getWarehouseId());
+        }
+        if (request.getExpectedArrivalDate() != null) {
+            headUpdater.set(PurchaseOrderEntity::getExpectedArrivalDate, request.getExpectedArrivalDate());
+        }
+        if (request.getRemark() != null) {
+            headUpdater.set(PurchaseOrderEntity::getRemark, request.getRemark());
+        }
+        int affected = orderMapper.update(null, headUpdater);
+        if (affected == 0) {
+            throw new BizException(ErrorCodes.PO_9003, "当前采购单状态不允许该操作");
+        }
+        log.info("采购单草稿已编辑 id={} poNo={} totalQty={} totalAmount={}",
+                order.getId(), order.getPoNo(), totalQty, totalAmount);
+        return orderQueryService.getOrder(id);
     }
 
     // =====================================================================
@@ -451,6 +787,47 @@ public class PurchaseOrderAppService {
             return null;
         }
         return qty.multiply(unitPrice).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    // ---------------------------------------------------------------------
+    // M6-T03 状态守卫辅助
+    // ---------------------------------------------------------------------
+
+    /** 读采购单；不存在/跨团队 ⇒ {@code PO-9004}（租户线使两者同表现）。 */
+    private PurchaseOrderEntity requireOrder(long id) {
+        PurchaseOrderEntity order = orderMapper.selectById(id);
+        if (order == null) {
+            throw new BizException(ErrorCodes.PO_9004, "采购单不存在");
+        }
+        return order;
+    }
+
+    /** {@code expected_version} 必填校验（缺失 ⇒ {@code COM-0001}）。 */
+    private static int requireExpectedVersion(Integer expectedVersion) {
+        if (expectedVersion == null) {
+            throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                    List.of(ApiErrorDetail.of("expected_version", "expected_version 必填")));
+        }
+        return expectedVersion;
+    }
+
+    /**
+     * 状态守卫 UPDATE 的公共起点（M6-T03 C 节统一口径）：
+     * {@code WHERE id=? AND status=源态 AND version=读到的值}，随后由调用方
+     * {@code .set(目标态)/.set(时间列)/.set(version, v+1)} 并判 {@code update()} 返回值
+     * （0 行 ⇒ {@code PO-9003}）。
+     *
+     * <p>★ 这是「{@code update(null, wrapper)} 默认禁用」规则的<b>逐处列明例外</b>
+     * （理由与正确性保障见 {@link PurchaseOrderEntity} 类 Javadoc）：需把 {@code status}
+     * 与 {@code version} 并进同一条 UPDATE；{@code entity == null} 时乐观锁插件不触发，
+     * 故手动 {@code set(version, v+1)}，与插件语义等价 ⇒ 仍是真 CAS。
+     */
+    private LambdaUpdateWrapper<PurchaseOrderEntity> itemUpdateGuard(
+            PurchaseOrderEntity order, String expectedStatus) {
+        return Wrappers.<PurchaseOrderEntity>lambdaUpdate()
+                .eq(PurchaseOrderEntity::getId, order.getId())
+                .eq(PurchaseOrderEntity::getStatus, expectedStatus)
+                .eq(PurchaseOrderEntity::getVersion, order.getVersion());
     }
 
     private static BigDecimal sum(List<BigDecimal> values, int scale) {
