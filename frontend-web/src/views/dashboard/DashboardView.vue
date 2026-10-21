@@ -28,8 +28,9 @@
         :key="key"
         :type="granted ? 'success' : 'info'"
         class="dashboard__perm-tag"
+        :title="`${key}（${granted ? '已授予' : '未授予'}）`"
       >
-        {{ key }}: {{ granted ? '✓' : '✗' }}
+        {{ capabilityLabel(String(key)) }} {{ granted ? '✓' : '✗' }}
       </el-tag>
       <el-empty v-if="!permKeys.length" description="未获取到能力位" :image-size="60" />
     </el-card>
@@ -46,6 +47,35 @@ const userStore = useUserStore()
 const teamStore = useTeamStore()
 
 const permKeys = computed(() => Object.keys(userStore.permissions))
+
+/**
+ * 能力位 key → 中文标签。
+ *
+ * ★ 语义以 `USER_ROLES.md §2.2` 权限矩阵 14 行为准（与后端
+ * `identity/.../Permission.java` javadoc 逐行对应），**不自造**。
+ * 后端 JSON key 是枚举名小写（`Permission#key()`）。
+ * 未登记的 key 兜底显示原键（后端新增能力位时前端不白屏）。
+ */
+const CAPABILITY_LABELS: Record<string, string> = {
+  import_data: '数据导入',
+  master_data_manage: '主数据管理',
+  inventory_adjust: '库存调整',
+  create_analysis: '发起分析',
+  view_analysis: '查看分析',
+  edit_replenishment_qty: '修改建议量',
+  submit_review: '提交审核',
+  approve: '审批',
+  create_purchase_order: '创建采购单',
+  register_receipt: '到货登记',
+  view_audit: '查看审计',
+  manage_members: '成员管理',
+  manage_team_config: '团队配置',
+  transfer_ownership: '转让所有权',
+}
+
+function capabilityLabel(key: string): string {
+  return CAPABILITY_LABELS[key] ?? key
+}
 </script>
 
 <style scoped>

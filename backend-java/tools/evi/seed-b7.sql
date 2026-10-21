@@ -1,5 +1,8 @@
 -- B7 真栈 fat-jar 取证种子（独立库，不入 db/migration）
 -- 与 InventoryApiIntegrationTest#resetAndSeed 完全对齐的 ID 与数值，便于对照 31 项集成测试。
+-- ★ 导入命令必须带 --default-character-set=utf8mb4（2026-10-22 教训：不带会按 latin1 双重编码，
+--   users.display_name / teams.name / warehouses.name 全部变 mojibake，需用
+--   CONVERT(BINARY CONVERT(col USING latin1) USING utf8mb4) 反转修复）。
 -- 口令统一：S3cret!Passw0rd（对应下方 BCrypt 哈希）
 
 DELETE FROM refresh_tokens;

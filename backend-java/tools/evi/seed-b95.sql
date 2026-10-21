@@ -1,5 +1,8 @@
 -- B9.5（R72 审计事务耦合 + R73 冲销幂等重放）真栈 fat-jar 取证种子（独立库，不入 db/migration）
 -- 与 InventoryAuditTxCouplingTest / InventoryReversalReplayTest 的 ID / 数值对齐，
+-- ★ 导入命令必须带 --default-character-set=utf8mb4（2026-10-22 教训：不带会按 latin1 双重编码，
+--   users.display_name / teams.name / warehouses.name 全部变 mojibake，需用
+--   CONVERT(BINARY CONVERT(col USING latin1) USING utf8mb4) 反转修复）。
 -- 便于脚本结论与集成测试互证。口令统一：S3cret!Passw0rd（与 seed-b7/b8/b9 同源哈希）
 --
 -- 团队 7（星海优选）：仓库 9004=WH-MAIN；SKU 9002=SKU-A、9003=SKU-B、9005=SKU-C（均属商品 9001）

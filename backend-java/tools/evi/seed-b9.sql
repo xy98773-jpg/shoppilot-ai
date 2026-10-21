@@ -1,5 +1,8 @@
 -- B9（M3-T17 审计埋点）真栈 fat-jar 取证种子（独立库，不入 db/migration）
 -- 与 InventoryAuditIntegrationTest#resetAndSeed 的 ID / 数值对齐，便于脚本结论与集成测试互证。
+-- ★ 导入命令必须带 --default-character-set=utf8mb4（2026-10-22 教训：不带会按 latin1 双重编码，
+--   users.display_name / teams.name / warehouses.name 全部变 mojibake，需用
+--   CONVERT(BINARY CONVERT(col USING latin1) USING utf8mb4) 反转修复）。
 -- 口令统一：S3cret!Passw0rd（对应下方 BCrypt 哈希；与 seed-b7.sql / seed-b8.sql 同源）
 --
 -- 团队 7（星海优选）：仓库 9004=WH-MAIN；SKU 9002=SKU-A、9003=SKU-B、9005=SKU-C（均属商品 9001）
