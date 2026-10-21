@@ -114,4 +114,94 @@ public interface AuditLogMapper {
                                            @Param("bizType") String bizType,
                                            @Param("bizId") long bizId,
                                            @Param("limit") int limit);
+
+    /**
+     * 审计日志分页查询（{@code M6-T09} / {@code F-AUD-02}，{@code API_CONTRACT §10.10}）。
+     *
+     * <h2>★ 团队隔离（本方法<strong>不</strong>加 {@code @InterceptorIgnore}）</h2>
+     * {@code audit_logs} 含 {@code team_id} 列，且未登记进 {@code TenantTables.WITHOUT_TEAM_ID}
+     * ⇒ {@code TenantLineInnerInterceptor} 会为本 SELECT <b>自动追加</b> {@code AND team_id = ?}
+     * （值来自 {@code TeamContext}）。这正是查询端点需要的隔离，故<b>刻意不加</b>忽略注解——
+     * 一旦加上就必须把本方法登记进 {@code M2_TenantIsolationDbIntegrationTest.TENANT_LINE_EXCEPTIONS}，
+     * 那等于悄悄关掉团队隔离。{@link #insert} / {@link #selectRecentByBiz} 的忽略是历史写法
+     * （无团队上下文也要能写、且已显式带 {@code team_id}），本批<b>不改动</b>。
+     *
+     * <h2>SQL 约束</h2>
+     * <ul>
+     *   <li><b>仅 SELECT</b>：{@code audit_logs} 仅追加（{@code DATABASE_DESIGN §6-J.4}），
+     *       本接口不继承 {@code BaseMapper}，不新增任何 UPDATE/DELETE；</li>
+     *   <li><b>排序方向不拼接</b>：{@code 白名单只有 occurred_at,asc|desc}，由
+     *       {@code <choose>} 在两个固定片段间选择，参数永远走 {@code #{}} 占位符；</li>
+     *   <li><b>分页</b>：{@code LIMIT #{offset}, #{limit}}；总数由
+     *       {@link #selectAuditLogCount} 单独统计（INFO 级量级下比窗口函数更易命中索引）；</li>
+     *   <li><b>时间列</b>：筛选/排序一律用 {@code occurred_at}（业务发生时间），不用 {@code created_at}。</li>
+     * </ul>
+     *
+     * @param bizType       业务对象类型（{@code null} = 不过滤）
+     * @param bizId         业务对象 ID（{@code null} = 不过滤；非空时调用方保证 {@code bizType} 也非空）
+     * @param action        动作（{@code null} = 不过滤）
+     * @param result        {@code SUCCESS}/{@code FAILURE}（{@code null} = 不过滤）
+     * @param operatorId    操作人（{@code null} = 不过滤）
+     * @param dateFrom      起始时间（含，UTC；{@code null} = 不限）
+     * @param dateToBefore  结束时间（<b>不含</b>，UTC；调用方已把 {@code date_to} 加 1 天）
+     * @param ascending     {@code true=occurred_at ASC}，{@code false=DESC}（缺省）
+     * @param offset        偏移量（{@code (page-1)*pageSize}）
+     * @param limit         每页条数（已夹取到 1..200）
+     */
+    @Select("<script>"
+            + "SELECT id, action, biz_type, biz_id, biz_no, operator_id, operator_name, operator_role, "
+            + "result, error_code, change_summary, request_id, ip, occurred_at, before_json, after_json "
+            + "FROM audit_logs "
+            + "<where>"
+            + "<if test='bizType != null'>AND biz_type = #{bizType} </if>"
+            + "<if test='bizId != null'>AND biz_id = #{bizId} </if>"
+            + "<if test='action != null'>AND action = #{action} </if>"
+            + "<if test='result != null'>AND result = #{result} </if>"
+            + "<if test='operatorId != null'>AND operator_id = #{operatorId} </if>"
+            + "<if test='dateFrom != null'>AND occurred_at &gt;= #{dateFrom} </if>"
+            + "<if test='dateToBefore != null'>AND occurred_at &lt; #{dateToBefore} </if>"
+            + "</where>"
+            + "ORDER BY occurred_at "
+            + "<choose><when test='ascending'>ASC</when><otherwise>DESC</otherwise></choose>, id "
+            + "<choose><when test='ascending'>ASC</when><otherwise>DESC</otherwise></choose> "
+            + "LIMIT #{offset}, #{limit}"
+            + "</script>")
+    List<AuditLogEntity> selectAuditLogPage(@Param("bizType") String bizType,
+                                            @Param("bizId") Long bizId,
+                                            @Param("action") String action,
+                                            @Param("result") String result,
+                                            @Param("operatorId") Long operatorId,
+                                            @Param("dateFrom") java.time.LocalDateTime dateFrom,
+                                            @Param("dateToBefore") java.time.LocalDateTime dateToBefore,
+                                            @Param("ascending") boolean ascending,
+                                            @Param("offset") long offset,
+                                            @Param("limit") int limit);
+
+    /**
+     * 统计满足同样筛选条件的审计日志总数（配合 {@link #selectAuditLogPage} 实现分页）。
+     *
+     * <p>筛选条件与分页查询<b>逐条对应</b>（否则 {@code total} 与 {@code list} 会自相矛盾）。
+     * 团队隔离同样由租户线自动追加 {@code team_id}，<b>不</b>加 {@code @InterceptorIgnore}。
+     *
+     * @return 命中条数（无记录时为 0）
+     */
+    @Select("<script>"
+            + "SELECT COUNT(*) FROM audit_logs "
+            + "<where>"
+            + "<if test='bizType != null'>AND biz_type = #{bizType} </if>"
+            + "<if test='bizId != null'>AND biz_id = #{bizId} </if>"
+            + "<if test='action != null'>AND action = #{action} </if>"
+            + "<if test='result != null'>AND result = #{result} </if>"
+            + "<if test='operatorId != null'>AND operator_id = #{operatorId} </if>"
+            + "<if test='dateFrom != null'>AND occurred_at &gt;= #{dateFrom} </if>"
+            + "<if test='dateToBefore != null'>AND occurred_at &lt; #{dateToBefore} </if>"
+            + "</where>"
+            + "</script>")
+    long selectAuditLogCount(@Param("bizType") String bizType,
+                             @Param("bizId") Long bizId,
+                             @Param("action") String action,
+                             @Param("result") String result,
+                             @Param("operatorId") Long operatorId,
+                             @Param("dateFrom") java.time.LocalDateTime dateFrom,
+                             @Param("dateToBefore") java.time.LocalDateTime dateToBefore);
 }
