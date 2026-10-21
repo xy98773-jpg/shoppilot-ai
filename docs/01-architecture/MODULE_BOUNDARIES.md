@@ -184,10 +184,10 @@ app → 全部业务模块 → common（组合根，依赖所有业务模块 + c
 
 | 项 | 内容 |
 | --- | --- |
-| **负责什么** | 库存余额（`inventory_balances`）与库存流水（`inventory_transactions`）的唯一写入口；各类 `InventoryTxnType` 的落账与校验；补货策略参数（`replenishment_policies`）；库存预警口径；**在途口径计算**（`effective_in_transit_qty`，见 `DESIGN_BASIS.md §10.4`） |
+| **负责什么** | 库存余额（`inventory_balances`）与库存流水（`inventory_transactions`）的唯一写入口；各类 `InventoryTxnType` 的落账与校验；补货策略参数（`replenishment_policies`）；库存预警口径；**在途口径（含 §10.4 窗口规则）的定义与计算**（`effective_in_transit_qty` / 原始在途，见 `DESIGN_BASIS.md §10.4`）——在途**事实**由 `purchasing` 经 `InTransitFactProvider` 提供（`purchasing → inventory` 方向合法） |
 | **明确不负责什么** | 不负责采购单与到货单（属 `purchasing`）；不负责分析计算；不负责基础资料维护 |
 | **拥有的表** | `inventory_balances`、`inventory_transactions`、`replenishment_policies` |
-| **对外暴露的服务接口** | **写接口（唯一入口）**：<br/>`InventoryWriteService.applyInitialImport(skuId, warehouseId, qty, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyInbound(skuId, warehouseId, qty, bizType, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyOutbound(skuId, warehouseId, qty, bizType, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyCountAdjust(skuId, warehouseId, targetQty, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyManualAdjust(skuId, warehouseId, qtyDelta, reason, idempotencyKey)`<br/>`InventoryWriteService.applyReversal(txnId, reason, idempotencyKey)`<br/>**读接口**：<br/>`InventoryQueryService.getBalance(skuId, warehouseId)` → 含 `on_hand_qty` / `committed_qty` / `available_qty`<br/>`InventoryQueryService.listBalances(filter, page)`<br/>`InventoryQueryService.listTransactions(filter, page)`<br/>`InventoryQueryService.listAlerts(filter)`<br/>**在途口径（供 analysis）**：<br/>`InventoryInTransitQueryService.getEffectiveInTransit(skuId, warehouseId, windowEndDate)`<br/>`InventoryInTransitQueryService.batchGetEffectiveInTransit(pairs, windowEndDate)`<br/>**策略**：<br/>`ReplenishmentPolicyService.getEffectivePolicy(teamId, skuId, warehouseId)` → 解析 `L` / `R` / `SS` / MOQ / `order_multiple` 三级来源<br/>**同口径锚点行锁（供 `purchasing`，`F-03`）**：<br/>`InventoryWriteService.lockBalanceAnchors(teamId, warehouseId, skuIdsAscending)` → `AnchorLockResult(lockedSkuIds, missingSkuIds)` |
+| **对外暴露的服务接口** | **写接口（唯一入口）**：<br/>`InventoryWriteService.applyInitialImport(skuId, warehouseId, qty, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyInbound(skuId, warehouseId, qty, bizType, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyOutbound(skuId, warehouseId, qty, bizType, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyCountAdjust(skuId, warehouseId, targetQty, bizRefId, idempotencyKey)`<br/>`InventoryWriteService.applyManualAdjust(skuId, warehouseId, qtyDelta, reason, idempotencyKey)`<br/>`InventoryWriteService.applyReversal(txnId, reason, idempotencyKey)`<br/>**读接口**：<br/>`InventoryQueryService.getBalance(skuId, warehouseId)` → 含 `on_hand_qty` / `committed_qty` / `available_qty`<br/>`InventoryQueryService.listBalances(filter, page)`<br/>`InventoryQueryService.listTransactions(filter, page)`<br/>`InventoryQueryService.listAlerts(filter)`<br/>**在途口径（供 `analysis` 与自身余额展示）**：<br/>`InventoryInTransitQueryService.batchGetEffectiveInTransit(teamId, warehouseId, Map<skuId, windowEndDate>)` → `Map<skuId, qty>`（应用 `§10.4` 窗口；★ `L` 按 SKU 解析 ⇒ **边界日是 per-SKU 的**）<br/>`InventoryInTransitQueryService.batchGetInTransit(teamId, warehouseId, skuIds)` → `Map<skuId, qty>`（**不**应用窗口，展示口径）<br/>★ 事实来源 SPI（**由 `purchasing` 实现**）：`InTransitFactProvider.loadFacts(teamId, warehouseId, skuIds)` → `List<InTransitFact(skuId, remainingQty, arrivalDate)>`<br/>**策略**：<br/>`ReplenishmentPolicyService.getEffectivePolicy(teamId, skuId, warehouseId)` → 解析 `L` / `R` / `SS` / MOQ / `order_multiple` 三级来源<br/>**同口径锚点行锁（供 `purchasing`，`F-03`）**：<br/>`InventoryWriteService.lockBalanceAnchors(teamId, warehouseId, skuIdsAscending)` → `AnchorLockResult(lockedSkuIds, missingSkuIds)` |
 | **可以依赖哪些模块** | `catalog`、`common` |
 | **禁止的反向依赖** | 禁止依赖 `purchasing`、`analysis`、`replenishment`、`importdata` |
 | **关键事务边界** | **单笔库存变更 = 单事务**：校验（含 `on_hand_qty ≥ 0`）→ 写 `inventory_transactions`（含幂等键唯一约束）→ 更新 `inventory_balances`（乐观锁）→ 提交。余额与流水**必须同事务**（保证可对账） |
@@ -264,14 +264,14 @@ app → 全部业务模块 → common（组合根，依赖所有业务模块 + c
 | 项 | 内容 |
 | --- | --- |
 | **负责什么** | 采购单（`purchase_orders`）与明细（`purchase_order_items`）生命周期（`PurchaseOrderStatus`）；到货单（`goods_receipts`）与到货明细（`goods_receipt_items`）；确认到货时调用 `inventory` 产生 `PURCHASE_INBOUND` 流水；部分到货支持；取消采购单 |
-| **明确不负责什么** | 不负责库存表写入（**必须调用 `InventoryWriteService`**）；不负责建议审批；不负责在途口径计算（在途由 `inventory` 从采购明细聚合，`purchasing` 只提供查询能力） |
+| **明确不负责什么** | 不负责库存表写入（**必须调用 `InventoryWriteService`**）；不负责建议审批；不负责在途**口径**（窗口规则归 `inventory`），只按 `inventory` 声明的 `InTransitFactProvider` 提供**在途事实**（`ordered_qty − received_qty` 与到期日，不含任何过滤） |
 | **拥有的表** | `purchase_orders`、`purchase_order_items`、`goods_receipts`、`goods_receipt_items` |
 | **对外暴露的服务接口** | `PurchaseOrderAppService.createFromApprovedItems(itemIds, warehouseId, expectedArrivalDate, conflictAcknowledged, acknowledgedItemIds, idempotencyKey)` → 建 `DRAFT`<br/>`PurchaseOrderAppService.confirm(poId)`（`DRAFT → PENDING`，仅 `APPROVER`+）<br/>`PurchaseOrderAppService.order(poId)`（`PENDING → ORDERED`）<br/>`PurchaseOrderAppService.cancel(poId, reason)`<br/>`PurchaseOrderQueryService.getOrder(poId)` / `listOrders(filter, page)`<br/>`GoodsReceiptAppService.createDraft(poId, lines, idempotencyKey)`<br/>`GoodsReceiptAppService.confirm(receiptId)` → 校验后调用 `InventoryWriteService.applyInbound(...)`，推进采购单状态<br/>`GoodsReceiptAppService.cancelDraft(receiptId)`（仅 `DRAFT`）<br/>`GoodsReceiptQueryService.listReceipts(filter, page)` / `getReceipt(receiptId)` |
 | **可以依赖哪些模块** | `replenishment`、`inventory`、`catalog`、`common` |
 | **禁止的反向依赖** | 禁止依赖 `analysis`、`sales`、`importdata`；禁止直接 `UPDATE inventory_balances` |
 | **关键事务边界** | `createFromApprovedItems`：**单事务**（建单 + 明细 + 调用 `replenishment.markConverted`，保证 `PO-9001` 不被重复触发）；内含 **3 个跨模块调用点**——② 锚点锁 `inventory.InventoryWriteService.lockBalanceAnchors`、②b/③ `replenishment.ReplenishmentAppService.lockApprovedAnchors` 与 `ReplenishmentQueryService.findByTeamWhSkuApproved`、⑧ `replenishment.ReplenishmentAppService.markConverted`——**全部 `REQUIRED`（参与外层事务），被调方不得提交/回滚外层事务**（`F-03`；步骤序见 `DATABASE_DESIGN.md §7.2 #8`）；`confirm` 到货：**单事务**（写 `goods_receipts` 状态 + 调用 `InventoryWriteService` + 推进 PO 状态 + 校验 `PO-9002`）；**跨模块调用在事务内**，因此 `InventoryWriteService` 必须支持传播到外层事务 |
 
-> **在途数据方向**：`inventory` 计算 `effective_in_transit_qty` 时需要采购明细数据。按 `DESIGN_BASIS.md §7.1` 禁止 `inventory → purchasing` 依赖，因此**在途口径由 `inventory` 定义并对外提供查询服务，采购明细的数据聚合通过"由 `purchasing` 提供的只读投影/由 `inventory` 持有的在途物化口径"实现**。这是本文件识别的**关键边界歧义**，见 §7.3 不一致 #2 与 §8.2 例外说明。
+> **在途数据方向（已裁定，`M6-T10` / `§5.78`）**：`inventory` 计算 `effective_in_transit_qty` 时需要采购明细数据。按 `DESIGN_BASIS.md §7.1` 禁止 `inventory → purchasing` 依赖，因此采用**端口反转**：接口与窗口规则归 `inventory`（`InventoryInTransitQueryService` + `InTransitFactProvider`），**事实实现归 `purchasing`**（`purchasing` 本就依赖 `inventory`，方向合法），由组合根 `app` 组件扫描装配；`inventory` **不得**新增任何指向 `purchasing` 的编译期依赖。`inventory_balances.in_transit_qty` 物化列同步**退役**（零写零读）。历史歧义见 §7.3 不一致 #2 与 §8.2 E-1（均已闭环）。
 
 ### 2.10 `audit`（审计）
 
@@ -468,7 +468,8 @@ var candidates = replenishmentQueryService.findByTeamWhSkuApproved(teamId, wareh
 
 - **背景**：补货公式 `IP = on_hand_qty + effective_in_transit_qty − committed_qty`（见 `DESIGN_BASIS.md §3`），其中 `effective_in_transit_qty` 依赖采购明细（`§10.4` 定义为 Σ(`ordered_qty − received_qty`) over 特定 PO 状态）。
 - **表面做法（错误）**：`analysis` 直接查 `purchase_order_items`，或 `analysis` 依赖 `purchasing`。这违反 `DESIGN_BASIS.md §7.1` 的禁止反向依赖（`analysis` 直接读 `purchasing` 表 ❌）。
-- **正确做法**：`analysis` **只调用 `inventory` 的 `InventoryInTransitQueryService`**，由 `inventory` 提供**已经算好的在途口径值**。
+- **正确做法**：`analysis` **只调用 `inventory` 的 `InventoryInTransitQueryService`**，由 `inventory` 提供**已经算好的在途口径值**。`inventory` 的事实来自 `purchasing` 实现的 `InTransitFactProvider`（端口声明在 `inventory`，实现类在 `purchasing`，`app` 装配）——`analysis` 完全看不到采购表，也看不到该 SPI。
+  - 调用形状：`batchGetEffectiveInTransit(teamId, warehouseId, Map<skuId, windowEndDate>)`；`windowEndDate = today + L + R`，由 `analysis` **逐 SKU** 依 `§10.4` 计算（`L` 逐 SKU，`R = params.coverageDays`）。**窗口规则本身在 `inventory` 内实现**，调用方只传边界日。
 - **为什么这样做（3 个理由）**：
   1. **保持依赖方向**：`DESIGN_BASIS.md §7.1` 明确"`analysis` 需要采购数据时应通过 `inventory` 提供的在途口径"；这是 SSOT 的直接要求。
   2. **口径唯一**：在途的定义（哪些 PO 状态、是否在覆盖窗口内、`expected_arrival_date` 为空时保守计入）是**库存语义**（见 `§10.4`），必须由 `inventory` 单点解释，避免 `analysis` 与 `inventory` 各算各的导致 `IP` 不一致。
@@ -482,7 +483,8 @@ var candidates = replenishmentQueryService.findByTeamWhSkuApproved(teamId, wareh
 
 | 需求方 | 需要的异地数据 | 不允许的做法 | 允许的做法 |
 | --- | --- | --- | --- |
-| `analysis` | 采购在途量 | 查 `purchasing` 表 / 依赖 `purchasing` | 调 `inventory.InventoryInTransitQueryService` |
+| `analysis` | 采购在途量 | 查 `purchasing` 表 / 依赖 `purchasing` / 注入 `InTransitFactProvider` | 调 `inventory.InventoryInTransitQueryService`（`batchGetEffectiveInTransit`） |
+| `inventory` | 采购在途**事实** | 依赖 `purchasing` / 直查 `purchase_order_items` | 按 `InTransitFactProvider`（**本模块声明的端口**）拿事实；实现类在 `purchasing` |
 | `analysis` | 销售序列 | 注入 `sales_daily` 的 Mapper | 调 `sales.SalesQueryService.getSeries` |
 | `analysis` | SKU / 仓库 / 供应商基础资料 | 注入 `catalog` 的 Mapper | 调 `catalog` 的 Query 服务 |
 | `importdata` | 库存写入 | 直接 `UPDATE inventory_balances` | 调 `inventory.InventoryWriteService` |
@@ -558,7 +560,7 @@ schemas ← 所有模块（纯数据结构）
 
 | # | 问题 | 建议 |
 | --- | --- | --- |
-| E-1 | "采购明细 → 在途口径"如何在**不违反依赖方向**的前提下实现 | 方案 A：`purchasing` 在采购单/到货变更时，把在途量以**只读投影**写入 `inventory` 可访问的口径（如由 `inventory` 提供的 `applyInTransitProjection`，方向为 `purchasing → inventory`，合法）；方案 B：在途口径由 `inventory` 从 `inventory` 自有的在途物化表计算，`purchasing` 负责维护该物化数据（通过 `inventory` 接口）。**推荐方案 A**，因它保持方向合法且口径单点。需 ADR 固化。 |
+| E-1 | "采购明细 → 在途口径"如何在**不违反依赖方向**的前提下实现 | ✅ **已裁定（`M6-T10`，2026-10-21，`DESIGN_REVIEW §5.78`）**：采用**方案 C（端口反转 + 派生）**——`inventory` 声明 `InTransitFactProvider`（只给事实）并单点实现 `§10.4` 窗口规则；`purchasing` 实现该 SPI（`purchasing → inventory` 合法）；`app` 装配。**不采用**原方案 A/B：A 需在三处写路径维护物化列（漏改风险 + `R178` 证明从未被维护），B 的"由采购明细聚合"若落在 `inventory` 或 `analysis` 会违反依赖方向。`inventory_balances.in_transit_qty` 物化列**退役**（零写零读）。 |
 | E-2 | "分析完成 → 生成建议"的编排入口归属 | 由 `replenishment.ReplenishmentGenerationService.generateFromRun(runId)` 作为入口，避免 `analysis → replenishment` 反向依赖。需 ADR 固化触发时机（同步调用 or 分析落库后由上层编排调用）。 |
 | E-3 | 审计写入的事务策略（同事务 vs 解耦） | 高风险操作同事务，低风险解耦；需 ADR 与 `DATABASE_CONSTRAINTS.md` 固化（关联待决策 `D-05`）。 |
 
@@ -567,7 +569,7 @@ schemas ← 所有模块（纯数据结构）
 | # | 位置 | 现象 | 建议 |
 | --- | --- | --- | --- |
 | 1 | `DESIGN_BASIS.md §7.1` | 补货建议（`replenishment_items`）由分析结果"派生"。但按依赖方向 `replenishment → analysis`，**`analysis` 不能反向调用 `replenishment` 来生成建议**。SSOT 未说明该派发由谁触发。 | 与 DESIGN_BASIS **未明确**（非冲突但缺实现路径），建议在 `§7.1` 或 ADR 中明确"由 `replenishment` 侧编排生成"。见 §8.2 E-2。 |
-| 2 | `DESIGN_BASIS.md §7.1` | `inventory` 计算 `effective_in_transit_qty`（`§10.4`）需要采购明细数据，但 `inventory` 被禁止依赖 `purchasing`，SSOT 只说"通过 `inventory` 提供的在途口径"却未说明数据来源实现。 | 与 DESIGN_BASIS **未明确**，建议在 ADR 中固化"在途口径的数据写入方向"（见 §8.2 E-1）。 |
+| 2 | `DESIGN_BASIS.md §7.1` | `inventory` 计算 `effective_in_transit_qty`（`§10.4`）需要采购明细数据，但 `inventory` 被禁止依赖 `purchasing`，SSOT 只说"通过 `inventory` 提供的在途口径"却未说明数据来源实现。 | ✅ **已闭环**：`M6-T10` 以「端口反转 + 派生」落地（`InTransitFactProvider` 声明在 `inventory`、实现在 `purchasing`），见 §8.2 E-1 与 `DESIGN_REVIEW §5.78`；`DESIGN_BASIS §10.4.1` 已补实现路径。 |
 | 3 | `DESIGN_BASIS.md §7.1` | 依赖方向图把 `importdata` 画为"可写入 inventory / sales / catalog"，但依赖清单里 `importdata` 允许依赖 `catalog`、`inventory`、`sales`、`common`。图中还出现 `sales` 位于 `{inventory, sales}` 并列，与 `importdata → sales` 一致，但图中未画 `analysis`/`replenishment`/`purchasing` 对 `common` 的依赖箭头，仅作示意。 | **非冲突**，仅为图示简化；本文件 §1 已补全全部依赖边。建议 `§7.1` 图示补注"省略 common 边"。 |
 
 ---

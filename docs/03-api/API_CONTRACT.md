@@ -2168,7 +2168,7 @@ X-Request-Id: req_gr_002
 | 24 | `warehouse_code` | string | `warehouses.code` | — |
 | 25 | `is_default` | boolean | `warehouses.is_default` | `TINYINT(1)` |
 | 26 | `on_hand_qty` | string | `inventory_balances.on_hand_qty` | 数量 3 位 |
-| 27 | `in_transit_qty` | string | `inventory_balances.in_transit_qty` | — |
+| 27 | `in_transit_qty` | string | ★ **派生值**（`inventory.InventoryInTransitQueryService.batchGetInTransit`，**不**应用 `§10.4` 窗口）；`inventory_balances.in_transit_qty` 列已废弃（`R178`/`M6-T10`） | — |
 | 28 | `committed_qty` | string | `inventory_balances.committed_qty` | — |
 | 29 | `available_qty` | string | `inventory_balances.available_qty`（生成列） | 仅展示 |
 | 30 | `last_txn_at` | string | `inventory_balances.last_txn_at` | ISO-8601 UTC |

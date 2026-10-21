@@ -399,7 +399,7 @@
 | `warehouse_id` | `BIGINT UNSIGNED` | 否 | — | 仓库 ID | **不可变** |
 | `sku_id` | `BIGINT UNSIGNED` | 否 | — | SKU ID | **不可变** |
 | `on_hand_qty` | `DECIMAL(18,3)` | 否 | `0` | 现有库存（`§3`：已实际在仓、可直接出库） | **只能由流水驱动**（见设计要点） |
-| `in_transit_qty` | `DECIMAL(18,3)` | 否 | `0` | 在途库存（`§3`：已下采购单未确认到货） | 由采购单状态变更驱动 |
+| `in_transit_qty` | `DECIMAL(18,3)` | 否 | `0` | **【已废弃 · `M6-T10`】** 原「在途库存」物化列（`§3`）。**零写入、零读取**：在途一律由 `purchase_order_items` 派生（`DESIGN_BASIS §10.4.1`） | 保留列与 `ck_invbal_in_transit_non_negative` 约束，恒为 `0`；新代码**不得**读或写 |
 | `committed_qty` | `DECIMAL(18,3)` | 否 | `0` | 已承诺库存（首期默认 0，仅保留写入通道） | 由业务占用/释放驱动 |
 | `available_qty` | `DECIMAL(18,3)` | 否 | **生成列** | `on_hand_qty − committed_qty`（`§3`，**不含在途**） | **不可写**（`STORED` 生成列自动维护） |
 | `last_txn_id` | `BIGINT UNSIGNED` | 是 | `NULL` | 最近一次流水 ID | 每次写流水时同步更新；用于对账定位 |
@@ -413,7 +413,7 @@
 - **设计要点（核心）**：
   1. **`version` 乐观锁 + 失败重试**（本项目的明确结论，见 §6-C 与 §7.2）。
   2. **余额只能由流水驱动**：任何修改 `on_hand_qty` 的路径都必须在**同一本地事务**内写一条 `inventory_transactions`，并满足 `txn.qty_after == balance.on_hand_qty`。
-  3. **`in_transit_qty` 由采购单驱动而非流水**：在途不是库存流水（没有实物移动），只在采购单创建/确认收货/取消时增减，因此它**没有对应的流水行**，只受 §10.4 的窗口过滤影响计算。
+  3. **`in_transit_qty` 已废弃（`M6-T10`，`R178`）**：在途不是库存流水（没有实物移动），且**派生即可得**（`Σ(ordered − received)` 按 §10.4 窗口过滤），故物化列退役——**零写入、零读取**。历史设计曾要求"采购单创建/确认收货/取消时增减该列"，实测从未落地（`R178`），已由派生替代。读在途请用 `inventory.InventoryInTransitQueryService`。
   4. `available_qty` 用 `STORED` 生成列而非普通列：**物理上不产生第二个可写真相**，同时可索引排序。
 
 ---
@@ -1046,7 +1046,7 @@
 | 量 | 字段 | 公式 | 用途 |
 | --- | --- | --- | --- |
 | 现有库存 | `on_hand_qty` | 由流水累加得出 | 可直接出库的实物 |
-| 在途库存 | `in_transit_qty` | 由采购单驱动（Σ `ordered − received` 且状态在途） | 判断补给是否在路上 |
+| 在途库存（原始） | `in_transit_qty`（**列已废弃**） | 派生：Σ `ordered − received`，状态 ∈ `{PENDING, ORDERED, PARTIALLY_RECEIVED}` | 仅展示，**禁入 `IP`** |
 | 已承诺库存 | `committed_qty` | 首期默认 0 | 已被业务占用 |
 | 可用库存 | `available_qty` | `on_hand_qty − committed_qty`（**不含在途**） | **仅前端展示** |
 | 有效在途 | `effective_in_transit_qty` | `§10.4` 窗口过滤后的在途 | 参与 `IP` |
@@ -1493,7 +1493,7 @@ replenishment_items.status = 'APPROVED'
 | **重复提交收货** | ① **`goods_receipts.idempotency_key` 唯一约束**（`uk_gr_team_idem`，`NOT NULL`）：同一 `X-Idempotency-Key` 第二次提交直接撞唯一键 → 返回**原到货单**（内容一致）或 `COM-0009`（内容不一致）；② **`CONFIRMED` 状态守卫**：`UPDATE goods_receipts SET status='CONFIRMED' WHERE id=? AND status='DRAFT'`，影响行数 = 0 → 说明已被确认过 → 返回已确认结果（幂等成功）而非报错 | `COM-0009` |
 | **并发收货**（同一采购单两条明细被同时确认） | ① `purchase_order_items.received_qty` 用**悲观锁** `SELECT ... FOR UPDATE`（`§6-C` 的例外场景）：因为这是"读-改-写累加"，乐观锁失败率在批量收货下极高，且重试成本大于持锁成本；② 采购单汇总 `received_qty` 更新用**乐观锁 `version`** + 状态守卫 | `INV-5002`（重试 3 次后） |
 | **超额收货** | **服务端校验**：`received_qty + 本次数量 ≤ ordered_qty`，否则抛 **`PO-9002`**（HTTP 409）。**DB 层兜底**：`CHECK (received_qty <= ordered_qty)`（`§8` 唯一约束之外的 CHECK，见 `DATABASE_CONSTRAINTS.md §5`）。**不允许超额**（首期不做"超收挂账"） | `PO-9002` |
-| **收货后事务失败** | **单事务覆盖全部动作**，无跨服务调用，因此要么全成、要么全回滚：<br/>① `goods_receipts.status := 'CONFIRMED'`（带状态守卫）<br/>② `goods_receipt_items` 校验并固化<br/>③ 每条明细：`inventory_transactions` INSERT（`PURCHASE_INBOUND`）+ `inventory_balances` 乐观锁 UPDATE + `in_transit_qty` 扣减<br/>④ `purchase_order_items.received_qty += 本次`（悲观锁）<br/>⑤ `purchase_orders.received_qty = Σ`、`status` 重算（乐观锁）<br/>⑥ `audit_logs` INSERT<br/><br/>**Python AI 服务与本流程完全无关**（`§13.2`：AI 只做分析），因此不存在跨服务事务问题 | 整体回滚，DB 无中间态 |
+| **收货后事务失败** | **单事务覆盖全部动作**，无跨服务调用，因此要么全成、要么全回滚：<br/>① `goods_receipts.status := 'CONFIRMED'`（带状态守卫）<br/>② `goods_receipt_items` 校验并固化<br/>③ 每条明细：`inventory_transactions` INSERT（`PURCHASE_INBOUND`）+ `inventory_balances` 乐观锁 UPDATE（**只改 `on_hand_qty`**；`in_transit_qty` 已废弃，不再扣减）<br/>④ `purchase_order_items.received_qty += 本次`（悲观锁）<br/>⑤ `purchase_orders.received_qty = Σ`、`status` 重算（乐观锁）<br/>⑥ `audit_logs` INSERT<br/><br/>**Python AI 服务与本流程完全无关**（`§13.2`：AI 只做分析），因此不存在跨服务事务问题 | 整体回滚，DB 无中间态 |
 
 **为什么这里可以安心用悲观锁**：收货是**人工操作、低频、单团队串行**（一个团队一天几次到货），锁竞争概率极低；而乐观锁在这条路径上需要"读快照 → 校验 → 写"，重试要**重复校验超额**，逻辑更复杂。判定标准见 §7.4：**"是否读-改-写累加 + 低频" → 悲观锁**。
 
@@ -1602,7 +1602,7 @@ replenishment_items.status = 'APPROVED'
 
 | # | 操作 | 事务边界 | 主要步骤（同一本地事务） | 锁策略 | 冲突/失败行为 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | **库存入库**（采购到货） | `GoodsReceiptAppService.confirm()` | ① 到货单状态守卫 `DRAFT→CONFIRMED`；② 每明细：流水 INSERT + 余额 UPDATE + `in_transit_qty` 扣减；③ `poi.received_qty +=`；④ 采购单汇总与状态 | ① 状态守卫（条件 UPDATE）；②③ **悲观锁** `SELECT ... FOR UPDATE` 锁 `poi` 行 + 余额**乐观锁 `version`**；④ 乐观锁 | 超额 → `PO-9002`；余额冲突 → `INV-5002`（重试 3 次） |
+| 1 | **库存入库**（采购到货） | `GoodsReceiptAppService.confirm()` | ① 到货单状态守卫 `DRAFT→CONFIRMED`；② 每明细：流水 INSERT + 余额 UPDATE（`on_hand_qty`）；③ `poi.received_qty +=`（在途随之派生减少）；④ 采购单汇总与状态 | ① 状态守卫（条件 UPDATE）；②③ **悲观锁** `SELECT ... FOR UPDATE` 锁 `poi` 行 + 余额**乐观锁 `version`**；④ 乐观锁 | 超额 → `PO-9002`；余额冲突 → `INV-5002`（重试 3 次） |
 | 2 | **库存出库**（销售出库，预留） | `InventoryWriteService.applyOutbound()` | ① 校验 `on_hand_qty - qty >= 0`；② 流水 INSERT（`SALE_OUTBOUND`）；③ 余额 UPDATE | 余额**乐观锁** | 库存不足 → `INV-5001`；并发冲突 → `INV-5002` |
 | 3 | **盘点调整** | `InventoryCountAppService.adjust()` | ① 批量读取目标余额（同一 SKU/仓库集合）；② 逐行计算差额；③ 流水 INSERT（`COUNT_ADJUST`）+ 余额 UPDATE | 对**同一 SKU** 的多行调整：**悲观锁**（避免逐行乐观锁重试放大）；跨 SKU 按 `sku_id` 升序加锁**防死锁** | 差额为 0 → 不写流水（幂等）；冲突 → `INV-5002` |
 | 4 | **导入落库（分批事务）** | `ImportBatchAppService.importData()` | **每 500 行一个独立事务**：`sales_daily` upsert / `inventory_balances` 首行插入 + `INIT_IMPORT` 流水 / 主数据 insert | 唯一约束（upsert 吸收冲突）+ 余额首行竞争由 `uk_invbal_team_wh_sku` 吸收 | 单批失败**不回滚已成功批次** → 最终 `PARTIAL_SUCCESS`；行级错误写 `import_row_errors` |

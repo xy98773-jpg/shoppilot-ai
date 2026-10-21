@@ -93,7 +93,7 @@
 | 在途库存（余额口径） | `inventory_balances.in_transit_qty` | **物化缓存**：该 SKU×仓库当前累计未收数量，用于前端展示与余额表完整性 | Σ(采购明细 `ordered_qty − received_qty`) 中采购单状态 ∈ {`PENDING`, `ORDERED`, `PARTIALLY_RECEIVED`}；由 `purchasing` 在采购单/到货状态变化时通过 `InventoryWriteService` 投影写入 |
 | 已承诺库存 | `committed_qty` | 已被业务占用、不能再用于补货判断的数量（如待发货订单锁定） | 首期默认 0，仅保留字段与写入通道 |
 | **库存位置** | `IP`（Inventory Position） | 补货判断用的"可支配总量" | `IP = on_hand_qty + effective_in_transit_qty - committed_qty` |
-| 有效在途（分析口径） | `effective_in_transit_qty` | 在**业务表**中**不落库**（不是生成列，随日期变化无法持久化），在**快照表 `analysis_items`** 中**落库**以支持结果追溯。在余额口径的基础上再叠加"预计到货日期落在覆盖窗口内"的时间过滤，专门用于补货公式。**包含关系：`effective_in_transit_qty ⊆ inventory_balances.in_transit_qty`** | 见 §10.4 |
+| 有效在途（分析口径） | `effective_in_transit_qty` | 在**业务表**中**不落库**（不是生成列，随日期变化无法持久化），在**快照表 `analysis_items`** 中**落库**以支持结果追溯。在在途事实的基础上再叠加"预计到货日期落在覆盖窗口内"的时间过滤，专门用于补货公式。**包含关系：`effective_in_transit_qty ⊆ 在途总量（原始口径）`**；★ `inventory_balances.in_transit_qty` 物化列自 `M6-T10` 起**废弃**（零写入零读取，见 §10.4 末段与 `DESIGN_REVIEW R178`），两种口径均由 `purchase_order_items` 派生 | 见 §10.4 |
 | 可用库存 | `available_qty` | 面向用户的展示口径 | `available_qty = on_hand_qty - committed_qty`（**不含**在途） |
 | 安全库存 | `SS`（Safety Stock） | 抵御需求波动的缓冲量 | 见 §10.3 |
 | 采购交期 | `L`（Lead Time） | 从下单到可入库的天数 | 优先取 SKU 级，缺省取供应商级，再缺省取全局默认 |
@@ -118,7 +118,7 @@
 3. **`IP` ≠ `available_qty`**：`IP` 用于补货计算（含在途），`available_qty` 用于前端展示（不含在途）。前端**禁止**用 `available_qty` 参与补货判断。
 4. **库存余额（`inventory_balances`）≠ 库存流水（`inventory_transactions`）**：余额是当前值，流水是变更历史；余额必须能由流水推导。
 5. **补货建议状态（`ReplenishmentItemStatus`）≠ 采购单状态（`PurchaseOrderStatus`）**：前者描述"这个建议被处理到哪一步"，后者描述"这张采购单执行到哪一步"，两者**不得共用字段**。
-6. **`inventory_balances.in_transit_qty`（物化）≠ `effective_in_transit_qty`（派生）**：前者是余额表里的缓存字段，服务前端展示与余额口径；后者是分析时的派生过滤值。**补货公式只用后者（§10.4）**，前端展示只用前者。
+6. **「在途总量」≠ `effective_in_transit_qty`（窗口过滤后）**：两者都是**派生值**（均由 `purchase_order_items` 聚合，不落任何业务表）；前者不应用窗口、服务展示与原始口径，后者叠加窗口过滤、只进补货公式。**补货公式只用后者（§10.4）**。★ `inventory_balances.in_transit_qty` 物化列**已废弃**（`M6-T10`，`R178`）：保留列结构但零写入零读取，任何代码不得再以它为数据源。
 7. **"已承诺库存"首期恒为 0**：字段与写入通道保留（`committed_qty`），但首期没有任何业务流程会写入非零值。任何设计**不得假设它非零**（例如安全库存公式中不要引入它）。
 
 ---
@@ -586,6 +586,19 @@ effective_in_transit_qty = Σ(poi.ordered_qty − poi.received_qty)
 
 - 只在覆盖窗口内计入在途，避免"远期在途"虚增 `IP` 导致补货不足。
 - `expected_arrival_date` 为空时**保守计入**（视作窗口内）。
+- **到期日取值**：行级覆盖单头 ⇒ `arrival = COALESCE(poi.expected_arrival_date, po.expected_arrival_date)`
+  （`V1.0.11` DDL 明文「行级期望到货日（覆盖单头）」）。两者皆空 → 按上一条**计入**。
+- **`today` 口径**：`LocalDate.now(ZoneOffset.UTC)`（与 `purchasing` / `replenishment` 既有惯例一致，不用系统默认时区）。
+- **`L` / `R` 来源**：`L` 按 §10.1 四级回退（`POLICY → SKU → SUPPLIER → lead_time_default`）；`R = coverage_days`（分析运行参数）。
+
+#### 10.4.1 实现路径（`M6-T10` 裁定，2026-10-21）
+
+- **口径单点**：窗口规则只在 `inventory.InventoryInTransitQueryService` 实现（`§7.1` / `MODULE_BOUNDARIES §5.1`）。★ `L` 按 SKU 解析 ⇒ **边界日是 per-SKU 的**，批量方法签名为 `Map<skuId, windowEndDate>`（不可退化为单个日期）。
+- **数据方向**：`inventory` 声明 `InTransitFactProvider`（只给事实：`sku_id` / `remaining_qty` / `arrival_date`），
+  由 **`purchasing` 实现**（`purchasing → inventory` 方向合法，`inventory` 无编译期反向依赖）；装配由组合根 `app` 完成。
+- **物化列退役**：`inventory_balances.in_transit_qty` **不再被任何代码写入或读取**（列结构保留、`NOT NULL DEFAULT 0`），
+  「原始在途」展示值同样由上述派生得到（不应用窗口）。这样"补货口径 / 展示口径"仍互斥，但**只有一份事实来源**。
+- 理由与裁定过程见 `DESIGN_REVIEW §5.78` / `R178` / `R124`。
 
 ### 10.5 建议补货量 `Q_suggest`（套用采购约束）
 

@@ -351,7 +351,7 @@
 | `warehouse_id` | 仓库 ID | `BIGINT UNSIGNED` | 否 | — | `FK:warehouses(id)`、`UK:uk_invbal_team_wh_sku`、`IDX` | **不可变** |
 | `sku_id` | SKU ID | `BIGINT UNSIGNED` | 否 | — | `FK:skus(id)`、`UK:uk_invbal_team_wh_sku`、`IDX` | **不可变** |
 | `on_hand_qty` | 现有库存 | `DECIMAL(18,3)` | 否 | `0` | `CK:ck_invbal_on_hand_non_negative` | 由流水驱动；`§3`：已实际在仓可出库 |
-| `in_transit_qty` | 在途库存 | `DECIMAL(18,3)` | 否 | `0` | `CK:ck_invbal_in_transit_non_negative` | 由采购单状态驱动；**无对应流水** |
+| `in_transit_qty` | **【已废弃 · `M6-T10`】** 在途库存（保留列，恒 0） | `DECIMAL(18,3)` | 否 | `0` | `CK:ck_invbal_in_transit_non_negative` | 零写零读；在途由 `purchase_order_items` 派生（`DESIGN_BASIS §10.4.1`） |
 | `committed_qty` | 已承诺库存 | `DECIMAL(18,3)` | 否 | `0` | `CK:ck_invbal_committed_non_negative` | 首期默认 0，仅保留写入通道 |
 | `available_qty` | 可用库存 | `DECIMAL(18,3)` | 否 | 生成列 | `IDX`、**生成列** | `on_hand_qty − committed_qty`（`§3`，**不含在途**）；**仅展示，禁止参与补货判断** |
 | `last_txn_id` | 最近流水 ID | `BIGINT UNSIGNED` | 是 | `NULL` | 逻辑关联 `inventory_transactions.id` | 写流水时同步更新；对账定位用 |

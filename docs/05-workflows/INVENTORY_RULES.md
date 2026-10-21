@@ -102,7 +102,7 @@ flowchart LR
 
 **禁止重复计数（`§3.1` 第 2 条）**：`on_hand_qty`、`effective_in_transit_qty`、`committed_qty` **互斥**。同一批货**不得**同时出现在 `on_hand_qty` 与在途里。特别是：
 
-> **已确认到货的货物必须已从在途移出**（`PURCHASE_INBOUND` 入库时同步扣减 `in_transit_qty`，见 `PURCHASING_WORKFLOW.md §8.3`）。否则同一批货会被 `on_hand_qty` 与在途**各计一次**，导致 `IP` 虚高、补货不足。
+> **已确认到货的货物必须已从在途移出**：在途按 `ordered_qty − received_qty` **派生**，`PURCHASE_INBOUND` 累加 `received_qty` 时在途**自动**减少，无需（也**不得**）去扣 `inventory_balances.in_transit_qty`——该列自 `M6-T10` 起**废弃**（零写零读，见 `DESIGN_REVIEW R178`）。否则同一批货会被 `on_hand_qty` 与在途**各计一次**，导致 `IP` 虚高、补货不足。
 
 ### 1.3 `effective_in_transit_qty` 的口径（`§10.4`）
 
@@ -132,17 +132,21 @@ policies.safety_stock_qty 若配置 → 直接覆盖（绝对量优先）
 
 > ⚠️ 首期为**简化服务水平法**（可直接解释、可测试）。更严谨的 `Z × σ × sqrt(L)` 属待决策 `D-04`。
 
-### 1.5 【重要】`in_transit_qty`（物化）vs `effective_in_transit_qty`（计算）
+### 1.5 【重要】原始在途（展示）vs `effective_in_transit_qty`（计算）—— ★ 两口径均派生
 
-| 维度 | `inventory_balances.in_transit_qty` | `effective_in_transit_qty` |
+> ★ `M6-T10` 裁定（`DESIGN_REVIEW §5.78`）：`inventory_balances.in_transit_qty` 物化列**已废弃**（零写零读）。
+> 下表两个口径都由 `purchase_order_items` **派生**，区别只在**是否应用窗口**。
+
+| 维度 | 原始在途（展示口径） | `effective_in_transit_qty`（计算口径） |
 | --- | --- | --- |
-| 是否落库 | ✅ 物化列 | ❌ 查询侧计算 |
+| 是否落库 | ❌ 查询侧派生（`batchGetInTransit`） | ❌ 查询侧派生（`batchGetEffectiveInTransit`） |
 | 是否窗口过滤 | ❌ 不含 | ✅ 含（`§10.4`） |
-| 用途 | **展示**（列表页快速显示"在途 N 件"） | **补货计算**（进入 `IP`） |
-| 状态集合 | 按物化规则 | `{PENDING, ORDERED, PARTIALLY_RECEIVED}` |
+| 用途 | **展示**（列表页显示"在途 N 件"） | **补货计算**（进入 `IP`） |
+| 状态集合 | `{PENDING, ORDERED, PARTIALLY_RECEIVED}` | `{PENDING, ORDERED, PARTIALLY_RECEIVED}` |
+| 数据源 | `purchase_order_items`（经 `InTransitFactProvider`） | 同左 |
 
-> **结论**：**补货计算必须用 `effective_in_transit_qty`**，**禁止**用 `in_transit_qty` 参与 `IP`。
-> 详见 `PURCHASING_WORKFLOW.md §8.2` 的 `INC-P1` / `INC-P2`（SSOT §3 定义为派生公式，`DATABASE_DESIGN` 物化为一列；两者口径待统一）。
+> **结论**：**补货计算必须用 `effective_in_transit_qty`**，**禁止**用原始在途参与 `IP`（会含远期在途 ⇒ `IP` 虚高 ⇒ 少补货）。
+> `INC-P1` / `INC-P2`（`PURCHASING_WORKFLOW.md §10`）已随本裁定关闭：不再有"物化列 vs 派生公式"之争，物化列退役。
 
 ---
 

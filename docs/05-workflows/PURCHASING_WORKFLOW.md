@@ -281,7 +281,7 @@ stateDiagram-v2
 
 **反例（禁止）**：在创建采购单时预增 `on_hand_qty`，到货时再改。这会让"在途"与"在库"混淆，直接破坏补货 `IP` 的计算。
 
-### 8.2 【原则二】`in_transit_qty` 的语义与"派生 vs 物化"（**重要不一致，见 §10**）
+### 8.2 【原则二】在途的语义与口径（★ 已裁定：**一律派生**，物化列退役）
 
 **SSOT 定义**（`DESIGN_BASIS §3`）：
 
@@ -292,9 +292,9 @@ stateDiagram-v2
 | 用途 | 用哪个值 | 说明 |
 | --- | --- | --- |
 | **补货计算**（进入 `IP`） | `effective_in_transit_qty`（`§10.4`） | **必须**按窗口过滤：`po.status ∈ {PENDING, ORDERED, PARTIALLY_RECEIVED}` 且 `expected_arrival_date ≤ today + L + R` |
-| **展示/运营参考** | `inventory_balances.in_transit_qty` | 物化列，供列表页快速展示 |
+| **展示/运营参考** | 原始在途（派生，**不**过滤窗口） | 由 `inventory.InventoryInTransitQueryService.batchGetInTransit` 按需派生，供列表页展示 |
 
-**结论**：`in_transit_qty` **在语义上是派生值**（由采购明细聚合），**不得作为补货计算的输入**；补货的权威输入是 `effective_in_transit_qty`。二者差异：
+**结论**：在途**在语义上是派生值**（由采购明细聚合），**任何地方都不得把它当成可写字段**；补货的权威输入是 `effective_in_transit_qty`。二者差异：
 
 ```
 in_transit_qty            = Σ(ordered − received)  [全部在途状态]
@@ -306,16 +306,22 @@ effective_in_transit_qty  = Σ(ordered − received)  [窗口内，§10.4]
 - 若**误用** `in_transit_qty`（含远期在途）→ `IP` 虚高 → 补货不足 → **缺货风险**；
 - 因此 SSOT 明确"只在覆盖窗口内计入在途"。
 
-> ⚠️ **发现的不一致**（详见 §10.1）：`DESIGN_BASIS §3` 把 `in_transit_qty` 定义为**派生公式**，而 `DATABASE_DESIGN.md §5.9` 把它**物化为 `inventory_balances` 的一列**并"由采购单状态变更驱动"。两者在"是否落库"上冲突；且 §3 的在途状态集合为 `{ORDERED, PENDING}`，而 §10.4 为 `{PENDING, ORDERED, PARTIALLY_RECEIVED}`。**本文档不修改 SSOT**，按"补货用 §10.4，展示用物化列"执行，并建议统一。
+> ✅ **已裁定（`M6-T10`，2026-10-21，`DESIGN_REVIEW §5.78`）**：`inventory_balances.in_transit_qty` 物化列**退役**（零写零读），
+> 在途一律由 `purchase_order_items` 派生；状态集合统一为 `{PENDING, ORDERED, PARTIALLY_RECEIVED}`（`§10.4`）。
+> 数据方向：`inventory` 声明 `InTransitFactProvider`，由 `purchasing` 实现，`app` 装配（`DESIGN_BASIS §10.4.1`）。
+> 上游"物化 vs 派生"的冲突（`INC-P1`/`INC-P2`）随之关闭。
 
-### 8.3 【原则三】`in_transit_qty` 的增减时机
+### 8.3 【原则三】在途的变化时机（**派生：无写入点、无流水**）
 
-| 事件 | `inventory_balances.in_transit_qty`（物化列） | 是否写流水 |
+> 在途 = Σ(`ordered_qty − received_qty`) over `status ∈ {PENDING, ORDERED, PARTIALLY_RECEIVED}`。
+> ⇒ 它随**采购明细的数量/状态**自动变化，**没有任何代码去"改在途"**。
+
+| 事件 | 在途如何变化（派生结果） | 是否写库存流水 |
 | --- | --- | --- |
-| 采购单确认 / 下单 | 按设计"由采购单状态驱动"增加 | ❌ **无流水**（在途不是实物移动） |
-| 确认到货 | **扣减**本次到货数量 | ✅ `PURCHASE_INBOUND` |
-| 取消采购单（未收货部分） | 回退未收部分的在途 | ❌ 无流水 |
-| 冲销已确认到货 | 反向恢复在途 | ✅ `REVERSAL` |
+| 采购单 `PENDING`/`ORDERED` | 该单明细的 `ordered − received` **自动进入**在途 | ❌ 无流水（在途不是实物移动） |
+| 确认到货 | `received_qty` 累加 ⇒ 在途**自动减少** | ✅ `PURCHASE_INBOUND` |
+| 取消采购单 | `status → CANCELLED` ⇒ 该单**自动移出**在途 | ❌ 无流水 |
+| 冲销已确认到货 | ★ 属 `M6-T08`（**未实现**）：届时必须在**同一事务**回退 `poi.received_qty`，否则派生在途会**少计**（已登记 `R185`） | ✅ `REVERSAL` |
 
 > **为何在途没有流水**（`DATABASE_DESIGN.md §5.9` 设计要点 3）：在途是"计划"而非"移动"。若为在途也建流水，会让库存账本混入非实物事件，破坏"余额 = 流水累加"的可推导性（P5）。
 
@@ -548,8 +554,8 @@ COMMIT;
 
 | # | 不一致 | 涉及文档 | 建议 |
 | --- | --- | --- | --- |
-| INC-P1 | **`in_transit_qty` 派生 vs 物化冲突**：`§3` 定义为派生公式，`DATABASE_DESIGN.md §5.9` 物化为 `inventory_balances` 列（"由采购单状态驱动"） | `DESIGN_BASIS §3` vs `DATABASE_DESIGN.md §5.9` | 明确：物化列仅用于**展示**，补货**必须**用 `§10.4` 的 `effective_in_transit_qty`；或在 `§3` 补充"物化用于查询、计算口径见 §10.4" |
-| INC-P2 | **在途状态集合不一致**：`§3` 用 `{ORDERED, PENDING}`，`§10.4` 用 `{PENDING, ORDERED, PARTIALLY_RECEIVED}` | `DESIGN_BASIS §3` vs `§10.4` | 统一为 `{PENDING, ORDERED, PARTIALLY_RECEIVED}`（部分收货的剩余未收部分仍在途） |
+| INC-P1 | **`in_transit_qty` 派生 vs 物化冲突**：`§3` 定义为派生公式，`DATABASE_DESIGN.md §5.9` 物化为 `inventory_balances` 列 | `DESIGN_BASIS §3` vs `DATABASE_DESIGN.md §5.9` | ✅ **已关闭（`M6-T10`，`DESIGN_REVIEW §5.78`）**：**一律派生**；`inventory_balances.in_transit_qty` **退役**（零写零读），`DATABASE_DESIGN §5.9` 已标注废弃、`DESIGN_BASIS §10.4.1` 已补实现路径 |
+| INC-P2 | **在途状态集合不一致**：`§3` 用 `{ORDERED, PENDING}`，`§10.4` 用 `{PENDING, ORDERED, PARTIALLY_RECEIVED}` | `DESIGN_BASIS §3` vs `§10.4` | ✅ **已关闭（同上）**：统一为 `{PENDING, ORDERED, PARTIALLY_RECEIVED}`（部分收货的剩余未收部分仍在途），`DESIGN_BASIS §10.4` 为唯一口径 |
 | INC-P3 | **`§9.13` 未定义"冲销后采购单状态回退"**：`PARTIALLY_RECEIVED` / `RECEIVED` 冲销后如何回退无明文 | `DESIGN_BASIS §9.13` | 补充状态回退规则（或明确"冲销只减 `received_qty`，状态由派生重算"） |
 | INC-P4 | **`goods_receipts` 无"已冲销"标记**：`§9.14` 只有 `DRAFT/CONFIRMED/CANCELLED`，冲销后到货单状态语义不明 | `DESIGN_BASIS §9.14` vs `INVENTORY_WORKFLOW.md §5.6` | 明确"冲销后到货单置 `CANCELLED`"或新增标记 |
 | INC-P5 | ✅ **已闭环**（F-28）：下单用 `PURCHASE_ORDER_ORDERED`；到货冲销业务侧用 `GOODS_RECEIPT_REVERSE`，与库存侧 `INVENTORY_REVERSE` 分列 | `DESIGN_BASIS §9.17`（`AuditAction` 35 条） | 已固化于 `§9.17` #32 / #33，语义见 `DATABASE_DESIGN.md §6-J.1`，见 §11 |
