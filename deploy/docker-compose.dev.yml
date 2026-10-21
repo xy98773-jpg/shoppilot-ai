@@ -110,6 +110,12 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dev-only-placeholder-jwt-secret-change-me-32bytes}
       JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-7200}
       JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-604800}
+      # M8-T08（R198）：dev CORS 白名单。★ 浏览器对同源 POST 也会带 Origin 头，
+      #   Spring CorsFilter 见 Origin 就校验白名单 ⇒ 白名单必须包含 nginx 暴露端口
+      #   的同源 Origin（80 无端口后缀 / 8081），否则浏览器一律 403 Invalid CORS request
+      #   （curl 不带 Origin，永远测不出来）。
+      #   环境变量名是 shoppilot.cors.allowed-origins 的 canonical 形式（Spring relaxed binding）。
+      SHOPILOT_CORS_ALLOWEDORIGINS: ${SHOPILOT_CORS_ALLOWEDORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost,http://127.0.0.1,http://localhost:8081,http://127.0.0.1:8081}
     ports:
       - "${BACKEND_PORT:-8080}:8080"
     depends_on:
