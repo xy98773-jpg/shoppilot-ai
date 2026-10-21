@@ -47,6 +47,10 @@ for k in sys.argv[2].split('.'):
     d=d[k]
 print(json.dumps(d,ensure_ascii=False))" "$BODY" "$1"; }
 sql(){ docker exec "$MYSQL" mysql $MYSQL_ARGS --default-character-set=utf8mb4 -N -B -e "$1" 2>/dev/null; }
+# 造数专用：不吞 stderr。造数语句一旦被 CHECK 约束拒绝（本批两次踩坑：
+# inventory_balances.available_qty 是生成列、inventory_transactions 的 txn_type/biz_type
+# 各有枚举 CHECK），静默失败会让后续所有性能数字建立在空表上——必须让错误直接打在证据里。
+sqlv(){ docker exec "$MYSQL" mysql $MYSQL_ARGS --default-character-set=utf8mb4 -N -B -e "$1" 2>&1 | grep -v "Using a password"; }
 now_ms(){ date +%s%3N; }
 winpath(){ cygpath -w "$1" 2>/dev/null || echo "$1"; }
 
@@ -60,7 +64,7 @@ log "[0] 造数：1 万 SKU + 1 万余额 + 10 万流水（team=7 / 仓 9003）"
 #   否则一旦中途失败（例如余额段报错）后半段会永久缺失，却因为 SKU 段已存在而被静默跳过。
 # ★ available_qty 是 STORED GENERATED（`on_hand_qty - committed_qty`），**不可显式写入**，
 #   写入会 3105 直接失败（本批踩过）。
-sql "SET SESSION cte_max_recursion_depth=200001;
+sqlv "SET SESSION cte_max_recursion_depth=200001;
      INSERT INTO products (id, team_id, product_code, name, status, created_by, updated_by)
      WITH RECURSIVE seq AS (SELECT 1 n UNION ALL SELECT n+1 FROM seq WHERE n<10000)
      SELECT 900000+n, 7, CONCAT('P-PERF-',LPAD(n,5,'0')), CONCAT('性能商品',n), 'ACTIVE', 1001, 1001 FROM seq
@@ -76,8 +80,8 @@ sql "SET SESSION cte_max_recursion_depth=200001;
      INSERT INTO inventory_transactions (team_id, warehouse_id, sku_id, txn_type, qty_delta, qty_before, qty_after,
                                          biz_type, idempotency_key, operator_id, occurred_at)
      WITH RECURSIVE seq AS (SELECT 1 n UNION ALL SELECT n+1 FROM seq WHERE n<100000)
-     SELECT 7, 9003, 910000+(n%10000)+1, 'ADJUST_IN', 1.000, 0.000, 1.000,
-            'MANUAL_ADJUST', CONCAT('perf-',n), 1001, NOW(3) - INTERVAL (n%300) DAY FROM seq
+     SELECT 7, 9003, 910000+(n%10000)+1, 'MANUAL_ADJUST', 1.000, 0.000, 1.000,
+            'MANUAL', CONCAT('perf-',n), 1001, NOW(3) - INTERVAL (n%300) DAY FROM seq
      ON DUPLICATE KEY UPDATE qty_delta=VALUES(qty_delta);"
 log "    造数完成"
 chk_gt "0 SKU 数" "9999" "$(sql "SELECT COUNT(*) FROM skus WHERE team_id=7 AND sku_code LIKE 'SKU-PERF-%'")"
@@ -164,16 +168,35 @@ chk "4 映射" "200" "$code"
 code=$(api -X POST "$BASE/api/v1/import/batches/$BID/validate" -H "$AUTH")
 chk "4 校验" "200" "$code"
 chk "4 错误行" "0" "$(jget 'data.error_rows')"
+# ★ INIT_IMPORT 是【增量】语义（InventoryWriteService 注释：qty=0 即「加 0」），
+#   不是「覆盖为快照值」⇒ 断言「导入后 = 导入前 + 200」，不能硬编码 200.000
+#   （本批踩过：100 + 200 = 300，断言 200 全红）。
+BEFORE_QTY=$(sql "SELECT on_hand_qty FROM inventory_balances WHERE team_id=7 AND warehouse_id=9003 AND sku_id=910001")
+log "    导入前 on_hand=$BEFORE_QTY"
 T1=$(now_ms)
 code=$(api -X POST "$BASE/api/v1/import/batches/$BID/confirm" -H "$AUTH" \
   -H "Idempotency-Key: t02-import-$(date +%s)" -H 'Content-Type: application/json' -d '{}')
 T2=$(now_ms)
+CLIENT_MS=$((T2-T1))
 chk "4 确认" "200" "$code"
-chk "4 终态" "COMPLETED" "$(jget 'data.status')"
-CONFIRM_MS=$((T2-T1)); FLOW_MS=$((T2-T0))
-log "    confirm=${CONFIRM_MS}ms  全流程(上传→确认)=${FLOW_MS}ms"
-chk_lt "4 confirm（毫秒，门槛 60000）" "60000" "$CONFIRM_MS"
-chk "4 快照后余额 on_hand=200" "200.000" "$(sql "SELECT on_hand_qty FROM inventory_balances WHERE team_id=7 AND warehouse_id=9003 AND sku_id=910001")"
+# 服务端口径：轮询批次到终态后读 started_at → finished_at。
+# 为什么要单独测服务端：客户端耗时含 nginx 转发与网络排队，早先 nginx 默认 60s 读超时
+# 会在服务端即将返回时切断请求（504），把「网关耐心」误读成「服务端慢」（R193）。
+STATUS4=""
+for i in $(seq 1 60); do
+  api "$BASE/api/v1/import/batches/$BID" -H "$AUTH" >/dev/null
+  STATUS4=$(jget 'data.status')
+  case "$STATUS4" in COMPLETED|PARTIAL_SUCCESS|FAILED) break ;; esac
+  sleep 2
+done
+SERVER_MS=$(sql "SELECT TIMESTAMPDIFF(MICROSECOND,started_at,finished_at)/1000 FROM import_batches WHERE id=$BID" | cut -d. -f1)
+CONFIRM_MS=${SERVER_MS:-0}; FLOW_MS=$CLIENT_MS
+chk "4 终态" "COMPLETED" "$STATUS4"
+log "    confirm 客户端=${CLIENT_MS}ms  服务端=${SERVER_MS}ms（started_at→finished_at）"
+chk_lt "4 confirm 服务端（毫秒，门槛 60000）" "60000" "$CONFIRM_MS"
+chk "4 快照后 on_hand = 导入前 + 200（INIT_IMPORT 增量语义）" \
+    "$(sql "SELECT $BEFORE_QTY + 200.000")" \
+    "$(sql "SELECT on_hand_qty FROM inventory_balances WHERE team_id=7 AND warehouse_id=9003 AND sku_id=910001")"
 # 用 ≥：重复跑本脚本会产生多批 INIT_IMPORT（文件级幂等已靠 remark 区分），历史批次的流水仍在
 chk_gt "4 快照流水条数" "9999" "$(sql "SELECT COUNT(*) FROM inventory_transactions WHERE team_id=7 AND idempotency_key LIKE 'INIT_IMPORT:%'")"
 sep

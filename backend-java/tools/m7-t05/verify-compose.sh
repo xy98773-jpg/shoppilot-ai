@@ -96,8 +96,12 @@ sep
 # ---- 7. down → up 数据保留（可选）----
 if [ "${1:-}" = "--with-recreate" ]; then
   log "[7] down（保留卷）→ up → 数据保留"
-  BEFORE=$(docker exec shoppilot-dev-mysql-1 mysql -ushoppilot -pchangeme_app_password shoppilot \
-           --default-character-set=utf8mb4 -N -B -e "SELECT COUNT(*) FROM users" 2>/dev/null)
+  # 不只查 users：users 是种子表，重启后由 Flyway/种子重建也能「碰巧」一致。
+  # 必须查【只可能来自真实写入】的业务表，才能证明卷真的没丢。
+  SNAP_BEFORE=$(docker exec shoppilot-dev-mysql-1 mysql -ushoppilot -pchangeme_app_password shoppilot \
+           --default-character-set=utf8mb4 -N -B -e \
+           "SELECT CONCAT('users=',IFNULL((SELECT COUNT(*) FROM users),-1),',skus=',IFNULL((SELECT COUNT(*) FROM skus),-1),',txns=',IFNULL((SELECT COUNT(*) FROM inventory_transactions),-1),',audit=',IFNULL((SELECT COUNT(*) FROM audit_logs),-1),',flyway=',IFNULL((SELECT COUNT(*) FROM flyway_schema_history WHERE success=1),-1))" 2>/dev/null)
+  log "    重启前快照：$SNAP_BEFORE"
   dc down >/dev/null 2>&1
   dc up -d >/dev/null 2>&1
   for i in $(seq 1 60); do
@@ -106,9 +110,11 @@ if [ "${1:-}" = "--with-recreate" ]; then
     [ "$st" = "healthy" ] && break
     sleep 2
   done
-  AFTER=$(docker exec shoppilot-dev-mysql-1 mysql -ushoppilot -pchangeme_app_password shoppilot \
-          --default-character-set=utf8mb4 -N -B -e "SELECT COUNT(*) FROM users" 2>/dev/null)
-  chk "7 down/up 后 users 行数不变" "$BEFORE" "$AFTER"
+  SNAP_AFTER=$(docker exec shoppilot-dev-mysql-1 mysql -ushoppilot -pchangeme_app_password shoppilot \
+           --default-character-set=utf8mb4 -N -B -e \
+           "SELECT CONCAT('users=',IFNULL((SELECT COUNT(*) FROM users),-1),',skus=',IFNULL((SELECT COUNT(*) FROM skus),-1),',txns=',IFNULL((SELECT COUNT(*) FROM inventory_transactions),-1),',audit=',IFNULL((SELECT COUNT(*) FROM audit_logs),-1),',flyway=',IFNULL((SELECT COUNT(*) FROM flyway_schema_history WHERE success=1),-1))" 2>/dev/null)
+  log "    重启后快照：$SNAP_AFTER"
+  chk "7 down/up 后数据快照不变（users/skus/txns/audit/flyway）" "$SNAP_BEFORE" "$SNAP_AFTER"
   chk "7 重启后 backend healthy" "healthy" "$st"
 else
   log "[7] down/up 数据保留：未执行（需 --with-recreate；避免中断并行任务）"
