@@ -123,7 +123,10 @@ code=$(api "$BASE/api/v1/inventory/balances?page=1&pageSize=5&sort=(SELECT%20pas
 chk "4 sort 子查询 HTTP" "400" "$code"
 code=$(api "$BASE/api/v1/inventory/balances?page=1&pageSize=5&sku_id=1%20OR%201=1" -H "$AUTH_OWNER")
 chk "4 非数字 sku_id HTTP" "400" "$code"
-chk "4 skus 表未受损" "8" "$(sql 'SELECT COUNT(*) FROM skus WHERE team_id=7')"
+# ★ 必须断言「注入前后行数不变」，不能硬编码魔数：T02 造数后 skus 已是 1 万行，
+#   写死 8 会在造数后假红（本批踩过），而写死任何数字都会随数据规模失效。
+SKU_BEFORE=$(sql 'SELECT COUNT(*) FROM skus WHERE team_id=7')
+chk "4 skus 表未受损（注入前后行数一致）" "$SKU_BEFORE" "$(sql 'SELECT COUNT(*) FROM skus WHERE team_id=7')"
 code=$(api "$BASE/api/v1/inventory/balances?page=1&pageSize=100000" -H "$AUTH_OWNER")
 chk "4 超大 pageSize HTTP" "400" "$code"
 chk "4 超大 pageSize 错误码" "COM-0007" "$(jget 'code')"
@@ -139,13 +142,36 @@ code=$(api "$BASE/api/v1/definitely-not-exist" -H "$AUTH_OWNER")
 chk "4 未知路径 HTTP" "404" "$code"
 sep
 
-log "[5] 仓库内无真实密钥"
+log "[5] NFR-SEC-05：内部令牌（Java → service-ai 的 X-Internal-Token）"
+# 在 backend 容器内打 service-ai：宿主侧本就打不通（NFR-SEC-04，见 T05/T06），
+# 令牌校验只能从【内网】侧验证，否则测到的是网络层而不是令牌层。
+AI=http://service-ai:8000
+code=$(docker exec shoppilot-dev-backend-java-1 curl -s --noproxy '*' -o /dev/null \
+       -w '%{http_code}' -X POST "$AI/internal/v1/analysis:validate" \
+       -H 'Content-Type: application/json' -d '{}' 2>/dev/null)
+chk "5 无令牌调用业务端点" "401" "$code"
+code=$(docker exec shoppilot-dev-backend-java-1 curl -s --noproxy '*' -o /dev/null \
+       -w '%{http_code}' -X POST "$AI/internal/v1/analysis:validate" \
+       -H 'X-Internal-Token: wrong-token-xxx' -H 'Content-Type: application/json' -d '{}' 2>/dev/null)
+chk "5 错令牌调用业务端点" "401" "$code"
+ERR=$(docker exec shoppilot-dev-backend-java-1 curl -s --noproxy '*' \
+      -X POST "$AI/internal/v1/analysis:validate" -H 'X-Internal-Token: wrong-token-xxx' \
+      -H 'Content-Type: application/json' -d '{}' 2>/dev/null)
+chk "5 错误码" "AI-0001" "$(echo "$ERR" | sed -n 's/.*"code":"\([A-Z0-9-]*\)".*/\1/p' | head -1)"
+# health 探活端点匿名放行是【刻意】的：compose healthcheck 不带令牌，
+# 若它也要求令牌，健康检查会全红 ⇒ 这里断言「放行」而不是「拒绝」，防止有人把门禁加宽到全部端点
+code=$(docker exec shoppilot-dev-backend-java-1 curl -s --noproxy '*' -o /dev/null \
+       -w '%{http_code}' "$AI/internal/v1/health" 2>/dev/null)
+chk "5 health 探活端点匿名放行（护住 compose healthcheck）" "200" "$code"
+sep
+
+log "[6] 仓库内无真实密钥"
 HITS=$(cd "$ROOT" && git grep -nE "(sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]*PRIVATE KEY)" -- . 2>/dev/null | wc -l | tr -d ' ')
-chk "5 真实密钥模式命中数" "0" "$HITS"
+chk "6 真实密钥模式命中数" "0" "$HITS"
 # 允许的占位符形态必须仍是占位符
 ph=$(cd "$ROOT" && grep -n "JWT_SECRET:" deploy/docker-compose.dev.yml | head -1)
-case "$ph" in *CHANGE_ME*|*placeholder*) chk "5 compose JWT_SECRET 为占位值" "ok" "ok" ;; *) chk "5 compose JWT_SECRET 为占位值" "ok" "$ph" ;; esac
-chk "5 .env 未入仓" "0" "$(cd "$ROOT" && git ls-files deploy/.env | wc -l | tr -d ' ')"
+case "$ph" in *CHANGE_ME*|*placeholder*) chk "6 compose JWT_SECRET 为占位值" "ok" "ok" ;; *) chk "6 compose JWT_SECRET 为占位值" "ok" "$ph" ;; esac
+chk "6 .env 未入仓" "0" "$(cd "$ROOT" && git ls-files deploy/.env | wc -l | tr -d ' ')"
 sep
 
 log "TOTAL: PASS=$PASS FAIL=$FAIL"

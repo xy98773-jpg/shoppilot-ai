@@ -1,4 +1,4 @@
-M7-T03 安全验证  2026-10-21 18:14:35
+M7-T03 安全验证  2026-10-21 19:35:47
 目标：http://127.0.0.1:8081（compose dev 栈）
 -------------------------------------------------------------
 [0] 前置：dev 库口令统一为测试值（幂等；生产不适用）
@@ -29,17 +29,23 @@ M7-T03 安全验证  2026-10-21 18:14:35
 [PASS] 4 sort 注入错误码（ERROR_CODES:81 排序字段不在白名单） => COM-0007
 [PASS] 4 sort 子查询 HTTP => 400
 [PASS] 4 非数字 sku_id HTTP => 400
-[PASS] 4 skus 表未受损 => 8
+[PASS] 4 skus 表未受损（注入前后行数一致） => 10008
 [PASS] 4 超大 pageSize HTTP => 400
 [PASS] 4 超大 pageSize 错误码 => COM-0007
 [PASS] 4 缺 Idempotency-Key HTTP => 400
 [PASS] 4 缺 Idempotency-Key 错误码 => COM-0010
 [PASS] 4 未知路径 HTTP => 404
 -------------------------------------------------------------
-[5] 仓库内无真实密钥
-[PASS] 5 真实密钥模式命中数 => 0
-[PASS] 5 compose JWT_SECRET 为占位值 => ok
-[PASS] 5 .env 未入仓 => 0
+[5] NFR-SEC-05：内部令牌（Java → service-ai 的 X-Internal-Token）
+[PASS] 5 无令牌调用业务端点 => 401
+[PASS] 5 错令牌调用业务端点 => 401
+[PASS] 5 错误码 => AI-0001
+[PASS] 5 health 探活端点匿名放行（护住 compose healthcheck） => 200
 -------------------------------------------------------------
-TOTAL: PASS=28 FAIL=0
+[6] 仓库内无真实密钥
+[PASS] 6 真实密钥模式命中数 => 0
+[PASS] 6 compose JWT_SECRET 为占位值 => ok
+[PASS] 6 .env 未入仓 => 0
+-------------------------------------------------------------
+TOTAL: PASS=32 FAIL=0
 RESULT: ALL PASS
