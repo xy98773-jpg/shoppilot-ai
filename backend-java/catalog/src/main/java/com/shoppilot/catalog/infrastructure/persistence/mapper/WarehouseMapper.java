@@ -39,14 +39,24 @@ public interface WarehouseMapper extends BaseMapper<WarehouseEntity> {
      * 供 {@code importdata} 模块区分 {@code CAT-3005}（异团队）与 {@code CAT-3003}（仓库不存在）
      * （{@code IMPORT_WORKFLOW §10.2}：{@code INVENTORY_SNAPSHOT} / {@code SALES_DAILY} 行）。
      *
-     * <p>只返回 {@code team_id} 一列；跨团队同编码可共存，故需 {@code ORDER BY id LIMIT 1}。
+     * <p>只返回 {@code team_id} 一列；跨团队同编码可共存，故需 {@code ORDER BY ... LIMIT 1}。
      *
-     * @param code 仓库编码
+     * <p>★ <b>{@code R192}：必须「本团队优先」取行，不能只按 {@code id} 取最小者</b>。
+     * 编码在业务上是<b>团队内唯一</b>（{@code DATABASE_DESIGN} 唯一键均带 {@code team_id}），
+     * 两个团队各有一个 {@code WH-A-001} 完全合法。旧写法
+     * {@code ORDER BY id LIMIT 1} 会稳定返回<b>全局最小 id</b> 的那一行——若那是<b>别的团队</b>，
+     * 本团队自己的行反而被判 {@code CAT-3005}「不属于当前团队」，导入整批被拒。
+     * 故排序改为「先按是否属于本团队降序，再按 id」：本团队有 ⇒ 返回本团队（校验通过）；
+     * 本团队没有 ⇒ 返回别团队（{@code CAT-3005} 成立）；都没有 ⇒ {@code null}（{@code CAT-3003}）。
+     *
+     * @param code   仓库编码
+     * @param teamId 当前团队（用于「本团队优先」排序；{@code null} 时退化为单纯 {@code id} 升序）
      * @return 该编码所属团队的 {@code team_id}；不存在返回 {@code null}
      */
     @InterceptorIgnore(tenantLine = "true")
-    @Select("SELECT team_id FROM warehouses WHERE code = #{code} ORDER BY id LIMIT 1")
-    Long selectTeamIdByCode(@Param("code") String code);
+    @Select("SELECT team_id FROM warehouses WHERE code = #{code} "
+            + "ORDER BY (team_id = #{teamId}) DESC, id LIMIT 1")
+    Long selectTeamIdByCode(@Param("code") String code, @Param("teamId") Long teamId);
 
     /**
      * 按业务键 {@code code} 取<b>本团队内</b>该行的主键，供 {@code upsertWarehouseByCode} 解析既有仓库

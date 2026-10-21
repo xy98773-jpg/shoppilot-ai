@@ -1,0 +1,44 @@
+M7-T05 Compose 部署验证  2026-10-21 18:12:21
+compose 文件：/d/Desktop/ShopPilot-AI/deploy/docker-compose.dev.yml
+compose 版本：2.40.3-desktop.1
+-------------------------------------------------------------
+[1] 当前服务清单
+SERVICE        STATE     STATUS
+backend-java   running   Up About a minute (healthy)
+frontend-web   running   Up About a minute (healthy)
+mysql          running   Up About an hour (healthy)
+nginx          running   Up About an hour (healthy)
+service-ai     running   Up About a minute (healthy)
+[PASS] 1 服务数（mysql/backend-java/service-ai/frontend-web/nginx） => 5
+-------------------------------------------------------------
+[2] 健康状态
+    mysql = healthy
+    backend-java = healthy
+    service-ai = healthy
+    frontend-web = healthy
+    nginx = healthy
+[PASS] 2 healthy 服务数 => 5
+-------------------------------------------------------------
+[3] 经 nginx 访问后端健康端点
+[PASS] 3 /api/v1/health HTTP => 200
+[PASS] 3 status 字段 => UP
+[PASS] 3 /actuator/health HTTP（注：nginx 不代理 actuator，返回 SPA HTML） => 200
+[PASS] 3 nginx 未代理 actuator（返回 SPA，符合最小暴露）
+[PASS] 3 容器内 actuator status => {"status":"UP"}
+-------------------------------------------------------------
+[4] 内网可达：backend-java → service-ai:8000
+[PASS] 4 internal health HTTP => 200
+[PASS] 4 internal status => UP
+-------------------------------------------------------------
+[5] service-ai 不对外暴露
+[PASS] 5 宿主 8000 不可达 => curl exit（000）
+[PASS] 5 service-ai 无宿主端口映射 => 0
+-------------------------------------------------------------
+[6] Flyway 迁移版本
+[PASS] 6 成功迁移数 => 13
+[PASS] 6 最新版本 => 1.0.12
+-------------------------------------------------------------
+[7] down/up 数据保留：未执行（需 --with-recreate；避免中断并行任务）
+-------------------------------------------------------------
+TOTAL: PASS=13 FAIL=0
+RESULT: ALL PASS

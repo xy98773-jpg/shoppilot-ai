@@ -34,15 +34,19 @@ public interface ProductMapper extends BaseMapper<ProductEntity> {
      * 与「不存在」表现一致，无法区分 {@code CAT-3005}（真实存在、异团队）与
      * {@code CAT-3001}（不存在）——而 {@code IMPORT_WORKFLOW §10.1} 团队隔离行明确要求两者分行。
      *
-     * <p>只返回 {@code team_id} 一列，不泄露任何业务字段；编码重复时取 {@code id} 最小的一行
+     * <p>只返回 {@code team_id} 一列，不泄露任何业务字段；编码重复时<b>本团队优先</b>
      * （库内 {@code uk_prod_team_code} 只保证团队内唯一，跨团队可重复，故需 {@code LIMIT 1}）。
+     * ★ 不能用 {@code ORDER BY id LIMIT 1}：会取到全局最小 id（可能是别团队），
+     * 导致本团队自己的行被判 {@code CAT-3005}（{@code R192}，详见 {@code WarehouseMapper} 同名方法）。
      *
-     * @param code 商品编码
+     * @param code   商品编码
+     * @param teamId 当前团队（用于「本团队优先」排序）
      * @return 该编码所属团队的 {@code team_id}；编码不存在返回 {@code null}
      */
     @InterceptorIgnore(tenantLine = "true")
-    @Select("SELECT team_id FROM products WHERE product_code = #{code} ORDER BY id LIMIT 1")
-    Long selectTeamIdByCode(@Param("code") String code);
+    @Select("SELECT team_id FROM products WHERE product_code = #{code} "
+            + "ORDER BY (team_id = #{teamId}) DESC, id LIMIT 1")
+    Long selectTeamIdByCode(@Param("code") String code, @Param("teamId") Long teamId);
 
     /**
      * 按业务键 {@code product_code} 取<b>本团队内</b>该行的主键，供「按业务编码 upsert」解析既有 id

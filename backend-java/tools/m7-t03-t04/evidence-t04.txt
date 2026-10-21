@@ -1,0 +1,41 @@
+M7-T04 可观测性验证  2026-10-21 18:26:10
+目标：http://127.0.0.1:8081（compose dev 栈）
+-------------------------------------------------------------
+[0] 前置：为 team=7 造 7+ 天销售（分析预检 min_days=7 要求）
+    SKU_ID=4  PRODUCT_ID=3  WH_ID=9003
+[PASS] 0 sales_daily 天数 => 21 (> 6)
+-------------------------------------------------------------
+[1] 响应头回显：客户端传入 X-Request-Id 必须原样返回
+[PASS] 1 登录 HTTP => 200
+[PASS] 1 响应头 X-Request-Id 回显 => m7obs-login-1792578397
+[PASS] 1 响应体 requestId 与头一致 => m7obs-login-1792578397
+[PASS] 1 未传时服务端生成 => ok
+-------------------------------------------------------------
+[2] 审计链：同一 requestId 命中 audit_logs
+[PASS] 2 audit_logs 命中行数 => 1 (> 0)
+[PASS] 2 审计动作 => AUTH_LOGIN_SUCCESS
+-------------------------------------------------------------
+[3] 跨进程链：Java → Python 的 X-Request-Id 透传
+[PASS] 3 创建运行 HTTP => 202
+[PASS] 3 响应头回显 => m7obs-run-1792578404
+[PASS] 3 run 到达终态 => ok
+[PASS] 3 backend 日志命中 => 1 (> 0)
+[PASS] 3 service-ai 日志命中 => 2 (> 0)
+-------------------------------------------------------------
+[3b] 异步链：不靠 GET 触发读时同步，由定时轮询线程接手（R192 修复点）
+[PASS] 3b 创建运行 HTTP => 202
+    等待定时轮询接手（5s 间隔，全程不发 GET）：runId=4
+[PASS] 3b 轮询线程日志带 request_id（异步链，R192） => 4 (> 0)
+    [poll] 2026-10-21T10:26:57.477Z  INFO 1 --- [m7obs-async-1792578414] [   scheduling-1] c.s.a.a.AnalysisResultWriteService       : 分析结果落库完成：runId=4 status=SUCCEEDED llm=SKIPPED items=1 risk=1 suggestion=1
+    [poll] 2026-10-21T10:26:57.513Z  INFO 1 --- [m7obs-async-1792578414] [   scheduling-1] c.s.r.a.ReplenishmentGenerationService   : 旧建议取代完成：runId=4 superseded=1
+[PASS] 3b 异步链同样到达终态 => ok
+-------------------------------------------------------------
+[4] 汇总：一次请求可在三处串联检索
+    requestId=m7obs-login-1792578397 → auth（审计 AUTH_LOGIN_SUCCESS）
+    requestId=m7obs-run-1792578404 → Java 日志 1 行 / Python 日志 2 行
+    [py] 2026-10-21 10:26:45,315 INFO shoppilot_ai.app.main req_id=m7obs-run-1792578404 request method=POST path=/internal/v1/analysis:validate status=200 duration_ms=2.05
+    [py] 2026-10-21 10:26:45,322 INFO shoppilot_ai.app.main req_id=m7obs-run-1792578404 request method=POST path=/internal/v1/analysis/runs status=202 duration_ms=1.79
+    [java] 2026-10-21T10:26:45.346Z  INFO 1 --- [m7obs-run-1792578404] [nio-8080-exec-4] c.s.a.application.AnalysisAppService     : 分析任务已创建：runId=3 runNo=RUN-20261021-0003 teamId=7 scopeType=SELECTED_SKUS totalSkus=1
+-------------------------------------------------------------
+TOTAL: PASS=15 FAIL=0
+RESULT: ALL PASS

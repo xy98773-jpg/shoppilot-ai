@@ -257,7 +257,7 @@ public class ImportValidationService {
                 if (value.isBlank()) {
                     continue;
                 }
-                teamOf(spec.reference(), value, teamCache); // 预热缓存
+                teamOf(spec.reference(), value, teamId, teamCache); // 预热缓存
             }
         }
 
@@ -545,7 +545,7 @@ public class ImportValidationService {
 
         // 引用字段：存在性 + 同团队（§10.1 团队隔离 / §10.2 各类型）
         if (spec.reference() != null) {
-            Long ownerTeam = teamOf(spec.reference(), value, teamCache);
+            Long ownerTeam = teamOf(spec.reference(), value, teamId, teamCache);
             if (ownerTeam == null) {
                 String code = spec.reference() == ImportFieldSpec.ImportReference.WAREHOUSE
                         ? ErrorCodes.CAT_3003 : ErrorCodes.CAT_3001;
@@ -801,7 +801,7 @@ public class ImportValidationService {
         return v == null ? "" : v;
     }
 
-    private Long teamOf(ImportFieldSpec.ImportReference ref, String code,
+    private Long teamOf(ImportFieldSpec.ImportReference ref, String code, Long teamId,
                         Map<ImportFieldSpec.ImportReference, Map<String, Long>> cache) {
         Map<String, Long> m = cache.computeIfAbsent(ref, k -> new HashMap<>());
         // ★ R85：缓存键用 normalizeKey，使 `SKU-A` 与 `sku-a` 命中同一条缓存。
@@ -812,17 +812,25 @@ public class ImportValidationService {
         if (cached != null || m.containsKey(key)) {
             return cached;
         }
-        Long team = resolveRefTeam(ref, code);
+        Long team = resolveRefTeam(ref, code, teamId);
         m.put(key, team);
         return team;
     }
 
-    private Long resolveRefTeam(ImportFieldSpec.ImportReference ref, String code) {
+    /**
+     * 解析引用编码的归属团队。
+     *
+     * <p>★ {@code R192}：必须把 {@code teamId} 传进 SQL（「本团队优先」排序）。编码在业务上只在
+     * <b>团队内唯一</b>，两个团队各有一个 {@code WH-A-001} 完全合法；早先的
+     * {@code ORDER BY id LIMIT 1} 会稳定返回全局最小 id（可能是别团队），把<b>本团队自己的行</b>
+     * 判成 {@code CAT-3005}「不属于当前团队」，整批导入被拒。
+     */
+    private Long resolveRefTeam(ImportFieldSpec.ImportReference ref, String code, Long teamId) {
         return switch (ref) {
-            case PRODUCT -> productMapper.selectTeamIdByCode(code);
-            case SKU -> skuMapper.selectTeamIdByCode(code);
-            case SUPPLIER -> supplierMapper.selectTeamIdByCode(code);
-            case WAREHOUSE -> warehouseMapper.selectTeamIdByCode(code);
+            case PRODUCT -> productMapper.selectTeamIdByCode(code, teamId);
+            case SKU -> skuMapper.selectTeamIdByCode(code, teamId);
+            case SUPPLIER -> supplierMapper.selectTeamIdByCode(code, teamId);
+            case WAREHOUSE -> warehouseMapper.selectTeamIdByCode(code, teamId);
         };
     }
 

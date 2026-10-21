@@ -91,6 +91,17 @@ app:
   import:
     storage-dir: ${IMPORT_STORAGE_DIR:./data/import}
 
+# M7-T04（R192）：日志固定携带 request_id 槽位（API_CONTRACT §7：服务端日志必须包含 request_id）。
+# ★ 原先前缀是 Spring Boot 默认的 [应用名] 段，应用名单实例部署下无信息量（容器名已区分），
+#   这里替换为 request_id：同步请求取 RequestIdFilter 写入的 MDC，异步线程取
+#   analysis_runs.request_id 回填（AnalysisRunPollTask#applyRequestId），
+#   两处共用 RequestIdContext.MDC_KEY 这一个键名。
+# ★ 缺失时打印 "-"（%X{request_id:-}）而不是整段消失：定时/启动线程本就没有 request_id，
+#   固定占位保持列对齐，grep 与人工阅读都不会错位。
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %5p ${PID:- } --- [%X{request_id:-}] [%15.15t] %-40.40logger{39} : %m%n"
+
 # M1-T06：Actuator 健康检查（TECH_STACK.md：Micrometer + Actuator，NFR-OBS）。
 # 暴露面最小化：仅 health 与 info；env / beans / configprops / loggers / threaddump /
 # heapdump / shutdown 等敏感端点一律不暴露（暴露列表即白名单，未列出者不可达）。

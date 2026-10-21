@@ -30,14 +30,18 @@ public interface SupplierMapper extends BaseMapper<SupplierEntity> {
      * 供 {@code importdata} 模块区分 {@code CAT-3005}（异团队）与 {@code CAT-3001}（不存在）
      * （{@code IMPORT_WORKFLOW §10.1} 团队隔离行 / §10.2 PRODUCT·SKU 行）。
      *
-     * <p>只返回 {@code team_id} 一列；跨团队同编码可共存，故需 {@code ORDER BY id LIMIT 1}。
+     * <p>只返回 {@code team_id} 一列；跨团队同编码可共存，故需 {@code LIMIT 1}，
+     * 且必须<b>本团队优先</b>（{@code ORDER BY id} 会取到别团队的行 ⇒ 自家行误判 {@code CAT-3005}，
+     * {@code R192}，详见 {@code WarehouseMapper} 同名方法）。
      *
-     * @param code 供应商编码
+     * @param code   供应商编码
+     * @param teamId 当前团队（用于「本团队优先」排序）
      * @return 该编码所属团队的 {@code team_id}；不存在返回 {@code null}
      */
     @InterceptorIgnore(tenantLine = "true")
-    @Select("SELECT team_id FROM suppliers WHERE code = #{code} ORDER BY id LIMIT 1")
-    Long selectTeamIdByCode(@Param("code") String code);
+    @Select("SELECT team_id FROM suppliers WHERE code = #{code} "
+            + "ORDER BY (team_id = #{teamId}) DESC, id LIMIT 1")
+    Long selectTeamIdByCode(@Param("code") String code, @Param("teamId") Long teamId);
 
     /**
      * 按业务键 {@code code} 取<b>本团队内</b>该行的主键，供 {@code upsertSupplierByCode} 解析既有供应商

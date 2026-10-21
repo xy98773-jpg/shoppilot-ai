@@ -135,7 +135,7 @@ ShopPilot-AI/
 ⑧ 全程审计留痕，分析结果可追溯到输入快照与算法/Prompt 版本
 ```
 
-## 7. 本地运行（M1 已可用）
+## 7. 本地运行（M1–M6 已可用）
 
 ### 前置条件
 - Docker Desktop（含 Docker Compose v2）。
@@ -148,9 +148,24 @@ docker compose -f deploy/docker-compose.dev.yml up -d --build
 ```
 启动后（默认 `NGINX_PORT=80`；宿主 80 被占用时可设 `NGINX_PORT=8081` 覆盖，compose 默认值不变）：
 - 前端：http://localhost:8081/
-- 后端 API：`http://localhost:8081/api/v1/health` → 200
-- 后端 Actuator：`http://localhost:8081/actuator/health` → `UP`
+- 后端 API 健康：`http://localhost:8081/api/v1/health` → 200 `{"status":"UP"}`
+- 后端 Actuator：**仅容器内可达**（nginx 只代理 `/api/`，不代理 `/actuator`，属最小暴露设计）：
+  `docker exec shoppilot-dev-backend-java-1 curl -s http://127.0.0.1:8080/actuator/health` → `{"status":"UP"}`
 - AI 服务内部健康：仅容器内 `service-ai:8000/internal/v1/health`，**不暴露到宿主**（PROJECT_STRUCTURE §7.1）
+
+### 部署验证（M7-T05，可复跑）
+```bash
+bash backend-java/tools/m7-t05/verify-compose.sh                 # 6 项：服务数/健康/nginx/内网可达/不对外/迁移
+bash backend-java/tools/m7-t05/verify-compose.sh --with-recreate # 追加第 7 项：down 后 up 数据保留
+```
+
+### 重置与回滚（仅开发环境）
+```bash
+docker compose -f deploy/docker-compose.dev.yml down       # 停栈，保留数据卷
+docker compose -f deploy/docker-compose.dev.yml down -v    # 停栈并删除数据卷（清库重来）
+docker compose -f deploy/docker-compose.dev.yml logs -f backend-java   # 跟踪后端日志
+```
+> Flyway 会在 backend 启动时自动迁移；`down -v` 后再 `up` 会重跑全部 13 个迁移（`V1.0.0`–`V1.0.12`）。
 
 ### 集成栈
 ```bash
@@ -162,7 +177,9 @@ docker compose -f deploy/docker-compose.yml up -d --build   # 仅 nginx 对外�
 - 未认证请求受 `AUTH-1001` JSON 拦截（HTTP 401），健康端点匿名放行。
 - 停栈：`docker compose -f deploy/docker-compose.dev.yml down -v`
 
-> ⚠️ M1 尚未实现业务接口（登录、补货、采购、导入等）。`/api/v1/health` 等健康检查可访问，业务路径当前返回 401 或 404，属预期。
+> ✅ M1–M6 已完成：登录/团队、六类数据导入、库存与销售、分析服务、LLM 解释（**未实现，见 `R155`**）、补货建议与审批、采购单与到货入库均已落地。
+> 已实现的端到端闭环见 `backend-java/tools/e2e/run-e2e.sh`（20 步 / 132 断言）。
+> M7 做集成与交付收口，进度见 `docs/06-development/DESIGN_REVIEW.md §5.79–§5.80`。
 
 ## 8. 给协作者的话
 

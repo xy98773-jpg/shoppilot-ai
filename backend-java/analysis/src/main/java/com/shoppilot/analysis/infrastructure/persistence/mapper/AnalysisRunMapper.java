@@ -48,10 +48,10 @@ public interface AnalysisRunMapper extends BaseMapper<AnalysisRunEntity> {
      *
      * @param limit         本轮最多返回的行数（配置项 {@code scan-limit}，默认 50）
      * @param expiredBefore 「已超时」的判定基准（UTC）
-     * @return 只含四列的轻量投影（{@code id / team_id / status / timeout_at}）
+     * @return 只含五列的轻量投影（{@code id / team_id / status / timeout_at / request_id}）
      */
     @InterceptorIgnore(tenantLine = "true")
-    @Select("SELECT id, team_id, status, timeout_at FROM analysis_runs "
+    @Select("SELECT id, team_id, status, timeout_at, request_id FROM analysis_runs "
             + "WHERE status IN ('PENDING','RUNNING') AND timeout_at IS NOT NULL "
             + "ORDER BY (timeout_at <= #{expiredBefore}) DESC, timeout_at ASC "
             + "LIMIT #{limit}")
@@ -59,18 +59,23 @@ public interface AnalysisRunMapper extends BaseMapper<AnalysisRunEntity> {
                                            @Param("expiredBefore") LocalDateTime expiredBefore);
 
     /**
-     * 扫描投影（<b>刻意不是实体</b>）：只含状态推进与超时判定必需的四个字段。
+     * 扫描投影（<b>刻意不是实体</b>）：只含状态推进、超时判定与日志串联必需的五个字段。
      *
      * <p>刻意<b>不</b>返回 {@code scopeJson} / {@code paramsJson} 等业务字段：
      * 跨团队扫描只需定位「谁超时了 / 谁还在跑」，其余字段在<b>按 {@code team_id} 逐条处理</b>时
      * 重新按该团队上下文查回（见 {@code AnalysisRunSyncService}）。
      * 这样即便扫描日志被误看，也拿不到任何业务内容。
      *
+     * <p>★ {@code requestId}（{@code R191}）：异步线程与触发它的 HTTP 线程不是同一条，
+     * MDC 不会自动传递。带上它才能把「轮询线程打的日志」串回「用户那次请求」
+     * （NFR-OBS-01 全链路串联），故属于本投影的必需字段而非业务字段。
+     *
      * @param id        运行主键
      * @param teamId    所属团队（逐条处理时用它建立上下文）
      * @param status    当前状态（{@code PENDING} / {@code RUNNING}）
      * @param timeoutAt 超时截止（UTC）
+     * @param requestId 触发该运行的请求标识（{@code API_CONTRACT §7}，可能为 {@code NULL}）
      */
-    record ScanRow(Long id, Long teamId, String status, LocalDateTime timeoutAt) {
+    record ScanRow(Long id, Long teamId, String status, LocalDateTime timeoutAt, String requestId) {
     }
 }

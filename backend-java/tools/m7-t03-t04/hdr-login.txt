@@ -1,0 +1,18 @@
+HTTP/1.1 200 
+Server: nginx/1.27.5
+Date: Wed, 21 Oct 2026 10:26:37 GMT
+Content-Type: application/json
+Transfer-Encoding: chunked
+Connection: keep-alive
+X-Request-Id: m7obs-login-1792578397
+Vary: Origin
+Vary: Access-Control-Request-Method
+Vary: Access-Control-Request-Headers
+Set-Cookie: refresh_token=rt_l6_uRSDV8oMM85l57ePH2juy_n_nDNU00dLlAx00l3Y; Path=/api/v1/auth; Max-Age=604800; Expires=Wed, 28 Oct 2026 10:26:37 GMT; Secure; HttpOnly; SameSite=Strict
+X-Content-Type-Options: nosniff
+X-XSS-Protection: 0
+Cache-Control: no-cache, no-store, max-age=0, must-revalidate
+Pragma: no-cache
+Expires: 0
+X-Frame-Options: DENY
+

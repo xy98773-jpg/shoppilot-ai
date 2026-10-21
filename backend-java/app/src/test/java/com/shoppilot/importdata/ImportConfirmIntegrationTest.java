@@ -562,6 +562,34 @@ class ImportConfirmIntegrationTest {
     }
 
     // =====================================================================
+    // ★ R192：跨团队归属探测必须「本团队优先」
+    // =====================================================================
+
+    @Test
+    @DisplayName("R192 别团队同编码且 id 更小 → 本团队已持有同编码，导入不报 CAT-3005")
+    void crossTeamSameCodeWithLowerIdInOtherTeamDoesNotError() throws Exception {
+        // 别团队的行 id 更小：旧实现 `ORDER BY id LIMIT 1` 会稳定命中它，
+        // 于是本团队自己的行反被判 CAT-3005「不属于当前团队」，整批导入被拒。
+        jdbc.update("INSERT INTO products (id, team_id, product_code, name, status) "
+                + "VALUES (100, ?, 'P-SHARED-LOW', '别团队的', 'ACTIVE')", OTHER_TEAM_ID);
+        jdbc.update("INSERT INTO products (id, team_id, product_code, name, status) "
+                + "VALUES (9999, ?, 'P-SHARED-LOW', '本团队的', 'ACTIVE')", TEAM_ID);
+
+        long batchId = validatedBatch(OPERATOR, "p-low.csv",
+                csv("product_code,name\nP-SHARED-LOW,本团队改名\n"), "PRODUCT", 0);
+
+        ResponseEntity<String> resp = confirm(OPERATOR, batchId, "key-cross-low", Map.of());
+        assertEquals(HttpStatus.OK, resp.getStatusCode(), resp.getBody());
+        assertEquals("COMPLETED", data(resp).get("status").asText(), resp.getBody());
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM products WHERE product_code = 'P-SHARED-LOW'",
+                Integer.class), "仍是两个团队各一行（本团队那行被更新，没有新建）");
+        assertEquals("本团队改名", jdbc.queryForObject(
+                        "SELECT name FROM products WHERE team_id = ? AND product_code = 'P-SHARED-LOW'",
+                        String.class, TEAM_ID),
+                "更新落在本团队自己那行上");
+    }
+
+    // =====================================================================
     // 辅助：构造「已验证（VALIDATED）」的批次
     // =====================================================================
 

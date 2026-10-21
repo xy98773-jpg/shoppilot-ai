@@ -3,11 +3,13 @@ package com.shoppilot.analysis.infrastructure.scheduling;
 import com.shoppilot.analysis.infrastructure.persistence.entity.AnalysisRunEntity;
 import com.shoppilot.analysis.infrastructure.persistence.mapper.AnalysisRunMapper;
 import com.shoppilot.common.context.TeamContext;
+import com.shoppilot.common.web.RequestIdContext;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -92,8 +94,10 @@ public class AnalysisRunPollTask {
             boolean expired = row.timeoutAt() != null && !row.timeoutAt().isAfter(now);
             // ★ 恢复上一轮/调用方可能残留的上下文：定时线程复用，必须逐条重建而不是继承
             TeamContext.Snapshot previous = TeamContext.get();
+            String previousRequestId = MDC.get(RequestIdContext.MDC_KEY);
             try {
                 applyTeamContext(row);
+                applyRequestId(row);
                 AnalysisRunEntity run = reload(row.id());
                 if (run == null) {
                     continue;
@@ -111,6 +115,7 @@ public class AnalysisRunPollTask {
                 log.warn("分析任务处理失败（不影响同轮其它行）：runId={} err={}", row.id(), ex.toString());
             } finally {
                 restore(previous);
+                restoreRequestId(previousRequestId);
             }
         }
         if (timeouts > 0 || syncs > 0) {
@@ -137,6 +142,35 @@ public class AnalysisRunPollTask {
             TeamContext.clear();
         } else {
             TeamContext.set(previous);
+        }
+    }
+
+    /**
+     * 把「触发这次运行的那个请求」的 {@code request_id} 放回 MDC（{@code R191}）。
+     *
+     * <p>异步线程与 HTTP 线程不是同一条，SLF4J MDC 基于 ThreadLocal 不会跨线程传递；
+     * 不显式重建的话，轮询线程打的每一行日志都不带 {@code request_id}，
+     * 用户在报障时给出 requestId 也无法在 Java 侧检索到对应处理过程
+     * （NFR-OBS-01「全链路串联」只剩 nginx / Python / 审计三段，Java 段断链）。
+     *
+     * <p>取值来自库内 {@code analysis_runs.request_id}（{@code API_CONTRACT §7} 落库值），
+     * 缺失时清空而不是留空串，避免日志出现 {@code request_id=} 的空壳占位。
+     */
+    private void applyRequestId(AnalysisRunMapper.ScanRow row) {
+        String requestId = row.requestId();
+        if (requestId == null || requestId.isBlank()) {
+            MDC.remove(RequestIdContext.MDC_KEY);
+        } else {
+            MDC.put(RequestIdContext.MDC_KEY, requestId);
+        }
+    }
+
+    /** 复位 MDC：同一条定时线程上的下一条 run 不能继承上一条的 {@code request_id}。 */
+    private void restoreRequestId(String previous) {
+        if (previous == null) {
+            MDC.remove(RequestIdContext.MDC_KEY);
+        } else {
+            MDC.put(RequestIdContext.MDC_KEY, previous);
         }
     }
 
