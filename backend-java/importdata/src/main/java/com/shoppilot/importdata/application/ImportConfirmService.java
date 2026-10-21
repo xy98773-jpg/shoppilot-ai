@@ -18,6 +18,7 @@ import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
 import com.shoppilot.importdata.application.dto.ConfirmRequest;
 import com.shoppilot.inventory.application.InventoryWriteService;
+import com.shoppilot.inventory.application.InventoryWriteService.InitialImportRow;
 import com.shoppilot.inventory.domain.InventoryBizType;
 import com.shoppilot.inventory.domain.InventoryTxnType;
 import com.shoppilot.importdata.application.dto.ConfirmResultView;
@@ -573,15 +574,21 @@ public class ImportConfirmService {
     private void writeDataRows(ImportBizType bizType, List<DataRow> rows, long batchId) {
         switch (bizType) {
             case INVENTORY_SNAPSHOT -> {
+                // ★ M8-T01（R194）：改走批量入口。逐行 applyInitialImport 在 1 万行下要 ~6 万次语句往返，
+                //   真栈 confirm 59.5s 贴住 NFR-PERF-02 门槛；批量版压到约 100 条语句。
+                //   qty = 0 仍按增量语义「加 0」显式跳过（applyInitialImport 要求 qty > 0，INV-5003）。
+                List<InitialImportRow> payload = new ArrayList<>(rows.size());
                 for (DataRow row : rows) {
-                    // ★ qty = 0：按增量语义「加 0」= 余额与流水都不该动，且 applyInitialImport 要求 qty > 0
-                    //   （INV-5003）。故显式跳过写、仍计为成功行（口径已申报）。
                     if (row.qty().signum() == 0) {
                         continue;
                     }
-                    inventoryWriteService.applyInitialImport(row.skuId(), row.warehouseId(), row.qty(),
-                            batchId, initImportIdempotencyKey(batchId, row.skuId(), row.warehouseId()));
+                    payload.add(new InitialImportRow(row.skuId(), row.warehouseId(), row.qty(),
+                            initImportIdempotencyKey(batchId, row.skuId(), row.warehouseId())));
                 }
+                if (payload.isEmpty()) {
+                    return;
+                }
+                inventoryWriteService.applyInitialImportBatch(payload, batchId);
             }
             case SALES_DAILY -> {
                 if (rows.isEmpty()) {

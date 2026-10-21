@@ -1,17 +1,17 @@
-M7-T02 性能验证  2026-10-21 18:57:55
+M7-T02 性能验证  2026-10-21 20:12:26
 目标：http://127.0.0.1:8081（compose dev 栈，容器内 backend + mysql 8.0.36）
 -------------------------------------------------------------
 [0] 造数：1 万 SKU + 1 万余额 + 10 万流水（team=7 / 仓 9003）
     造数完成
 [PASS] 0 SKU 数 => 10000 (> 9999)
 [PASS] 0 余额行数 => 10000 (> 9999)
-[PASS] 0 流水行数 => 140000 (> 99999)
+[PASS] 0 流水行数 => 150000 (> 99999)
     on_hand 合计 = 1000000.000
 [1] 登录
 [PASS] 1 登录 HTTP => 200
 -------------------------------------------------------------
 [2] P1 索引命中：默认排序（available_qty ASC）必须走索引，不得全表扫描
-    1	SIMPLE	inventory_balances	NULL	range	uk_invbal_team_wh_sku,idx_invbal_team_sku,idx_invbal_team_available,fk_invbal_warehouse	idx_invbal_team_available	8	NULL	4909	49.99	Using index condition; Using where
+    1	SIMPLE	inventory_balances	NULL	range	uk_invbal_team_wh_sku,idx_invbal_team_sku,idx_invbal_team_available,fk_invbal_warehouse	idx_invbal_team_available	8	NULL	4917	50.00	Using index condition; Using where
     access_type=range  key=idx_invbal_team_available  select_type=SIMPLE
 [PASS] 2 未退化为全表扫描 => ok
 [PASS] 2 命中 (team_id, …) 前缀索引 => ok
@@ -19,10 +19,10 @@ M7-T02 性能验证  2026-10-21 18:57:55
 [3] P1 时延：GET /inventory/balances?page=1&page_size=20 × 50 次
 [PASS] 3 非 200 次数 => 0
 [PASS] 3 采样条数 => 50
-    n=50 p50=39ms p95=61ms max=160ms
-60
-    n=50 p50=39ms p95=61ms max=160ms
-[PASS] 3 p95 (ms) => 60 (< 500)
+    n=50 p50=39ms p95=65ms max=112ms
+64
+    n=50 p50=39ms p95=65ms max=112ms
+[PASS] 3 p95 (ms) => 64 (< 500)
 [PASS] 3 分页 total 覆盖 1 万 SKU => ok
 [PASS] 3 本页行数 => 20
 -------------------------------------------------------------
@@ -37,24 +37,24 @@ M7-T02 性能验证  2026-10-21 18:57:55
     导入前 on_hand=100.000
 [PASS] 4 确认 => 200
 [PASS] 4 终态 => COMPLETED
-    confirm 客户端=60297ms  服务端=59484ms（started_at→finished_at）
-[PASS] 4 confirm 服务端（毫秒，门槛 60000） => 59484 (< 60000)
+    confirm 客户端=5616ms  服务端=4768ms（started_at→finished_at）
+[PASS] 4 confirm 服务端（毫秒，门槛 60000） => 4768 (< 60000)
 [PASS] 4 快照后 on_hand = 导入前 + 200（INIT_IMPORT 增量语义） => 300.000
-[PASS] 4 快照流水条数 => 50000 (> 9999)
+[PASS] 4 快照流水条数 => 60000 (> 9999)
 -------------------------------------------------------------
 [5] P3 500 SKU 分析（enable_llm=false）到终态计时
 [PASS] 5 500 SKU 销售天数合计 => 7000 (> 6999)
 [PASS] 5 创建运行 => 202
 [PASS] 5 到达终态 => ok
 [PASS] 5 处理 SKU 数 => 500
-    端到端（提交→终态）=4079ms
-[PASS] 5 分析端到端（毫秒，门槛 60000） => 4079 (< 60000)
+    端到端（提交→终态）=5502ms
+[PASS] 5 分析端到端（毫秒，门槛 60000） => 5502 (< 60000)
 [PASS] 5 落库分析明细 => 500 (> 499)
 -------------------------------------------------------------
 [6] 汇总
-    P1 列表 p95 = 60ms（门槛 500ms）
-    P2 1 万行 confirm = 59484ms（门槛 60000ms）
-    P3 500 SKU 分析 = 4079ms（门槛 60000ms）
+    P1 列表 p95 = 64ms（门槛 500ms）
+    P2 1 万行 confirm = 4768ms（门槛 60000ms）
+    P3 500 SKU 分析 = 5502ms（门槛 60000ms）
 -------------------------------------------------------------
 TOTAL: PASS=28 FAIL=0
 RESULT: ALL PASS

@@ -552,7 +552,142 @@ class ImportDataConfirmIntegrationTest {
     }
 
     // =====================================================================
-    // 11) R80：同批同 SKU 跨两仓 → 合法输入（幂等键含仓库维度）
+    // 12) M8-T01 / R194：INVENTORY_SNAPSHOT 批量落库路径的回归红线
+    //     逐行 applyInitialImport → applyInitialImportBatch 后，以下语义一条都不得退
+    // =====================================================================
+
+    @Test
+    @DisplayName("R194-1 批量多行全链路：3 行全部落库、余额正确、last_txn_id 回填真实流水 ID")
+    void batchImportWritesEveryRowAndBackfillsLastTxnId() throws Exception {
+        insertSecondWarehouse();
+        byte[] csv = csv("sku_code,warehouse_code,qty\n"
+                + "SKU-A,WH-MAIN,11.000\n"
+                + "SKU-B,WH-MAIN,22.000\n"
+                + "SKU-A,WH-B,33.000\n");
+        long batchId = validatedBatch("snapshot-batch.csv", csv, "INVENTORY_SNAPSHOT", 0, 0);
+
+        ResponseEntity<String> resp = confirm(batchId, "key-r194-batch", Map.of());
+        assertEquals(HttpStatus.OK, resp.getStatusCode(), resp.getBody());
+        JsonNode data = data(resp);
+        assertEquals("COMPLETED", data.get("status").asText(), resp.getBody());
+        assertEquals(3, data.get("success_rows").asInt(), "三行都必须写入（批量路径不得吞行）");
+        assertEquals(0, data.get("failed_rows").asInt());
+
+        assertEquals(0, new BigDecimal("11.000").compareTo(balanceOf(9004, 9002)), "WH-MAIN / SKU-A");
+        assertEquals(0, new BigDecimal("22.000").compareTo(balanceOf(9004, 9003)), "WH-MAIN / SKU-B");
+        assertEquals(0, new BigDecimal("33.000").compareTo(balanceOf(9005, 9002)), "WH-B / SKU-A");
+
+        List<Map<String, Object>> txns = jdbc.queryForList("SELECT sku_id, warehouse_id, qty_before, "
+                + "qty_after FROM inventory_transactions WHERE team_id = ? "
+                + "ORDER BY warehouse_id, sku_id", TEAM_ID);
+        assertEquals(3, txns.size(), "必须恰好 3 条 INIT_IMPORT 流水");
+        for (Map<String, Object> txn : txns) {
+            assertEquals(0, ((BigDecimal) txn.get("qty_before")).signum(),
+                    "本用例库内无既有余额 ⇒ qty_before 必为 0");
+            assertTrue(((BigDecimal) txn.get("qty_after")).signum() > 0, "qty_after = qty_before + qty_delta");
+        }
+        // ★ last_txn_id 必须是【真实流水 ID】：批量多值 INSERT 拿不到逐行自增 ID，
+        //   实现靠 selectIdsByKeys 查回；若退回 LAST_INSERT_ID() 顺序推断，并发下会写错。
+        for (long[] key : new long[][]{{9004, 9002}, {9004, 9003}, {9005, 9002}}) {
+            Map<String, Object> balance = jdbc.queryForMap("SELECT last_txn_id, last_txn_at, version "
+                    + "FROM inventory_balances WHERE team_id = ? AND warehouse_id = ? AND sku_id = ?",
+                    TEAM_ID, key[0], key[1]);
+            assertNotNull(balance.get("last_txn_id"), "last_txn_id 必须回填（warehouse=" + key[0] + "）");
+            assertNotNull(balance.get("last_txn_at"), "last_txn_at 必须回填");
+            Long txnId = ((Number) balance.get("last_txn_id")).longValue();
+            assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM inventory_transactions "
+                            + "WHERE id = ? AND team_id = ?", Integer.class, txnId, TEAM_ID),
+                    "last_txn_id 必须指向本团队真实存在的流水");
+        }
+    }
+
+    @Test
+    @DisplayName("R194-2 同键两行进批量服务：首行写入、次行判重放（与单行版连续调用行为一致）")
+    void batchImportTreatsDuplicateKeyInsideBatchAsReplay() {
+        TeamContext.set(new TeamContext.Snapshot(TEAM_ID, List.of("OPERATOR"), OPERATOR_ID, OPERATOR));
+        try {
+            InventoryWriteService.InitialImportBatchResult result =
+                    new TransactionTemplate(transactionManager).execute(status ->
+                            inventoryWriteService.applyInitialImportBatch(List.of(
+                                    new InventoryWriteService.InitialImportRow(9002L, 9004L,
+                                            new BigDecimal("6.000"), "INIT_IMPORT:IMPORT:4242:9002:9004"),
+                                    new InventoryWriteService.InitialImportRow(9002L, 9004L,
+                                            new BigDecimal("6.000"), "INIT_IMPORT:IMPORT:4242:9002:9004")),
+                            4242L));
+            assertEquals(1, result.written(), "同键只写一行");
+            assertEquals(1, result.replayed(), "同键次行判重放");
+            assertEquals(1, count("inventory_transactions", TEAM_ID), "不得写出两条同键流水");
+            assertEquals(0, new BigDecimal("6.000").compareTo(balanceOf(9004, 9002)),
+                    "重放行不得重复累加余额");
+        } finally {
+            TeamContext.clear();
+        }
+    }
+
+    @Test
+    @DisplayName("R194-3 同键不同数量：批量路径同样拒 INV-5003（不得因批量而放水）")
+    void batchImportRejectsSameKeyDifferentQuantity() {
+        TeamContext.set(new TeamContext.Snapshot(TEAM_ID, List.of("OPERATOR"), OPERATOR_ID, OPERATOR));
+        try {
+            String key = "INIT_IMPORT:IMPORT:4243:9002:9004";
+            // ★ 两次调用必须在【各自独立的事务】里：批量版是 REQUIRED（不是单行版的 NESTED），
+            //   同一外层事务内第二次失败会连坐回滚第一批——这是 R196 已登记的「片级失败」语义。
+            //   真实调用方（ImportConfirmService）每批只调一次，故不受影响；本用例要验证的是
+            //   「重放内容判定」本身，把 NESTED 隔离混进来只会测偏。
+            new TransactionTemplate(transactionManager).executeWithoutResult(status ->
+                    inventoryWriteService.applyInitialImportBatch(List.of(
+                            new InventoryWriteService.InitialImportRow(9002L, 9004L,
+                                    new BigDecimal("6.000"), key)), 4243L));
+
+            BizException ex = assertThrows(BizException.class, () ->
+                    new TransactionTemplate(transactionManager).executeWithoutResult(status ->
+                            inventoryWriteService.applyInitialImportBatch(List.of(
+                                    new InventoryWriteService.InitialImportRow(9002L, 9004L,
+                                            new BigDecimal("9.000"), key)), 4243L)));
+            assertEquals("INV-5003", ex.getErrorCode(), "同键不同数量的口径不得因批量路径改变");
+        } finally {
+            TeamContext.clear();
+        }
+        assertEquals(1, count("inventory_transactions", TEAM_ID), "只有第一笔落库");
+    }
+
+    @Test
+    @DisplayName("R194-4 qty=0 行：计成功、零流水、零余额变动（增量语义「加 0」）")
+    void batchImportSkipsZeroQtyRows() throws Exception {
+        byte[] csv = csv("sku_code,warehouse_code,qty\nSKU-A,WH-MAIN,0.000\n");
+        long batchId = validatedBatch("snapshot-zero.csv", csv, "INVENTORY_SNAPSHOT", 0, 0);
+
+        ResponseEntity<String> resp = confirm(batchId, "key-r194-zero", Map.of());
+        assertEquals(HttpStatus.OK, resp.getStatusCode(), resp.getBody());
+        JsonNode data = data(resp);
+        assertEquals("COMPLETED", data.get("status").asText(), resp.getBody());
+        assertEquals(1, data.get("success_rows").asInt(), "0 行仍计成功（口径已申报）");
+        assertEquals(0, count("inventory_transactions", TEAM_ID), "不得写流水");
+        assertEquals(0, count("inventory_balances", TEAM_ID), "连余额行都不该建");
+    }
+
+    @Test
+    @DisplayName("R194-5 二次 confirm 批量路径重放：余额与流水均不新增")
+    void batchImportRepeatConfirmIsPureReplay() throws Exception {
+        byte[] csv = csv("sku_code,warehouse_code,qty\n"
+                + "SKU-A,WH-MAIN,17.000\n"
+                + "SKU-B,WH-MAIN,19.000\n");
+        long batchId = validatedBatch("snapshot-batch-replay.csv", csv, "INVENTORY_SNAPSHOT", 0, 0);
+
+        ResponseEntity<String> first = confirm(batchId, "key-r194-replay", Map.of());
+        assertEquals(HttpStatus.OK, first.getStatusCode(), first.getBody());
+        assertEquals(2, count("inventory_transactions", TEAM_ID), "首次写 2 条");
+
+        ResponseEntity<String> second = confirm(batchId, "key-r194-replay", Map.of());
+        assertEquals(HttpStatus.OK, second.getStatusCode(), second.getBody());
+        assertEquals("true", second.getHeaders().getFirst("Idempotent-Replayed"));
+        assertEquals(2, count("inventory_transactions", TEAM_ID), "重放不得新增流水");
+        assertEquals(0, new BigDecimal("17.000").compareTo(balanceOf(9004, 9002)), "重放不得累加");
+        assertEquals(0, new BigDecimal("19.000").compareTo(balanceOf(9004, 9003)), "重放不得累加");
+    }
+
+    // =====================================================================
+    // 13) R80：同批同 SKU 跨两仓 → 合法输入（幂等键含仓库维度）
     // =====================================================================
 
     @Test

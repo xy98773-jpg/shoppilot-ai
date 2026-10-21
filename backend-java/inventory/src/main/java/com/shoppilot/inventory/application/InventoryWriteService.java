@@ -18,11 +18,18 @@ import com.shoppilot.inventory.infrastructure.persistence.InventoryBalanceUpdate
 import com.shoppilot.inventory.infrastructure.persistence.entity.InventoryBalanceEntity;
 import com.shoppilot.inventory.infrastructure.persistence.entity.InventoryTransactionEntity;
 import com.shoppilot.inventory.infrastructure.persistence.mapper.InventoryBalanceMapper;
+import com.shoppilot.inventory.infrastructure.persistence.mapper.InventoryBalanceMapper.BalanceDelta;
+import com.shoppilot.inventory.infrastructure.persistence.mapper.InventoryBalanceMapper.BalanceKey;
 import com.shoppilot.inventory.infrastructure.persistence.mapper.InventoryTransactionMapper;
+import com.shoppilot.inventory.infrastructure.persistence.mapper.InventoryTransactionMapper.TxnInsertRow;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -131,6 +138,15 @@ public class InventoryWriteService {
     /** {@code idempotency_key} 列宽（{@code VARCHAR(128)}，{@code DATABASE_DESIGN §5.10}）。 */
     private static final int IDEMPOTENCY_KEY_MAX_LENGTH = 128;
 
+    /**
+     * 批量路径的分片大小（M8-T01 / {@code R194}）。
+     *
+     * <p>500 与 {@code SALES_DAILY} 的导入分批同值，也是为了压住单条语句的体积：
+     * 流水一行 13 列、幂等键长约 50 字符，500 行 ≈ 25 KB，远低于 {@code max_allowed_packet} 默认值，
+     * 又不至于让一条 SQL 的解析/优化开销失控。1 万行 ⇒ 每类语句 20 条。
+     */
+    private static final int CHUNK = 500;
+
     private final InventoryBalanceMapper balanceMapper;
     private final InventoryTransactionMapper transactionMapper;
     private final InventoryBalanceUpdater balanceUpdater;
@@ -191,6 +207,236 @@ public class InventoryWriteService {
         String key = requireIdempotencyKey(idempotencyKey);
         return runWithRetry(() -> attemptInflow(skuId, warehouseId, InventoryTxnType.INIT_IMPORT,
                 InventoryBizType.IMPORT, qty, bizRefId, null, key));
+    }
+
+    /**
+     * 批量初始库存导入（M8-T01 / {@code R194}）：{@code INVENTORY_SNAPSHOT} 确认期的高吞吐路径。
+     *
+     * <h2>为什么要有这个方法（{@code R194} 的根因）</h2>
+     * 逐行 {@link #applyInitialImport} 在 1 万行规模下要付 ~6 万次语句往返
+     * （每行：{@code NESTED} SAVEPOINT/RELEASE 两次 + 建行/读余额/幂等回查三次查询 + 流水 INSERT
+     * + 余额 UPDATE + 审计），真栈实测 confirm 服务端 **59.5s**，贴住 {@code NFR-PERF-02} 的 60s 门槛
+     * （5 轮 55.0/59.5/59.7/60.6/60.8s，分布横跨门槛两侧）。本方法把往返压到
+     * <b>约 5×N/500 条语句</b>（N = 行数），1 万行约 100 条。
+     *
+     * <h2>★ 与单行版的语义差异（必须知情的取舍）</h2>
+     * <ol>
+     *   <li><b>行级失败隔离降级</b>：单行版靠 {@code NESTED} 让某行失败只回滚该行；
+     *       批量版是「先筛后写」——参数非法 / 幂等键非法 / 同批同键重复在<b>写库前</b>拦掉，
+     *       真正不可预期的 DB 异常会让<b>整片</b>回滚（{@code IMPORT_WORKFLOW} 的
+     *       {@code PARTIAL_SUCCESS} 语义由「确认期行级失败」退到「片级失败」）。
+     *       {@code INIT_IMPORT} 是纯正增量，唯一键冲突已被「文件内重复探测 + 幂等回查」双重覆盖，
+     *       残留风险可控（已登记 {@code R196}）。</li>
+     *   <li><b>不用 version CAS</b>：批量更新是 {@code on_hand_qty = on_hand_qty + delta} 的纯增量，
+     *       不存在读-改-写丢失窗口；{@code version} 仍 {@code +1} 保持可观测语义。</li>
+     *   <li><b>同批同键</b>（文件内重复，正常应由 {@code importdata} 先行拦掉）：本服务按
+     *       「首行写入、后续行判重放」处理，与单行版连续两次调用的行为一致。</li>
+     * </ol>
+     *
+     * <h2>不变量保持清单（回归红线）</h2>
+     * <ul>
+     *   <li>同批次 + 同 SKU + <b>同仓库</b>重复确认 ⇒ 纯重放，余额与流水都不增；</li>
+     *   <li>幂等键比对字段<b>不含 {@code reason}</b>（{@code R75}）；</li>
+     *   <li>幂等键后缀必填 {@code :<warehouse_id>}（{@code R180}，由调用方构造）；</li>
+     *   <li>{@code last_txn_id} 必须回填真实流水 ID（查回得到，<b>不</b>用 {@code LAST_INSERT_ID()} 推断）；</li>
+     *   <li>租户线：所有查询/更新均受约束，跨团队行既读不到也改不了。</li>
+     * </ul>
+     *
+     * @param rows     导入行（幂等键由调用方按 {@code §5.10} 要点 4 构造，含 {@code :<warehouse_id>} 后缀）
+     * @param bizRefId 业务单据 ID（导入批次 ID）
+     * @return 实际写入行数 与 判为重放的行数
+     * @throws BizException {@code COM-0001}（参数非法）/ {@code INV-5004}（余额行缺失）/
+     *                      {@code INV-5003}（同键内容不一致）
+     */
+    @Transactional(propagation = Propagation.REQUIRED, isolation = Isolation.READ_COMMITTED,
+            rollbackFor = Exception.class)
+    public InitialImportBatchResult applyInitialImportBatch(List<InitialImportRow> rows, Long bizRefId) {
+        if (rows == null || rows.isEmpty()) {
+            return new InitialImportBatchResult(0, 0);
+        }
+        long teamId = currentTeamId();
+        Long operatorId = currentOperatorId();
+        LocalDateTime occurredAt = LocalDateTime.now(ZoneOffset.UTC);
+
+        // ---- 1) 入库前筛除确定性错误；同键只留首行（后续行判重放）----
+        List<InitialImportRow> accepted = new ArrayList<>(rows.size());
+        Set<String> seenKeys = new HashSet<>();
+        int preRejected = 0;
+        for (InitialImportRow row : rows) {
+            if (row == null) {
+                throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                        List.of(ApiErrorDetail.of("rows[]", "行不能为空")));
+            }
+            String key = requireIdempotencyKey(row.idempotencyKey());
+            if (row.qty() == null || row.qty().signum() <= 0) {
+                throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                        List.of(ApiErrorDetail.of("qty", "qty 必须为正数")));
+            }
+            if (!seenKeys.add(key)) {
+                preRejected++;
+                continue;
+            }
+            accepted.add(new InitialImportRow(row.skuId(), row.warehouseId(), row.qty(), key));
+        }
+        if (accepted.isEmpty()) {
+            return new InitialImportBatchResult(0, preRejected);
+        }
+
+        // ---- 2) 批量建行（ODKU 吸收并发首次建行）----
+        Set<BalanceKey> distinctKeys = new LinkedHashSet<>();
+        for (InitialImportRow row : accepted) {
+            distinctKeys.add(new BalanceKey(row.warehouseId(), row.skuId()));
+        }
+        List<BalanceKey> keyList = new ArrayList<>(distinctKeys);
+        for (int from = 0; from < keyList.size(); from += CHUNK) {
+            balanceMapper.insertIfAbsentBatch(teamId,
+                    keyList.subList(from, Math.min(from + CHUNK, keyList.size())), operatorId);
+        }
+
+        // ---- 3) 按仓库分组批量读余额 ----
+        Map<BalanceKey, InventoryBalanceEntity> balances = new HashMap<>();
+        Map<Long, List<Long>> skuIdsByWarehouse = new LinkedHashMap<>();
+        for (BalanceKey key : distinctKeys) {
+            skuIdsByWarehouse.computeIfAbsent(key.warehouseId(), k -> new ArrayList<>()).add(key.skuId());
+        }
+        for (Map.Entry<Long, List<Long>> entry : skuIdsByWarehouse.entrySet()) {
+            for (int from = 0; from < entry.getValue().size(); from += CHUNK) {
+                List<Long> chunk = entry.getValue().subList(from,
+                        Math.min(from + CHUNK, entry.getValue().size()));
+                for (InventoryBalanceEntity entity : balanceMapper.selectByWarehouseSkuKeys(entry.getKey(), chunk)) {
+                    balances.put(new BalanceKey(entity.getWarehouseId(), entity.getSkuId()), entity);
+                }
+            }
+        }
+
+        // ---- 4) 批量幂等回查：命中且内容一致 ⇒ 重放；内容不一致 ⇒ INV-5003 ----
+        List<InitialImportRow> toWrite = new ArrayList<>(accepted.size());
+        int replayed = preRejected;
+        List<String> allKeys = new ArrayList<>(accepted.size());
+        Map<String, BigDecimal> qtyByKey = new HashMap<>();
+        for (InitialImportRow row : accepted) {
+            allKeys.add(row.idempotencyKey());
+            qtyByKey.put(row.idempotencyKey(), row.qty());
+        }
+        Set<String> existingKeys = new HashSet<>();
+        for (int from = 0; from < allKeys.size(); from += CHUNK) {
+            for (InventoryTransactionEntity existing : transactionMapper.selectByIdempotencyKeys(
+                    allKeys.subList(from, Math.min(from + CHUNK, allKeys.size())))) {
+                existingKeys.add(existing.getIdempotencyKey());
+                assertSameReplayContent(existing, teamId, bizRefId,
+                        qtyByKey.get(existing.getIdempotencyKey()));
+            }
+        }
+        for (InitialImportRow row : accepted) {
+            if (existingKeys.contains(row.idempotencyKey())) {
+                replayed++;
+            } else {
+                toWrite.add(row);
+            }
+        }
+        if (toWrite.isEmpty()) {
+            return new InitialImportBatchResult(0, replayed);
+        }
+
+        // ---- 5) 内存推算 qty_before / qty_after（同 (仓库, SKU) 多行按序累加）----
+        Map<BalanceKey, BigDecimal> runningOnHand = new HashMap<>();
+        List<TxnInsertRow> txnRows = new ArrayList<>(toWrite.size());
+        for (InitialImportRow row : toWrite) {
+            BalanceKey key = new BalanceKey(row.warehouseId(), row.skuId());
+            InventoryBalanceEntity balance = balances.get(key);
+            if (balance == null) {
+                // 第 2 步刚建过行：仍读不到只能是租户线异常，绝不静默跳过
+                throw new BizException(ErrorCodes.INV_5004, "未找到对应库存记录");
+            }
+            BigDecimal before = runningOnHand.computeIfAbsent(key, k -> balance.getOnHandQty());
+            BigDecimal delta = QtyUtils.of(row.qty());
+            BigDecimal after = QtyUtils.add(before, delta);
+            runningOnHand.put(key, after);
+            txnRows.add(new TxnInsertRow(teamId, row.warehouseId(), row.skuId(),
+                    InventoryTxnType.INIT_IMPORT.name(), delta, before, after,
+                    InventoryBizType.IMPORT.name(), bizRefId, row.idempotencyKey(), operatorId,
+                    occurredAt, operatorId));
+        }
+
+        // ---- 6) 分片多值 INSERT 流水 ----
+        for (int from = 0; from < txnRows.size(); from += CHUNK) {
+            transactionMapper.insertBatch(
+                    txnRows.subList(from, Math.min(from + CHUNK, txnRows.size())));
+        }
+
+        // ---- 7) 查回流水 ID（回填 last_txn_id 用；不用 LAST_INSERT_ID 推断，并发会错位）----
+        Map<String, Long> txnIdByKey = new HashMap<>();
+        List<String> writeKeys = new ArrayList<>(toWrite.size());
+        for (InitialImportRow row : toWrite) {
+            writeKeys.add(row.idempotencyKey());
+        }
+        for (int from = 0; from < writeKeys.size(); from += CHUNK) {
+            for (Map<String, Object> row : transactionMapper.selectIdsByKeys(
+                    writeKeys.subList(from, Math.min(from + CHUNK, writeKeys.size())))) {
+                Object id = row.get("id");
+                Object key = row.get("idempotency_key");
+                if (id instanceof Number number && key instanceof String k) {
+                    txnIdByKey.put(k, number.longValue());
+                }
+            }
+        }
+
+        // ---- 8) 分片增量更新余额 ----
+        Map<BalanceKey, BalanceDelta> deltaByBalanceId = new LinkedHashMap<>();
+        for (TxnInsertRow txn : txnRows) {
+            BalanceKey key = new BalanceKey(txn.warehouseId(), txn.skuId());
+            InventoryBalanceEntity balance = balances.get(key);
+            Long txnId = txnIdByKey.get(txn.idempotencyKey());
+            if (txnId == null) {
+                // 刚插入的流水查不回 ID ⇒ 上游插入没生效或租户线异常，绝不写半截状态
+                throw new BizException(ErrorCodes.INV_5002, "库存流水写入后未能读回，已回滚");
+            }
+            deltaByBalanceId.put(key, new BalanceDelta(balance.getId(), txn.qtyDelta(), txnId));
+        }
+        List<BalanceDelta> deltas = new ArrayList<>(deltaByBalanceId.values());
+        int updated = 0;
+        for (int from = 0; from < deltas.size(); from += CHUNK) {
+            updated += balanceMapper.addOnHandByIds(
+                    deltas.subList(from, Math.min(from + CHUNK, deltas.size())), occurredAt, operatorId);
+        }
+        if (updated != deltas.size()) {
+            throw new BizException(ErrorCodes.INV_5002, "库存余额更新行数与预期不符，已回滚");
+        }
+        return new InitialImportBatchResult(toWrite.size(), replayed);
+    }
+
+    /**
+     * 批量重放时的内容校验（{@code R75} 口径：比对不含 {@code reason}）。
+     *
+     * <p>与单行版 {@link #replayIfIdempotent} 的判定字段一字不差：
+     * {@code txn_type=INIT_IMPORT} + {@code biz_type=IMPORT} + {@code biz_ref_id} 一致 +
+     * {@code sku_id}/{@code warehouse_id} 一致 + {@code qty_delta} 一致。
+     * （{@code sku_id}/{@code warehouse_id} 由幂等键本身隐含——键构造式含这两段，
+     * 同键必然同 SKU 同仓库，故无需再比。）
+     *
+     * <p>★ {@code qty_delta} 用 {@link BigDecimal#compareTo} 而非 {@code equals}：
+     * 数量列 {@code DECIMAL(18,3)}，{@code 6.000} 与 {@code 6.0} 数值相等而标度不同，
+     * {@code equals} 会把合法重放误判成内容不一致。
+     */
+    private void assertSameReplayContent(InventoryTransactionEntity existing, long teamId, Long bizRefId,
+                                         BigDecimal expectedQty) {
+        boolean sameTeam = existing.getTeamId() == teamId;
+        boolean sameType = InventoryTxnType.INIT_IMPORT.name().equals(existing.getTxnType())
+                && InventoryBizType.IMPORT.name().equals(existing.getBizType());
+        boolean sameRef = Objects.equals(existing.getBizRefId(), bizRefId);
+        boolean sameQty = expectedQty != null
+                && QtyUtils.of(expectedQty).compareTo(existing.getQtyDelta()) == 0;
+        if (!(sameTeam && sameType && sameRef && sameQty)) {
+            throw new BizException(ErrorCodes.INV_5003, "该库存操作已提交，但内容不一致，请勿重复提交");
+        }
+    }
+
+    /** 批量初始导入的一行载荷。 */
+    public record InitialImportRow(long skuId, long warehouseId, BigDecimal qty, String idempotencyKey) {
+    }
+
+    /** 批量初始导入的结果：{@code written} 实际写入行数，{@code replayed} 判为重放（含同批同键）的行数。 */
+    public record InitialImportBatchResult(int written, int replayed) {
     }
 
     /**

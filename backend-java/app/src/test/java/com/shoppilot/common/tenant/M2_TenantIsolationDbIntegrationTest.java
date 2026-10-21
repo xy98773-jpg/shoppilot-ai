@@ -87,6 +87,8 @@ class M2_TenantIsolationDbIntegrationTest {
             "AuditLogMapper#selectRecentByBiz",             // 显式 team_id 条件
             "InventoryBalanceMapper#insertIfAbsent",        // 并发首次建行：ON DUPLICATE KEY UPDATE
                                                             //   （自带 team_id 列 + 解析兼容性，见其 Javadoc）
+            "InventoryBalanceMapper#insertIfAbsentBatch",   // 上条的多值版（M8-T01 / R194）：同一 ODKU 口径，
+                                                            //   team_id 仍由调用方显式写入每一行 VALUES
             "AnalysisRunMapper#selectInFlightAcrossTeams"    // 系统级超时扫描（R133，M4-B20.2）：
                                                             //   跑在无 TeamContext 的后台线程里，带租户线会退化成
                                                             //   「拒绝查询」；显式 @Select 只取 id/team_id/status/timeout_at，
