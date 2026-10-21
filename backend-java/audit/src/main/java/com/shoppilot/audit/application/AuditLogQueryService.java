@@ -11,7 +11,6 @@ import com.shoppilot.common.web.BizException;
 import com.shoppilot.common.web.PageResult;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,13 +30,15 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li><b>SQL 全部在 Mapper</b>：本层只做参数校验与组装，不拼 SQL（{@code B0-9}）。</li>
  * </ul>
  *
- * <h2>参数校验（全部 {@code 400 COM-0001}，不走 {@code COM-0007}）</h2>
- * 本批裁定审计查询的非法参数统一 {@code COM-0001}（{@code B0-4}）：
+ * <h2>参数校验（{@code API_CONTRACT §2.2} 口径）</h2>
  * <ul>
- *   <li>{@code result} 非 {@code SUCCESS}/{@code FAILURE}；</li>
- *   <li>给了 {@code biz_id} 但缺 {@code biz_type}（多态关联必须带类型才唯一）；</li>
- *   <li>{@code date_from}/{@code date_to} 非 {@code YYYY-MM-DD}，或 {@code date_from > date_to}；</li>
- *   <li>{@code sort} 不是 {@code occurred_at,asc} / {@code occurred_at,desc}。</li>
+ *   <li><b>分页/日期区间越界 → {@code 400 COM-0007}</b>（与 purchasing / inventory / catalog /
+ *       importdata 主流实现一致）：{@code page < 1}、{@code pageSize ∉ 1..200}、
+ *       {@code date_from > date_to}；</li>
+ *   <li><b>筛选值非法 → {@code 400 COM-0001}</b>（{@code B0-4}）：{@code result} 非
+ *       {@code SUCCESS}/{@code FAILURE}；给了 {@code biz_id} 但缺 {@code biz_type}；
+ *       {@code date_from}/{@code date_to} 非 {@code YYYY-MM-DD}；
+ *       {@code sort} 不是 {@code occurred_at,asc} / {@code occurred_at,desc}。</li>
  * </ul>
  *
  * <h2>日期语义（{@code B0-4}）</h2>
@@ -60,12 +61,14 @@ public class AuditLogQueryService {
      * <p>排序固定 {@code occurred_at, id} 同向（缺省 DESC）；同毫秒记录用 {@code id} 稳定排序，
      * 保证翻页不重不漏。
      *
-     * @param query 已夹取分页参数的查询条件（非 {@code null}）
+     * @param query 查询条件（非 {@code null}）
      * @return 分页结果（{@code list/page/pageSize/total}），字段口径见 {@code API_CONTRACT §2.2}
-     * @throws BizException {@code COM-0001} 任一筛选/排序参数非法
+     * @throws BizException {@code COM-0007} 分页越界或 {@code date_from > date_to}；
+     *                      {@code COM-0001} 筛选值/日期格式/排序非法
      */
     @Transactional(readOnly = true)
     public PageResult<AuditLogItem> listAuditLogs(AuditLogQuery query) {
+        validatePaging(query.getPage(), query.getPageSize());
         Filters filters = Filters.from(query);
 
         long total = auditLogMapper.selectAuditLogCount(filters.bizType, filters.bizId, filters.action,
@@ -88,6 +91,26 @@ public class AuditLogQueryService {
     // ---------------------------------------------------------------------
     // 参数校验 / 归一化（一次算好，count 与 page 两个 SQL 共用同一组值）
     // ---------------------------------------------------------------------
+
+    /**
+     * 分页参数校验（{@code API_CONTRACT §2.2}，与其它模块同口径）：<b>越界即 {@code COM-0007}</b>，
+     * 不静默夹取——客户端传 {@code pageSize=500} 却拿到 200 条，是可观察的契约违背。
+     *
+     * <p>本例两个错误同时存在时合并进一个 {@code details[]}，便于前端一次修正。
+     */
+    private static void validatePaging(int page, int pageSize) {
+        List<ApiErrorDetail> details = new ArrayList<>();
+        if (page < 1) {
+            details.add(new ApiErrorDetail("page", "page 必须 ≥ 1", page));
+        }
+        if (pageSize < 1 || pageSize > AuditLogQuery.MAX_PAGE_SIZE) {
+            details.add(new ApiErrorDetail("pageSize",
+                    "pageSize 必须在 1.." + AuditLogQuery.MAX_PAGE_SIZE + " 之间", pageSize));
+        }
+        if (!details.isEmpty()) {
+            throw BizException.withDetails(ErrorCodes.COM_0007, "分页或排序参数不合法", details);
+        }
+    }
 
     /** 归一化并校验后的筛选条件（供 count / page 两条 SQL 复用，避免两处口径漂移）。 */
     private static final class Filters {
@@ -129,7 +152,8 @@ public class AuditLogQueryService {
             LocalDate fromDate = parseDate(query.getDateFrom(), "date_from");
             LocalDate toDate = parseDate(query.getDateTo(), "date_to");
             if (fromDate != null && toDate != null && fromDate.isAfter(toDate)) {
-                throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                // 区间倒置属「分页/排序参数不合法」，与 InventoryQueryService#listTransactions 同口径
+                throw BizException.withDetails(ErrorCodes.COM_0007, "分页或排序参数不合法",
                         List.of(new ApiErrorDetail("date_from", "date_from 不能晚于 date_to",
                                 query.getDateFrom())));
             }

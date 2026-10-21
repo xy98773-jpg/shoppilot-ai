@@ -56,8 +56,10 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  *   <li>★ 跨团队不可见：团队 8 的 OWNER 查不到团队 7 的任何记录；</li>
  *   <li>{@code OPERATOR} → 403 {@code TEAM-2003}；</li>
  *   <li>未登录 → 401 {@code AUTH-1001}；</li>
- *   <li>非法参数：{@code result=FOO}、只给 {@code biz_id}、非法 {@code sort} → 400 {@code COM-0001}；</li>
- *   <li>{@code pageSize=500} → 按 200 截断；</li>
+ *   <li>非法参数：{@code result=FOO}、只给 {@code biz_id}、非法 {@code sort}、日期格式 → 400
+ *       {@code COM-0001}；{@code date_from > date_to} → 400 {@code COM-0007}；</li>
+ *   <li>{@code pageSize=200} 上边界成功；{@code pageSize=201/500}、{@code page=0} → 400
+ *       {@code COM-0007}（不静默夹取，{@code API_CONTRACT §2.2}）；</li>
  *   <li>响应字段口径（snake_case、无 {@code team_id}/{@code created_by}）。</li>
  * </ol>
  *
@@ -327,61 +329,55 @@ class AuditLogQueryIntegrationTest {
     // =====================================================================
 
     @Test
-    @DisplayName("9 非法参数：result 非枚举 / 缺 biz_type / 非法 sort / 非法日期 → 400 COM-0001")
+    @DisplayName("9 非法参数：result/缺 biz_type/sort/日期格式 → COM-0001；date_from>date_to → COM-0007")
     void invalidParametersAreRejected() throws Exception {
         String token = loginAndClearAudit("owner01");
 
-        assertBadRequest(get(LOGS_PATH + "?result=FOO", token), "result 非法");
-        assertBadRequest(get(LOGS_PATH + "?biz_id=101", token), "只给 biz_id 不给 biz_type");
-        assertBadRequest(get(LOGS_PATH + "?sort=occurred_at,sideways", token), "sort 方向非法");
-        assertBadRequest(get(LOGS_PATH + "?sort=action,asc", token), "sort 字段不在白名单");
-        assertBadRequest(get(LOGS_PATH + "?date_from=2026-13-01", token), "日期格式非法");
+        assertBadRequest(get(LOGS_PATH + "?result=FOO", token), "result 非法", "COM-0001");
+        assertBadRequest(get(LOGS_PATH + "?biz_id=101", token), "只给 biz_id 不给 biz_type", "COM-0001");
+        assertBadRequest(get(LOGS_PATH + "?sort=occurred_at,sideways", token), "sort 方向非法", "COM-0001");
+        assertBadRequest(get(LOGS_PATH + "?sort=action,asc", token), "sort 字段不在白名单", "COM-0001");
+        assertBadRequest(get(LOGS_PATH + "?date_from=2026-13-01", token), "日期格式非法", "COM-0001");
+        // 区间倒置属「分页/排序参数不合法」（API_CONTRACT §2.2；与 InventoryQueryService 同口径）
         assertBadRequest(get(LOGS_PATH + "?date_from=2026-10-20&date_to=2026-10-19", token),
-                "date_from 晚于 date_to");
+                "date_from 晚于 date_to", "COM-0007");
     }
 
     // =====================================================================
-    // 10. pageSize 上限
+    // 10. pageSize 边界
     // =====================================================================
 
     @Test
-    @DisplayName("10 pageSize=500：按 200 截断，list.size <= 200")
-    void pageSizeIsClampedTo200() throws Exception {
+    @DisplayName("10 pageSize=200：上边界成功，返回 200 条且 total 不变")
+    void pageSizeAtMaxSucceeds() throws Exception {
         String token = loginAndClearAudit("owner01");
-        LocalDateTime base = LocalDateTime.now(ZoneOffset.UTC).withNano(0);
-        List<AuditEvent> events = new ArrayList<>();
-        for (int i = 0; i < 205; i++) {
-            events.add(AuditEvent.builder()
-                    .teamId(TEAM_ID)
-                    .action(AuditAction.IMPORT_BATCH_CREATE)
-                    .bizType("IMPORT_BATCH")
-                    .bizId((long) i)
-                    .bizNo("BULK-" + i)
-                    .operatorId(OWNER_ID)
-                    .operatorName("老板")
-                    .operatorRole("OWNER")
-                    .result(AuditResult.SUCCESS)
-                    .occurredAt(base.minusSeconds(205L - i))
-                    .build());
-        }
-        auditWriteService.recordAll(events);
-        assertEquals(205, jdbc.queryForObject("SELECT COUNT(*) FROM audit_logs", Integer.class),
-                "批量造数应写满 205 条（recordAll 一个事务、条数不变）");
+        seedBulk(205);
 
-        JsonNode data = data(get(LOGS_PATH + "?pageSize=500", token));
+        JsonNode data = data(get(LOGS_PATH + "?pageSize=200", token));
         assertEquals(205, data.get("total").asLong());
-        assertEquals(200, data.get("pageSize").asInt(), "pageSize 应回显截断后的 200");
-        assertTrue(data.get("list").size() <= 200,
-                "list.size 不得超过 200，实际 " + data.get("list").size());
-        assertEquals(200, data.get("list").size());
+        assertEquals(200, data.get("pageSize").asInt(), "pageSize=200 应原样回显");
+        assertEquals(200, data.get("list").size(), "上边界应返回 200 条");
     }
 
     // =====================================================================
-    // 11. 响应字段口径
+    // 11. page / pageSize 越界
     // =====================================================================
 
     @Test
-    @DisplayName("11 响应字段：snake_case 逐字段返回，且不含 team_id / created_by")
+    @DisplayName("11 page/pageSize 越界：pageSize=201/500、page=0 → 400 COM-0007（不静默夹取）")
+    void pageAndPageSizeOutOfRangeAreRejected() throws Exception {
+        String token = loginAndClearAudit("owner01");
+        assertBadRequest(get(LOGS_PATH + "?pageSize=201", token), "pageSize=201", "COM-0007");
+        assertBadRequest(get(LOGS_PATH + "?pageSize=500", token), "pageSize=500", "COM-0007");
+        assertBadRequest(get(LOGS_PATH + "?page=0", token), "page=0", "COM-0007");
+    }
+
+    // =====================================================================
+    // 12. 响应字段口径
+    // =====================================================================
+
+    @Test
+    @DisplayName("12 响应字段：snake_case 逐字段返回，且不含 team_id / created_by")
     void responseShapeFollowsContract() throws Exception {
         String token = loginAndClearAudit("owner01");
         Map<String, Object> before = new LinkedHashMap<>();
@@ -450,6 +446,33 @@ class AuditLogQueryIntegrationTest {
         auditWriteService.record(builder.build());
     }
 
+    /**
+     * 批量造 {@code count} 条 {@code IMPORT_BATCH} 审计（{@code recordAll} 一个独立事务、条数不变）。
+     *
+     * <p>{@code occurred_at} 依次递增，保证按 {@code occurred_at DESC} 的翻页顺序稳定。
+     */
+    private void seedBulk(int count) {
+        LocalDateTime base = LocalDateTime.now(ZoneOffset.UTC).withNano(0);
+        List<AuditEvent> events = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            events.add(AuditEvent.builder()
+                    .teamId(TEAM_ID)
+                    .action(AuditAction.IMPORT_BATCH_CREATE)
+                    .bizType("IMPORT_BATCH")
+                    .bizId((long) i)
+                    .bizNo("BULK-" + i)
+                    .operatorId(OWNER_ID)
+                    .operatorName("老板")
+                    .operatorRole("OWNER")
+                    .result(AuditResult.SUCCESS)
+                    .occurredAt(base.minusSeconds((long) count - i))
+                    .build());
+        }
+        auditWriteService.recordAll(events);
+        assertEquals(count, jdbc.queryForObject("SELECT COUNT(*) FROM audit_logs", Integer.class),
+                "批量造数应写满 " + count + " 条（recordAll 一个事务、条数不变）");
+    }
+
     // =====================================================================
     // 辅助：HTTP / JSON
     // =====================================================================
@@ -489,10 +512,12 @@ class AuditLogQueryIntegrationTest {
         return root.get("data");
     }
 
-    private void assertBadRequest(ResponseEntity<String> response, String scenario) throws Exception {
+    private void assertBadRequest(ResponseEntity<String> response, String scenario, String expectedCode)
+            throws Exception {
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode(),
                 scenario + " 应返回 400：" + response.getBody());
-        assertEquals("COM-0001", errorCode(response), scenario + " 应返回 COM-0001");
+        assertEquals(expectedCode, errorCode(response),
+                scenario + " 应返回 " + expectedCode + "：" + response.getBody());
     }
 
     private String errorCode(ResponseEntity<String> response) throws Exception {

@@ -30,8 +30,9 @@ import org.springframework.web.bind.annotation.RestController;
  * </ul>
  *
  * <p>本批<b>只读</b>：不提供导出（{@code GET /audit/logs/export}，{@code F-AUD-03}，登记 {@code R181}，排 M7）。
- * 非法参数统一 {@code 400 COM-0001}（{@code B0-4}），校验在
- * {@link AuditLogQueryService}；本层不做 SQL、不做分页计算。
+ * 参数校验在 {@link AuditLogQueryService}：分页/日期区间越界 → {@code 400 COM-0007}
+ * （{@code API_CONTRACT §2.2}）；筛选值/日期格式/排序非法 → {@code 400 COM-0001}（{@code B0-4}）。
+ * 本层不做 SQL、不做分页计算。
  */
 @RestController
 @RequestMapping("/api/v1/audit")
@@ -46,8 +47,8 @@ public class AuditLogController {
     /**
      * 审计日志查询（{@code F-AUD-02}）。
      *
-     * @param page       页码（默认 1，≥1；小于 1 按 1 处理）
-     * @param pageSize   每页条数（默认 20，夹取 1..200；超过 200 按 200 处理）
+     * @param page       页码（默认 1，≥1；越界 → {@code COM-0007}）
+     * @param pageSize   每页条数（默认 20，1..200；越界 → {@code COM-0007}，不静默截断）
      * @param sort       排序：仅 {@code occurred_at,asc}/{@code occurred_at,desc}，缺省 DESC
      * @param bizType    业务对象类型（等值，可选）
      * @param bizId      业务对象 ID（可选；提供时必须同时提供 {@code biz_type}）
