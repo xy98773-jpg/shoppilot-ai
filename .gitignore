@@ -63,3 +63,6 @@ tmp/
 backend-java/tools/**/body-*.json
 backend-java/tools/**/hdr-*.txt
 backend-java/tools/m7-t02/data/
+
+# M7-T06 临时 clone（验证完即删，绝不入仓）
+backend-java/tools/m7-t06/clone/
