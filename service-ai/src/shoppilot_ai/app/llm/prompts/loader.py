@@ -72,9 +72,28 @@ class PromptTemplate:
         return f"{self.name}.{self.version}"
 
     def messages(self, context: Mapping[str, object]) -> list[ChatMessage]:
-        """渲染出 `[system, user]` 两条消息。"""
+        """渲染出 `[system, user]` 两条消息。
+
+        ★ ★ 必须把 `OUTPUT_SCHEMA` 带给模型（真机教训，M8-T07）：
+        初版只发 SYSTEM + USER，**漏发了模板的 OUTPUT_SCHEMA 分区** ⇒
+        DeepSeek 自由发挥成 `{type, conclusion, main_basis, ...}`，
+        与期望的 `{explanation, evidence, confidence, ...}` 完全不同，
+        校验直接 `explanation Field required` 失败。
+        注意：`response_format=json_object` **只保证输出是合法 JSON**，
+        **不**保证遵循业务 Schema——Schema 必须由 Prompt 显式给出。
+
+        ★ Mock 测试掩盖了这个缺陷（喂的是手写合法 payload），
+        故补了 `test_messages_include_output_schema` 钉死它。
+        """
+        system = self.system
+        if self.output_schema.strip():
+            system = (
+                f"{self.system}\n\n"
+                "【输出 JSON Schema】（必须**严格**符合，字段名与类型均不得改动）\n"
+                f"{self.output_schema}"
+            )
         return [
-            ChatMessage(role="system", content=self.system),
+            ChatMessage(role="system", content=system),
             ChatMessage(role="user", content=render(self.user, context)),
         ]
 

@@ -402,6 +402,29 @@ def test_unknown_prompt_version_fails_fast() -> None:
         get_template("no_such.v9")
 
 
+def test_messages_include_output_schema() -> None:
+    """★ 真机教训（必须钉死）：`OUTPUT_SCHEMA` **必须**随消息发给模型。
+
+    初版只发 SYSTEM + USER，漏掉了模板的 OUTPUT_SCHEMA 分区 ⇒ DeepSeek 自由发挥
+    成 `{type, conclusion, main_basis, ...}`，与期望的 `{explanation, evidence,
+    confidence, ...}` 完全不同，校验报 `explanation Field required`。
+
+    ⚠️ 这个缺陷**Mock 测试发现不了**——Mock 喂的是手写合法 payload，
+    掩盖了「模型根本没看到 schema」。故用本用例断言 system 里含 schema 字段名。
+
+    另注：`response_format=json_object` 只保证「输出是合法 JSON」，
+    **不**保证遵循业务 Schema，Schema 必须由 Prompt 显式给出。
+    """
+    template = get_template("explain_risk.v1")
+    messages = template.messages({"sku_id": 9002})
+    system = messages[0].content
+    assert "explanation" in system, "system 必须带输出 schema（含 explanation 字段）"
+    assert "evidence" in system
+    assert "confidence" in system
+    # USER 仍按原样渲染（含 sku_id）
+    assert "9002" in messages[1].content
+
+
 def test_system_prompt_forbids_calculation() -> None:
     """安全边界：SYSTEM 必须明确"只解释不计算"（`PROMPT_DESIGN` 安全边界）。"""
     system = get_template(None).system
