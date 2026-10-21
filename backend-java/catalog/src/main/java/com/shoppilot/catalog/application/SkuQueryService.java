@@ -113,6 +113,78 @@ public class SkuQueryService {
         return skuMapper.selectBatchIds(ids);
     }
 
+    // =====================================================================
+    // 分析装配批量只读（M8-T06 / R126：analysis 经本门面而非直连 SkuMapper）
+    // =====================================================================
+
+    /**
+     * 本团队全部 {@code ACTIVE} SKU（按 {@code id} 升序；供 {@code analysis} 的 {@code ALL_ACTIVE} 范围）。
+     *
+     * <p>★ 团队隔离由租户线兜底（与 {@link #listProcurementInfo} 同口径），不接收 {@code teamId} 参数。
+     * 排序与 {@code analysis} 原 {@code selectSkus(ALL_ACTIVE)} 的 {@code orderByAsc(id)} 一致，
+     * 保证出站 items 可复现。
+     *
+     * @return 本团队 {@code ACTIVE} SKU（可能为空）
+     */
+    public List<SkuEntity> listActiveByTeam() {
+        return skuMapper.selectList(new QueryWrapper<SkuEntity>()
+                .eq("status", "ACTIVE")
+                .orderByAsc("id"));
+    }
+
+    /**
+     * 按 {@code id} 批量取 SKU 实体（供 {@code analysis} 的 {@code SELECTED_SKUS} 范围与
+     * {@code loadSkuRefs} 主数据回读）。
+     *
+     * <p>★ 租户线约束：跨团队 / 不存在的 {@code id} 不出现在结果中（调用方按「缺失即拒绝 / 缺失即无」处理）。
+     * 不做 {@code status} 过滤——{@code SELECTED_SKUS} 的 {@code ACTIVE} 校验在 {@code analysis} 侧完成，
+     * 以保留「非 ACTIVE ⇒ COM-0001 且写明状态」的语义。
+     *
+     * @return {@code sku_id -> 实体}；入参可空/空/含 {@code null} ⇒ 空 {@code Map}
+     */
+    public Map<Long, SkuEntity> getByIds(Collection<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> distinct = ids.stream().filter(Objects::nonNull).distinct().toList();
+        if (distinct.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, SkuEntity> byId = new LinkedHashMap<>();
+        for (SkuEntity sku : skuMapper.selectBatchIds(distinct)) {
+            byId.put(sku.getId(), sku);
+        }
+        return byId;
+    }
+
+    /**
+     * 指定商品下的 {@code ACTIVE} SKU（按 {@code id} 升序；供 {@code analysis} 的 {@code CATEGORY} 范围：
+     * 先取类目下的商品 {@code id}，再经本方法取其下启用 SKU）。
+     *
+     * <p>★ 不额外过滤 {@code products.status}（{@code analysis} 原口径即以 {@code skus.status='ACTIVE'} 为准）。
+     * 团队隔离由租户线兜底。
+     *
+     * @return 命中 SKU（可能为空）
+     */
+    public List<SkuEntity> listActiveByProductIds(Collection<Long> productIds) {
+        if (productIds == null || productIds.isEmpty()) {
+            return List.of();
+        }
+        List<Long> distinct = productIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (distinct.isEmpty()) {
+            return List.of();
+        }
+        List<SkuEntity> out = new ArrayList<>();
+        for (int from = 0; from < distinct.size(); from += CODE_CHUNK_SIZE) {
+            List<Long> chunk = distinct.subList(from, Math.min(from + CODE_CHUNK_SIZE, distinct.size()));
+            out.addAll(skuMapper.selectList(new QueryWrapper<SkuEntity>()
+                    .in("product_id", chunk)
+                    .eq("status", "ACTIVE")
+                    .orderByAsc("id")));
+        }
+        return out;
+    }
+
     /**
      * <b>按业务编码批量解析 {@code sku_code → id}</b>（M3-B10.5 / R78；供 {@code importdata} 落库前解析引用）。
      *

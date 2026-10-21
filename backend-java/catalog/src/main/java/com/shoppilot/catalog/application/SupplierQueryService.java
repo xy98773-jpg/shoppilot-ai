@@ -10,7 +10,10 @@ import com.shoppilot.catalog.infrastructure.persistence.entity.SupplierEntity;
 import com.shoppilot.catalog.infrastructure.persistence.mapper.SupplierMapper;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.PageResult;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 
@@ -83,5 +86,31 @@ public class SupplierQueryService {
      */
     public boolean existsInTeam(Long supplierId) {
         return supplierId != null && supplierMapper.selectById(supplierId) != null;
+    }
+
+    // =====================================================================
+    // 分析装配批量只读（M8-T06 / R126：analysis 经本门面而非直连 SupplierMapper）
+    // =====================================================================
+
+    /**
+     * 按 {@code id} 批量取供应商实体（供 {@code analysis} 装配交期 {@code SUPPLIER} 来源与采购参数）。
+     *
+     * <p>★ 租户线约束：跨团队 / 不存在的 {@code id} 不出现在结果中（调用方按「缺失即无」处理）。
+     *
+     * @return {@code supplier_id -> 实体}；入参可空/空/含 {@code null} ⇒ 空 {@code Map}
+     */
+    public Map<Long, SupplierEntity> getByIds(Collection<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> distinct = ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        if (distinct.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, SupplierEntity> byId = new LinkedHashMap<>();
+        for (SupplierEntity supplier : supplierMapper.selectBatchIds(distinct)) {
+            byId.put(supplier.getId(), supplier);
+        }
+        return byId;
     }
 }

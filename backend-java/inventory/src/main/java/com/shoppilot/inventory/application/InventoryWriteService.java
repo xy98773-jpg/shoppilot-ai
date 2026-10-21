@@ -159,19 +159,23 @@ public class InventoryWriteService {
     private final InventoryBalanceUpdater balanceUpdater;
     private final AuditWriteService auditWriteService;
     private final TransactionTemplate attemptTemplate;
+    /** M8-T05（{@code R185}）：冲销 {@code PURCHASE_INBOUND} 时同事务回退采购侧 {@code received_qty} 的端口。 */
+    private final PurchaseInboundReversalPort purchaseInboundReversalPort;
 
     public InventoryWriteService(InventoryBalanceMapper balanceMapper,
                                  InventoryTransactionMapper transactionMapper,
                                  InventoryBalanceUpdater balanceUpdater,
                                  AuditWriteService auditWriteService,
                                  PlatformTransactionManager transactionManager,
-                                 InventoryIdempotencyKeyMapper idempotencyKeyMapper) {
+                                 InventoryIdempotencyKeyMapper idempotencyKeyMapper,
+                                 PurchaseInboundReversalPort purchaseInboundReversalPort) {
         this.balanceMapper = balanceMapper;
         this.transactionMapper = transactionMapper;
         this.idempotencyKeyMapper = idempotencyKeyMapper;
         this.balanceUpdater = balanceUpdater;
         this.auditWriteService = auditWriteService;
         this.attemptTemplate = new TransactionTemplate(transactionManager);
+        this.purchaseInboundReversalPort = purchaseInboundReversalPort;
         // ★ 重试单元 = SAVEPOINT（见类注释）；无外层事务时 Spring 退化为 REQUIRED。
         this.attemptTemplate.setPropagationBehavior(TransactionTemplate.PROPAGATION_NESTED);
     }
@@ -743,6 +747,17 @@ public class InventoryWriteService {
         StockChangeResult result = writeChange(teamId, balance, InventoryTxnType.REVERSAL,
                 InventoryBizType.REVERSAL, delta, originalTxnId, originalTxnId, reason, key, operatorId,
                 ErrorCodes.INV_5006);
+        // ★ R185（M8-T05）：冲销 {@code PURCHASE_INBOUND} 必须同事务回退采购侧 {@code received_qty}，
+        //   否则派生在途（{@code ordered_qty − received_qty}）会少计（{@code PURCHASING_WORKFLOW §8.3}）。
+        //   本调用 {@code REQUIRED} 加入当前 NESTED 单元（{@code runWithRetry} 的 SAVEPOINT），
+        //   随冲销写流水一同成功/回滚（原子）。★ 重放路径（{@code replay != null}）不会到达这里
+        //   ⇒ 幂等重放不重复回退（{@code R73} 同键同体 ⇒ 返回首次结果，不重复执行）。
+        if (InventoryTxnType.PURCHASE_INBOUND.name().equals(original.getTxnType())) {
+            purchaseInboundReversalPort.reversePurchaseInbound(
+                    original.getBizRefId() == null ? 0L : original.getBizRefId(),
+                    original.getIdempotencyKey(),
+                    original.getQtyDelta());
+        }
         return new ReversalOutcome(result, original.getSkuId(), original.getWarehouseId());
     }
 

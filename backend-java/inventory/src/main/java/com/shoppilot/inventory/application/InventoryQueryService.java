@@ -33,6 +33,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
@@ -304,6 +305,79 @@ public class InventoryQueryService {
             }
         }
         return hit;
+    }
+
+    // =====================================================================
+    // 分析装配批量只读（M8-T06 / R126：analysis 经本门面而非直连 InventoryBalanceMapper /
+    // ReplenishmentPolicyMapper）
+    // =====================================================================
+
+    /**
+     * 批量取某仓的余额行（供 {@code analysis} 装配 {@code on_hand_qty}/{@code committed_qty}）。
+     *
+     * <p>★ 团队隔离由租户线兜底（与 {@link #findExistingBalanceKeys} 同口径）；仅按
+     * {@code (warehouse_id, sku_id)} 过滤，<b>不</b>额外加 {@code team_id}（原装配器亦如此，依赖租户线）。
+     * 缺行不返回（调用方按「缺行 ⇒ 0.000」处理）。
+     *
+     * @param warehouseId 仓库（{@code null} ⇒ 空 Map）
+     * @param skuIds      SKU 集合（空 ⇒ 空 Map）
+     * @return {@code sku_id -> 余额实体}；无余额的 sku <b>不在</b> map 中
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, InventoryBalanceEntity> balancesBySkuIds(Long warehouseId, Collection<Long> skuIds) {
+        if (warehouseId == null || skuIds == null || skuIds.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> distinct = skuIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (distinct.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, InventoryBalanceEntity> bySku = new LinkedHashMap<>();
+        for (int from = 0; from < distinct.size(); from += BALANCE_KEY_CHUNK_SIZE) {
+            List<Long> chunk = distinct.subList(from, Math.min(from + BALANCE_KEY_CHUNK_SIZE, distinct.size()));
+            for (InventoryBalanceEntity balance : balanceMapper.selectList(
+                    new LambdaQueryWrapper<InventoryBalanceEntity>()
+                            .in(InventoryBalanceEntity::getSkuId, chunk)
+                            .eq(InventoryBalanceEntity::getWarehouseId, warehouseId))) {
+                bySku.put(balance.getSkuId(), balance);
+            }
+        }
+        return bySku;
+    }
+
+    /**
+     * 批量取某仓「启用」的补货策略（供 {@code analysis} 装配交期 {@code POLICY} 来源与采购参数）。
+     *
+     * <p>★ 只取 {@code is_enabled = 1} 的行（被停用的策略等于「没有这条策略」，与原装配器 {@code policiesOf}
+     * 口径一致）；同一 {@code sku_id} 多行时取首行（{@code orderByAsc(id)}），与原 {@code putIfAbsent} 一致。
+     * 团队隔离由租户线兜底。
+     *
+     * @param warehouseId 仓库（{@code null} ⇒ 空 Map）
+     * @param skuIds      SKU 集合（空 ⇒ 空 Map）
+     * @return {@code sku_id -> 策略实体}；无启用策略的 sku <b>不在</b> map 中
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, ReplenishmentPolicyEntity> enabledPoliciesBySkuIds(Long warehouseId, Collection<Long> skuIds) {
+        if (warehouseId == null || skuIds == null || skuIds.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> distinct = skuIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (distinct.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, ReplenishmentPolicyEntity> bySku = new LinkedHashMap<>();
+        for (int from = 0; from < distinct.size(); from += BALANCE_KEY_CHUNK_SIZE) {
+            List<Long> chunk = distinct.subList(from, Math.min(from + BALANCE_KEY_CHUNK_SIZE, distinct.size()));
+            for (ReplenishmentPolicyEntity policy : policyMapper.selectList(
+                    new LambdaQueryWrapper<ReplenishmentPolicyEntity>()
+                            .in(ReplenishmentPolicyEntity::getSkuId, chunk)
+                            .eq(ReplenishmentPolicyEntity::getWarehouseId, warehouseId)
+                            .eq(ReplenishmentPolicyEntity::getIsEnabled, 1)
+                            .orderByAsc(ReplenishmentPolicyEntity::getId))) {
+                bySku.putIfAbsent(policy.getSkuId(), policy);
+            }
+        }
+        return bySku;
     }
 
     // =====================================================================

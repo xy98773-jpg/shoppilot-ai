@@ -122,4 +122,38 @@ public class WarehouseQueryService {
         }
         return ids;
     }
+
+    // =====================================================================
+    // 分析装配只读（M8-T06 / R126：analysis 经本门面而非直连 WarehouseMapper）
+    // =====================================================================
+
+    /**
+     * 取仓库所属团队 {@code id}（<b>非抛出</b>；不存在 / 跨团队 ⇒ {@code null}）。
+     *
+     * <p>★ 复用 catalog 已登记的受控租户线例外 {@link WarehouseMapper#selectTeamIdById}
+     * （<b>不</b>走租户线），以便 {@code analysis} 显式传入的仓库能正确判定「是否属于当前团队」
+     * （属于则返回 teamId，不属于返回 {@code null} ⇒ COM-0001），与跨团队探测语义一致。
+     *
+     * @param warehouseId 仓库主键（{@code null} ⇒ {@code null}）
+     * @return 该仓库团队 {@code id}；仓库不存在返回 {@code null}
+     */
+    public Long getTeamIdById(Long warehouseId) {
+        return warehouseId == null ? null : warehouseMapper.selectTeamIdById(warehouseId);
+    }
+
+    /**
+     * 本团队 {@code is_default=1} 且 {@code ACTIVE} 的仓库（按 {@code id} 升序）。
+     *
+     * <p>★ 团队隔离由租户线兜底（区别于 {@link #getDefaultWarehouse} 的无团队过滤写法）；
+     * 返回<b>列表</b>而非单值，由 {@code analysis} 负责「0 ⇒ 未配置默认仓 / &gt;1 ⇒ 数据异常」的判定，
+     * 不在此静默取第一行。
+     *
+     * @return 默认仓列表（可能为空）
+     */
+    public List<WarehouseEntity> listDefaultWarehouses() {
+        return warehouseMapper.selectList(new QueryWrapper<WarehouseEntity>()
+                .eq("is_default", true)
+                .eq("status", "ACTIVE")
+                .orderByAsc("id"));
+    }
 }

@@ -1,26 +1,23 @@
 package com.shoppilot.analysis.infrastructure.sampling;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.shoppilot.analysis.domain.AnalysisParams;
 import com.shoppilot.analysis.domain.AnalysisScope;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiRunItem;
 import com.shoppilot.analysis.infrastructure.ai.dto.AiSalesPoint;
-import com.shoppilot.catalog.infrastructure.persistence.entity.ProductEntity;
+import com.shoppilot.catalog.application.ProductQueryService;
+import com.shoppilot.catalog.application.SkuQueryService;
+import com.shoppilot.catalog.application.SupplierQueryService;
+import com.shoppilot.catalog.application.WarehouseQueryService;
 import com.shoppilot.catalog.infrastructure.persistence.entity.SkuEntity;
 import com.shoppilot.catalog.infrastructure.persistence.entity.SupplierEntity;
 import com.shoppilot.catalog.infrastructure.persistence.entity.WarehouseEntity;
-import com.shoppilot.catalog.infrastructure.persistence.mapper.ProductMapper;
-import com.shoppilot.catalog.infrastructure.persistence.mapper.SkuMapper;
-import com.shoppilot.catalog.infrastructure.persistence.mapper.SupplierMapper;
-import com.shoppilot.catalog.infrastructure.persistence.mapper.WarehouseMapper;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
 import com.shoppilot.inventory.application.InventoryInTransitQueryService;
+import com.shoppilot.inventory.application.InventoryQueryService;
 import com.shoppilot.inventory.infrastructure.persistence.entity.InventoryBalanceEntity;
 import com.shoppilot.inventory.infrastructure.persistence.entity.ReplenishmentPolicyEntity;
-import com.shoppilot.inventory.infrastructure.persistence.mapper.InventoryBalanceMapper;
-import com.shoppilot.inventory.infrastructure.persistence.mapper.ReplenishmentPolicyMapper;
 import com.shoppilot.sales.application.SalesQueryService;
 import com.shoppilot.sales.application.dto.SalesSeriesPoint;
 import java.math.BigDecimal;
@@ -28,7 +25,6 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,18 +39,23 @@ import org.springframework.stereotype.Component;
  * （{@code AiValidateRequest.of}，{@code M4-B20.4} {@code R131}）<b>共用同一次装配</b>。
  * <b>纯只读</b>：不写库、不写审计、不调外部服务。
  *
- * <h2>★ 定位升级：analysis 对 catalog / inventory 的只读查询门面（§5.38 裁定 #12）</h2>
+ * <h2>★ 定位升级：analysis 对 catalog / inventory 的只读查询门面（§5.38 裁定 #12；M8-T06 闭环 R126）</h2>
  * <p>M4-B20.2 起本类除「装配」外，还承载<b>结果二次校验所需的主数据回读</b>（{@code R132}）：
  * {@link #loadSkuRefs} / {@link #warehouseTeamId} / {@link #loadInTransitQty}。
- * 之所以仍走本类而不是 application 直连 Mapper：{@code §5.36} 裁定 #1
- * <b>禁止 application 直连 Mapper</b>，而这些查询要跨 catalog / inventory 两个模块。
- * 这三个方法全部<b>带租户线</b>（{@code BaseMapper} + LambdaQuery），
- * 因此<b>不需要</b>新增任何 {@code @InterceptorIgnore} 受控例外。
+ * 这些查询跨 catalog / inventory 两个模块，故<b>经各自模块的只读查询服务</b>完成
+ * （catalog 的 {@code SkuQueryService}/{@code ProductQueryService}/{@code SupplierQueryService}/
+ * {@code WarehouseQueryService}、inventory 的 {@code InventoryQueryService}）——
+ * 与 {@code §5.36} 裁定 #1「<b>禁止 application 直连 Mapper</b>」一致，
+ * 也满足 {@code R126}「跨模块只读必须经门面、不得直连对方 Mapper」的边界纪律。
+ * 服务内部查询全部<b>带租户线</b>，<b>不需要</b>本类新增任何 {@code @InterceptorIgnore} 受控例外。
  *
- * <h2>★ 装配位置与依赖（§5.36 裁定 #1/#2）</h2>
- * <p>放在 {@code infrastructure} 层是因为它要直连各模块的 <b>只读</b> Mapper；
+ * <h2>★ 装配位置与依赖（§5.36 裁定 #1/#2；M8-T06 闭环 R126）</h2>
+ * <p>放在 {@code infrastructure} 层是因为它要编排各模块的<b>只读查询服务</b>（catalog 4 个、
+ * inventory 的 {@code InventoryQueryService}/{@code InventoryInTransitQueryService}、
+ * sales 的 {@code SalesQueryService}）；<b>不再</b>直连任何跨模块 {@code *Mapper}
+ * （{@code R126} 已闭环，原 6 个对方 Mapper 直连全部移除）。
  * {@code application} 层只调本类，<b>禁止</b>在 application 直连 Mapper。
- * 跨模块一律「调服务 / 调 Mapper 读自己的表」，<b>禁止跨模块 JOIN SQL</b>，
+ * 跨模块一律「调服务 / 服务内读自己的表」，<b>禁止跨模块 JOIN SQL</b>，
  * 也<b>不改</b> catalog / inventory / sales 的任何文件。
  *
  * <h2>★ 四条必须留在类注释里的口径</h2>
@@ -79,7 +80,9 @@ import org.springframework.stereotype.Component;
  * </ol>
  *
  * <h2>性能</h2>
- * <p>余额/策略/供应商按 {@value #QUERY_CHUNK_SIZE} 个 SKU 一批查询；
+ * <p>余额 / 策略 / SKU / 供应商 / 商品的批量查询<b>由各自模块的只读服务内部分片</b>
+ * （catalog {@code CODE_CHUNK_SIZE=1000}、inventory {@code BALANCE_KEY_CHUNK_SIZE=1000}）；
+ * 本类<b>不再</b>本地做 {@code IN} 分片——{@code R126} 门面化后分片职责随之下沉到服务侧。
  * 销量序列因 {@code SalesQueryService} 只提供单 SKU 的 {@code getSeries}（{@code §2.6} 约定），
  * 仍是「每 SKU 一次」——上限由 {@code MAX_ANALYSIS_SKUS=2000} 兜底，本批<b>不改 sales</b>。
  */
@@ -92,35 +95,29 @@ public class AnalysisItemAssembler {
     /** 交期兜底值（{@code DESIGN_BASIS §10.6} 的 {@code DEFAULT_LEAD_TIME_DAYS}；{@code params} 缺失时才用）。 */
     private static final int DEFAULT_LEAD_TIME_DAYS = AnalysisParams.DEFAULT_LEAD_TIME_DAYS;
 
-    /** 批量查询分片大小（§5.36 裁定 #12：≤500/批，沿用 inventory/sales 的 chunk 惯例）。 */
-    public static final int QUERY_CHUNK_SIZE = 500;
-
     /** 数量出站精度（{@code AI_SERVICE_CONTRACT §4.1}：3 位小数 + 字符串）。 */
     private static final int QUANTITY_SCALE = 3;
 
-    private final SkuMapper skuMapper;
-    private final ProductMapper productMapper;
-    private final SupplierMapper supplierMapper;
-    private final WarehouseMapper warehouseMapper;
-    private final InventoryBalanceMapper inventoryBalanceMapper;
-    private final ReplenishmentPolicyMapper replenishmentPolicyMapper;
+    private final SkuQueryService skuQueryService;
+    private final ProductQueryService productQueryService;
+    private final SupplierQueryService supplierQueryService;
+    private final WarehouseQueryService warehouseQueryService;
+    private final InventoryQueryService inventoryQueryService;
     private final SalesQueryService salesQueryService;
     private final InventoryInTransitQueryService inTransitQueryService;
 
-    public AnalysisItemAssembler(SkuMapper skuMapper,
-                                 ProductMapper productMapper,
-                                 SupplierMapper supplierMapper,
-                                 WarehouseMapper warehouseMapper,
-                                 InventoryBalanceMapper inventoryBalanceMapper,
-                                 ReplenishmentPolicyMapper replenishmentPolicyMapper,
+    public AnalysisItemAssembler(SkuQueryService skuQueryService,
+                                 ProductQueryService productQueryService,
+                                 SupplierQueryService supplierQueryService,
+                                 WarehouseQueryService warehouseQueryService,
+                                 InventoryQueryService inventoryQueryService,
                                  SalesQueryService salesQueryService,
                                  InventoryInTransitQueryService inTransitQueryService) {
-        this.skuMapper = skuMapper;
-        this.productMapper = productMapper;
-        this.supplierMapper = supplierMapper;
-        this.warehouseMapper = warehouseMapper;
-        this.inventoryBalanceMapper = inventoryBalanceMapper;
-        this.replenishmentPolicyMapper = replenishmentPolicyMapper;
+        this.skuQueryService = skuQueryService;
+        this.productQueryService = productQueryService;
+        this.supplierQueryService = supplierQueryService;
+        this.warehouseQueryService = warehouseQueryService;
+        this.inventoryQueryService = inventoryQueryService;
         this.salesQueryService = salesQueryService;
         this.inTransitQueryService = inTransitQueryService;
     }
@@ -143,7 +140,7 @@ public class AnalysisItemAssembler {
             //   ⇒ COM-0001，而不是「装配全 0 → Python 判 AI-2002」。后者对用户是误导：
             //   他以为自己选了一个仓，实际上什么都没算。
             //   只针对**显式传入**；默认仓解析路径本来就带 team_id 条件，不受影响。
-            Long ownerTeamId = warehouseMapper.selectTeamIdById(requestedWarehouseId);
+            Long ownerTeamId = warehouseQueryService.getTeamIdById(requestedWarehouseId);
             if (ownerTeamId == null || !Objects.equals(ownerTeamId, teamId)) {
                 throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
                         List.of(new ApiErrorDetail("warehouse_id", "仓库不属于当前团队",
@@ -151,13 +148,9 @@ public class AnalysisItemAssembler {
             }
             return requestedWarehouseId;
         }
-        List<WarehouseEntity> defaults = warehouseMapper.selectList(
-                Wrappers.<WarehouseEntity>lambdaQuery()
-                        .eq(WarehouseEntity::getTeamId, teamId)
-                        .eq(WarehouseEntity::getIsDefault, Boolean.TRUE)
-                        .eq(WarehouseEntity::getStatus, STATUS_ACTIVE)
-                        .orderByAsc(WarehouseEntity::getId)
-                        .last("LIMIT 2"));
+        // ★ R126：默认仓解析经 catalog 门面（租户线保证只返回本团队），
+        //   0 / >1 的判定仍在调用方（本类），不在门面里静默取第一行。
+        List<WarehouseEntity> defaults = warehouseQueryService.listDefaultWarehouses();
         if (defaults.size() > 1) {
             throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
                     List.of(new ApiErrorDetail("warehouse_id",
@@ -249,14 +242,9 @@ public class AnalysisItemAssembler {
      */
     public Map<Long, SkuRef> loadSkuRefs(Collection<Long> skuIds) {
         Map<Long, SkuRef> byId = new LinkedHashMap<>();
-        for (List<Long> chunk : chunks(skuIds)) {
-            for (SkuEntity sku : skuMapper.selectList(Wrappers.<SkuEntity>lambdaQuery()
-                    .in(SkuEntity::getId, chunk)
-                    .select(SkuEntity::getId, SkuEntity::getTeamId, SkuEntity::getStatus,
-                            SkuEntity::getProductId, SkuEntity::getSkuCode))) {
-                byId.put(sku.getId(), new SkuRef(sku.getTeamId(), sku.getStatus(),
-                        sku.getProductId(), sku.getSkuCode()));
-            }
+        for (SkuEntity sku : skuQueryService.getByIds(skuIds).values()) {
+            byId.put(sku.getId(), new SkuRef(sku.getTeamId(), sku.getStatus(),
+                    sku.getProductId(), sku.getSkuCode()));
         }
         return byId;
     }
@@ -264,13 +252,14 @@ public class AnalysisItemAssembler {
     /**
      * 跨团队探测：给定仓库取其 {@code team_id}（{@code §7} 第 3 项「仓库属于该团队」）。
      *
-     * <p>复用 catalog 已登记的受控例外 {@code WarehouseMapper#selectTeamIdById}
-     * （仅取 {@code team_id} 单列，{@code API_CONTRACT §5.6}），<b>analysis 不新增例外</b>。
+     * <p>经 {@link WarehouseQueryService#getTeamIdById}（{@code R126} 门面化），其内部仍复用 catalog
+     * 已登记的受控租户线例外 {@code WarehouseMapper#selectTeamIdById}
+     * （仅取 {@code team_id} 单列，{@code API_CONTRACT §5.6}），<b>analysis 不新增例外、也不直连 Mapper</b>。
      *
      * @return 该仓库的团队；仓库不存在返回 {@code null}
      */
     public Long warehouseTeamId(Long warehouseId) {
-        return warehouseId == null ? null : warehouseMapper.selectTeamIdById(warehouseId);
+        return warehouseQueryService.getTeamIdById(warehouseId);
     }
 
     /**
@@ -315,10 +304,7 @@ public class AnalysisItemAssembler {
 
     private List<SkuEntity> selectSkus(Long teamId, AnalysisScope scope) {
         return switch (scope.scopeType()) {
-            case ALL_ACTIVE -> skuMapper.selectList(Wrappers.<SkuEntity>lambdaQuery()
-                    .eq(SkuEntity::getTeamId, teamId)
-                    .eq(SkuEntity::getStatus, STATUS_ACTIVE)
-                    .orderByAsc(SkuEntity::getId));
+            case ALL_ACTIVE -> skuQueryService.listActiveByTeam();
             case SELECTED_SKUS -> selectedSkus(scope.skuIds());
             case CATEGORY -> categorySkus(scope.category());
         };
@@ -332,13 +318,7 @@ public class AnalysisItemAssembler {
      * 与「不存在」同归一条错误文案，不泄漏他团队是否存在该 SKU。
      */
     private List<SkuEntity> selectedSkus(List<Long> requestedIds) {
-        Map<Long, SkuEntity> found = new HashMap<>();
-        for (List<Long> chunk : chunks(requestedIds)) {
-            for (SkuEntity sku : skuMapper.selectList(Wrappers.<SkuEntity>lambdaQuery()
-                    .in(SkuEntity::getId, chunk))) {
-                found.put(sku.getId(), sku);
-            }
-        }
+        Map<Long, SkuEntity> found = skuQueryService.getByIds(requestedIds);
         for (Long skuId : requestedIds) {
             SkuEntity sku = found.get(skuId);
             if (sku == null) {
@@ -363,22 +343,11 @@ public class AnalysisItemAssembler {
      * 范围口径以 {@code skus.status='ACTIVE'} 为准。
      */
     private List<SkuEntity> categorySkus(String category) {
-        List<ProductEntity> products = productMapper.selectList(
-                Wrappers.<ProductEntity>lambdaQuery()
-                        .eq(ProductEntity::getCategory, category)
-                        .select(ProductEntity::getId));
-        if (products.isEmpty()) {
+        List<Long> productIds = productQueryService.listIdsByCategory(category);
+        if (productIds.isEmpty()) {
             return List.of();
         }
-        List<Long> productIds = products.stream().map(ProductEntity::getId).toList();
-        List<SkuEntity> skus = new ArrayList<>();
-        for (List<Long> chunk : chunks(productIds)) {
-            skus.addAll(skuMapper.selectList(Wrappers.<SkuEntity>lambdaQuery()
-                    .in(SkuEntity::getProductId, chunk)
-                    .eq(SkuEntity::getStatus, STATUS_ACTIVE)
-                    .orderByAsc(SkuEntity::getId)));
-        }
-        return skus;
+        return skuQueryService.listActiveByProductIds(productIds);
     }
 
     private static void assertSkuLimit(int size) {
@@ -395,16 +364,7 @@ public class AnalysisItemAssembler {
 
     /** 余额快照（缺行不是错误，由 {@link #toItem} 兜成 {@code 0.000}）。 */
     private Map<Long, InventoryBalanceEntity> balancesOf(Long warehouseId, List<Long> skuIds) {
-        Map<Long, InventoryBalanceEntity> bySku = new LinkedHashMap<>();
-        for (List<Long> chunk : chunks(skuIds)) {
-            for (InventoryBalanceEntity balance : inventoryBalanceMapper.selectList(
-                    Wrappers.<InventoryBalanceEntity>lambdaQuery()
-                            .in(InventoryBalanceEntity::getSkuId, chunk)
-                            .eq(InventoryBalanceEntity::getWarehouseId, warehouseId))) {
-                bySku.put(balance.getSkuId(), balance);
-            }
-        }
-        return bySku;
+        return inventoryQueryService.balancesBySkuIds(warehouseId, skuIds);
     }
 
     /**
@@ -415,18 +375,7 @@ public class AnalysisItemAssembler {
      * （§5.36 未显式写该列，按「禁用策略不生效」处理，已在交付汇报申报。）
      */
     private Map<Long, ReplenishmentPolicyEntity> policiesOf(Long warehouseId, List<Long> skuIds) {
-        Map<Long, ReplenishmentPolicyEntity> bySku = new LinkedHashMap<>();
-        for (List<Long> chunk : chunks(skuIds)) {
-            for (ReplenishmentPolicyEntity policy : replenishmentPolicyMapper.selectList(
-                    Wrappers.<ReplenishmentPolicyEntity>lambdaQuery()
-                            .in(ReplenishmentPolicyEntity::getSkuId, chunk)
-                            .eq(ReplenishmentPolicyEntity::getWarehouseId, warehouseId)
-                            .eq(ReplenishmentPolicyEntity::getIsEnabled, 1)
-                            .orderByAsc(ReplenishmentPolicyEntity::getId))) {
-                bySku.putIfAbsent(policy.getSkuId(), policy);
-            }
-        }
-        return bySku;
+        return inventoryQueryService.enabledPoliciesBySkuIds(warehouseId, skuIds);
     }
 
     private Map<Long, SupplierEntity> suppliersOf(List<SkuEntity> skus) {
@@ -435,14 +384,7 @@ public class AnalysisItemAssembler {
                 .filter(java.util.Objects::nonNull)
                 .distinct()
                 .toList();
-        Map<Long, SupplierEntity> byId = new HashMap<>();
-        for (List<Long> chunk : chunks(supplierIds)) {
-            for (SupplierEntity supplier : supplierMapper.selectList(
-                    Wrappers.<SupplierEntity>lambdaQuery().in(SupplierEntity::getId, chunk))) {
-                byId.put(supplier.getId(), supplier);
-            }
-        }
-        return byId;
+        return supplierQueryService.getByIds(supplierIds);
     }
 
     // =====================================================================
@@ -529,18 +471,6 @@ public class AnalysisItemAssembler {
 
     private static BigDecimal firstNonNull(BigDecimal first, BigDecimal second) {
         return first != null ? first : second;
-    }
-
-    private static List<List<Long>> chunks(Collection<Long> ids) {
-        if (ids == null || ids.isEmpty()) {
-            return List.of();
-        }
-        List<Long> all = new ArrayList<>(ids);
-        List<List<Long>> out = new ArrayList<>((all.size() + QUERY_CHUNK_SIZE - 1) / QUERY_CHUNK_SIZE);
-        for (int from = 0; from < all.size(); from += QUERY_CHUNK_SIZE) {
-            out.add(List.copyOf(all.subList(from, Math.min(from + QUERY_CHUNK_SIZE, all.size()))));
-        }
-        return out;
     }
 
     /** 交期取值 + 来源（{@code LeadTimeSource} 四值）。 */

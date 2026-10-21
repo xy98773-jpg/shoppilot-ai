@@ -62,6 +62,32 @@ public class ProductQueryService {
         return productMapper.selectById(id);
     }
 
+    // =====================================================================
+    // 分析装配批量只读（M8-T06 / R126：analysis 经本门面而非直连 ProductMapper）
+    // =====================================================================
+
+    /**
+     * 本团队指定类目的商品 {@code id} 列表（供 {@code analysis} 的 {@code CATEGORY} 范围：
+     * 先取类目下的商品 {@code id}，再经 {@link com.shoppilot.catalog.application.SkuQueryService
+     * #listActiveByProductIds} 取其下启用 SKU）。
+     *
+     * <p>★ 团队隔离由租户线兜底；不做 {@code status} 过滤（{@code analysis} 原口径即以
+     * {@code skus.status='ACTIVE'} 为准，不额外卡 {@code products.status}）。
+     *
+     * @param category 类目精确值（{@code null}/空白 ⇒ 空列表）
+     * @return 商品 {@code id} 列表（可能为空）
+     */
+    public List<Long> listIdsByCategory(String category) {
+        if (category == null || category.isBlank()) {
+            return List.of();
+        }
+        return productMapper.selectList(new QueryWrapper<ProductEntity>()
+                        .eq("category", category)
+                        .select("id")).stream()
+                .map(ProductEntity::getId)
+                .toList();
+    }
+
     /** 归属判定（受控探测区分 403/404）。供 SKU 写入与 {@code GET /products/{id}/skus} 复用。 */
     public ProductEntity requireInTeam(Long id) {
         return CatalogGuards.requireInTeam(
