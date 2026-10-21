@@ -124,10 +124,15 @@ public class ReplenishmentAppService {
      *
      * <p>★ 写路径<b>故意</b>用 {@code update(null, lambdaUpdate())} 而非 {@code updateById(entity)}：
      * MyBatis-Plus 的 {@code updateById} 只生成 {@code WHERE id=? AND version=?}（缺 {@code status}
-     * 条件）⇒ 无法在一条语句里同时守住「状态仍为 APPROVED」与「版本未变」两个前提，存在 TOCTOU。
-     * 此处用 {@code LambdaUpdateWrapper} 把三个条件并进同一 UPDATE，并手动 {@code set(version, version+1)}
-     * （乐观锁插件不参与 wrapper 更新），保持版本号语义连续——<b>这是对「禁止 update(null, wrapper)」
-     * 常规的、有据可依的例外</b>（常规禁令针对的是「绕过 @Version 的覆盖写」，本处显式把 version
+     * 条件）。注意：{@code version=?} <b>本身已是完备的 CAS</b>——任何并发写（无论改什么字段）都会
+     * bump {@code version}，因此 {@code updateById} 的乐观锁并未失效；补
+     * {@code status='APPROVED'} 的价值是<b>纵深防御 + 语义自解释</b>：把「状态前提」显式
+     * 写进 SQL，让守卫在语句层自证，而非只依赖版本号间接推断。本处把
+     * {@code id} + {@code status} + {@code version} 三条件并进同一条 UPDATE，并手动
+     * {@code set(version, version + 1)}（插件对 {@code update(null, wrapper)} 不触发，
+     * 见 {@code common/MultiTenantConfig} 权威口径；{@code entity == null} 时既无重复自增
+     * 也无漏自增），保持版本号语义连续——<b>这是对「禁止 update(null, wrapper)」常规的、
+     * 有据可依的例外</b>（常规禁令针对的是「绕过 @Version 的覆盖写」，本处显式把 version
      * 当作等值条件 + 自增，等价于 CAS，不构成绕过）。
      *
      * @param itemId              建议 ID
@@ -151,7 +156,9 @@ public class ReplenishmentAppService {
         //   WHERE id=? AND status='APPROVED' AND version=?
         //   —— 读到的 version 一并作为条件，杜绝「读完到更新之间被并发改掉」的 TOCTOU。
         //   本处**故意**不用 updateById：MP 生成的 WHERE 只有 id + version，缺 status 条件。
-        //   同时手动 set(version, version + 1)（乐观锁插件不参与 wrapper 更新），
+        //   同时手动 set(version, version + 1)（插件对 update(null, wrapper) 不触发——
+        //   与 MultiTenantConfig 权威口径一致：插件只改写实体形态的更新；entity == null 时
+        //   既无重复自增也无漏自增，与插件的 WHERE version=? SET version=version+1 逐字等价），
         //   保持「乐观锁版本」语义连续（下次读到的 version 是本行 +1）。
         String appendedJson = appendPoItemId(entity.getConvertedPoItemIds(), purchaseOrderItemId);
         int affected = itemMapper.update(null, Wrappers.<ReplenishmentItemEntity>lambdaUpdate()

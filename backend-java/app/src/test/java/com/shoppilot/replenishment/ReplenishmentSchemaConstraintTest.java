@@ -33,11 +33,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code DATABASE_DESIGN §5.16/§5.17/§7.4} 与
  * {@code DATABASE_CONSTRAINTS #18 / §3.2 #36–#42 / §4.1–§4.3 / §5.2 #18–#23}：
  * <ul>
- *   <li>迁移链到 {@code V1.0.11} 共 12 条；两表存在，关键列类型/可空/默认值正确；</li>
+ *   <li>迁移链到 {@code V1.0.12} 共 13 条；两表存在，关键列类型/可空/默认值正确；</li>
  *   <li>{@code replenishment_items} = 集合 A + {@code version}（{@code int unsigned NOT NULL}）；
  *       {@code replenishment_reviews} = 集合 B，且<b>没有</b> {@code updated_at}/{@code updated_by}/{@code version}；</li>
  *   <li>{@code uk_repl_run_sku_wh} = (run_id, sku_id, warehouse_id) 且<b>不含 team_id</b>（R89）；</li>
- *   <li>业务索引 4 + 3 条，名称与最左列（{@code team_id}）精确匹配；</li>
+ *   <li>业务索引 5 + 3 条（items 增 V1.0.12 的 {@code idx_repl_team_wh_sku}，R165），名称与最左列（{@code team_id}）精确匹配；</li>
  *   <li>6 条外键全 {@code RESTRICT}，引用表正确；</li>
  *   <li>9 条 CHECK 逐条负向验证；★ {@code ck_rr_comment_required} 的空/空白/正常三种 comment 行为；</li>
  *   <li>两表 {@code team_id} 均 {@code NOT NULL} 且<b>无默认值</b>（租户隔离红线）。</li>
@@ -56,10 +56,10 @@ class ReplenishmentSchemaConstraintTest {
             .withUrlParam("useSSL", "false")
             .withUrlParam("allowPublicKeyRetrieval", "true");
 
-    /** items 四条业务索引（DATABASE_CONSTRAINTS §3.2 #36–#39）。 */
+    /** items 业务索引（#36–#39 四条 + V1.0.12 的 idx_repl_team_wh_sku，R165）。 */
     private static final List<String> EXPECTED_ITEM_INDEXES = List.of(
             "idx_repl_team_run", "idx_repl_team_sku_time",
-            "idx_repl_team_source", "idx_repl_team_status_time");
+            "idx_repl_team_source", "idx_repl_team_status_time", "idx_repl_team_wh_sku");
 
     /** reviews 三条业务索引（#40–#42）。 */
     private static final List<String> EXPECTED_REVIEW_INDEXES = List.of(
@@ -138,8 +138,9 @@ class ReplenishmentSchemaConstraintTest {
         List<String> versions = queryStrings(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank");
         assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5",
-                        "1.0.6", "1.0.7", "1.0.8", "1.0.9", "1.0.10", "1.0.11"),
-                versions, "应应用 V1.0.0 → V1.0.11 共 12 条迁移（V1.0.10 = M5-T01 replenishment，V1.0.11 = M6-T01 purchasing）");
+                        "1.0.6", "1.0.7", "1.0.8", "1.0.9", "1.0.10", "1.0.11", "1.0.12"),
+                versions, "应应用 V1.0.0 → V1.0.12 共 13 条迁移（V1.0.10 = M5-T01 replenishment，"
+                        + "V1.0.11 = M6-T01 purchasing，V1.0.12 = M6-T02-D R165 锚点锁索引）");
 
         // 关键列类型（§5.16 / §5.17 / §14.2）
         assertEquals("int unsigned", columnType("replenishment_items", "version"),
@@ -204,18 +205,19 @@ class ReplenishmentSchemaConstraintTest {
     }
 
     // =====================================================================
-    // T3 索引：4 + 3，均 team_id 最左
+    // T3 索引：5 + 3（V1.0.12 增 idx_repl_team_wh_sku），均 team_id 最左
     // =====================================================================
 
     @Test
-    @DisplayName("T3 业务索引 items 4 条 / reviews 3 条，名称与最左列精确匹配")
+    @DisplayName("T3 业务索引 items 5 条 / reviews 3 条，名称与最左列精确匹配")
     void businessIndexesMatchSpec() throws Exception {
         List<String> itemIdx = indexNames("replenishment_items");
         List<String> reviewIdx = indexNames("replenishment_reviews");
         System.out.println("[M5T01-EVIDENCE] items idx=" + itemIdx);
         System.out.println("[M5T01-EVIDENCE] reviews idx=" + reviewIdx);
 
-        assertEquals(EXPECTED_ITEM_INDEXES, itemIdx, "items 业务索引应为 #36–#39 四条（名称精确）");
+        assertEquals(EXPECTED_ITEM_INDEXES, itemIdx,
+                "items 业务索引应为 #36–#39 四条 + idx_repl_team_wh_sku（V1.0.12 / R165），共五条（名称精确）");
         assertEquals(EXPECTED_REVIEW_INDEXES, reviewIdx, "reviews 业务索引应为 #40–#42 三条（名称精确）");
 
         for (String idx : itemIdx) {

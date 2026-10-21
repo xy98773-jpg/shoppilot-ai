@@ -20,9 +20,21 @@ import java.time.LocalDateTime;
  * 并发静默丢更新）。插件 {@code OptimisticLockerInnerInterceptor} 已在
  * {@code common/MultiTenantConfig} 注册（B23）。
  *
- * <p>★ <b>本表禁止 {@code update(null, wrapper)}</b>：那会绕过 {@code @Version}
- * （插件只改写实体形态的 {@code updateById}/{@code update(entity, wrapper)}）。
- * M5 后续批次一律用 {@code updateById(entity)} 并<b>判返回值</b>（0 行 ⇒ {@code COM-0015}）。
+ * <p>★ <b>更新口径：默认 {@code updateById(entity)} + 判返回值；{@code update(null, wrapper)}
+ * 默认禁用</b>（那类调用无实体形态，{@code OptimisticLockerInnerInterceptor} 不触发 ⇒ @Version
+ * 被绕过）。权威口径见 {@code common/MultiTenantConfig}（「不覆盖
+ * {@code update(null, wrapper)}——那类调用必须手写 CAS 条件」）。
+ *
+ * <p><b>唯一例外</b>：{@code ReplenishmentAppService#markConverted}（M6-T02 R3）主动使用
+ * {@code update(null, lambdaUpdate)}——<b>为什么必须破例</b>：它要把
+ * {@code id} + {@code status='APPROVED'} + {@code version} 三个前提条件并进<b>同一条 UPDATE</b>
+ * 做同语句状态守卫，而 MyBatis-Plus 的 {@code updateById} 只生成 {@code WHERE id=? AND version=?}
+ * （缺 {@code status} 条件）⇒ 「读完到更新之间」的 TOCTOU 窗口无法闭合；
+ * <b>破例后如何保证正确性</b>：显式 {@code .eq(version, 读到的值)} + 手动
+ * {@code set(version, version + 1)}（插件对 {@code entity == null} 不触发，故无重复自增/漏自增风险），
+ * 与插件的 {@code WHERE version=? SET version=version+1} 语义逐字等价 ⇒ 仍是真 CAS。
+ * 该例外的 <b>0 行语义是 {@code PO-9001}</b>（已被并发转单），<b>不是 {@code COM-0015}</b>
+ * （那个码只走 {@code catalog} 的 {@code applyVersionCas} 路径，本模块零命中）。
  *
  * <p><b>JSON 列以 {@link String} 承载</b>（与 {@code AnalysisRunEntity} 同范式）：
  * {@code converted_po_item_ids} 是「已生成采购明细 ID 摘要」，仅展示（{@code §6-G}）。
@@ -101,7 +113,12 @@ public class ReplenishmentItemEntity {
     private Long createdBy;
     private Long updatedBy;
 
-    /** 乐观锁版本（§7.4 表 A）；由插件在 {@code updateById} 时自增，调用方必须判返回值。 */
+    /**
+     * 乐观锁版本（§7.4 表 A）；调用方<b>必须判返回值</b>（插件不抛异常，不匹配 ⇒ 0 行）。
+     * 自增口径：实体形态更新（{@code updateById}/{@code update(entity, wrapper)}）由
+     * {@code OptimisticLockerInnerInterceptor} 自动 {@code SET version = version + 1}；
+     * wrapper 形态（{@code update(null, wrapper)}，见类注释「唯一例外」）须<b>手动自增</b>。
+     */
     @Version
     private Integer version;
 

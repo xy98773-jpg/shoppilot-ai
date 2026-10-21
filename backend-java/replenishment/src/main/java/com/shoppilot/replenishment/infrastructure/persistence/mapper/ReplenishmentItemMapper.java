@@ -16,7 +16,7 @@ import org.apache.ibatis.annotations.Select;
  *
  * <p>★ <b>唯一的 {@code @InterceptorIgnore} 例外</b>：{@link #lockApprovedAnchorItemIds}
  * （转采购冲突检测的降级锚点行锁，M6-T02）。它自带显式 {@code team_id}/{@code warehouse_id}
- * 条件（租户线会重复追加 team_id 列），故加 {@code @InterceptorIgnore(tenantLine = "true")}，
+ * 条件（租户线会重复追加等值谓词 {@code team_id = ?}），故加 {@code @InterceptorIgnore(tenantLine = "true")}，
  * 已登记 {@code M2_TenantIsolationDbIntegrationTest.TENANT_LINE_EXCEPTIONS}。其余方法一律不加。
  *
  * <p>★ <b>更新口径</b>：本表实体带 {@code @Version}。普通更新必须 {@code updateById(entity)}
@@ -41,7 +41,7 @@ public interface ReplenishmentItemMapper extends BaseMapper<ReplenishmentItemEnt
      * （{@code idx_repl_team_sku_time (team_id, sku_id, created_at)}），否则退化为全表扫描 + 全表行锁。
      *
      * <p>★ {@code @InterceptorIgnore(tenantLine = "true")}：本 SQL 已自带显式 {@code team_id}，
-     * 租户线会重复追加同名列 ⇒ 必须忽略租户线；已登记白名单（理由见类 Javadoc）。
+     * 租户线会重复追加等值谓词 {@code team_id = ?} ⇒ 必须忽略租户线；已登记白名单（理由见类 Javadoc）。
      *
      * <p>★ 显式 {@link Select} + {@code ORDER BY sku_id ASC}（固定加锁序，防死锁）。
      * 该方法无副作用：只加锁、不写数据、不写审计。

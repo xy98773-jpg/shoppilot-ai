@@ -627,22 +627,29 @@ class PurchaseOrderFromReplenishmentIntegrationTest {
                         + "VALUES (?, ?, ?, ?, ?, ?, 'APPROVED', 20.000, 20.000, 'LOW')",
                 TEAM7, srcId, runId, SKU_NO_BALANCE, PRODUCT7, WH7);
 
+        // ★ EXPLAIN 补 FOR UPDATE：与生产加锁语句逐字等价（上一轮省略它是「未覆盖」的另一个原因）
         Map<String, Object> explain = jdbc.queryForMap(
                 "EXPLAIN SELECT id FROM replenishment_items "
                         + "WHERE team_id = ? AND warehouse_id = ? AND sku_id IN (?, ?) "
-                        + "AND status = 'APPROVED' ORDER BY sku_id ASC",
+                        + "AND status = 'APPROVED' ORDER BY sku_id ASC FOR UPDATE",
                 TEAM7, WH7, SKU_WITH_BALANCE, SKU_NO_BALANCE);
-        System.out.println("[M6T02-EVIDENCE] E13 EXPLAIN: " + explain);
-        // ★ 【未覆盖/N-A】（§5.67.4）：实测 key=idx_repl_team_status_time + Extra=Using where;
-        //   Using filesort，令文要求的「key=idx_repl_team_sku_time 且无 filesort」未达成。
-        //   断言仅为「非全表扫描 + 索引在 possible_keys」——后者是静态元数据校验、近乎恒真、
-        //   无法证伪；且 EXPLAIN 省略了 FOR UPDATE，与生产加锁语句不等价 ⇒ 不构成 R2 修复生效的证据。
-        //   根因与正解见 R165：需 V1.0.12 新增 idx_repl_team_wh_sku (team_id, warehouse_id, sku_id)，
-        //   本批 G3 禁改迁移，不做；不得把 possible_keys 硬改成 key 断言。
+        System.out.println("[M6T02-EVIDENCE] E13 EXPLAIN(V1.0.12 后): " + explain);
+        // ★ 【仍未覆盖/N-A】如实记录（M6-T02-D，V1.0.12 迁移后复验）：
+        //   实测 key=idx_repl_team_status_time（key_len=138, rows=2）+ Extra=Using where; Using filesort
+        //   —— 优化器**仍未选中** idx_repl_team_wh_sku。原因：rows=2 的小数据量下，
+        //   status='APPROVED' 等值前缀走 idx_repl_team_status_time 估算成本更低；
+        //   **这不是索引不可达**——idx_repl_team_wh_sku 已进入 possible_keys（⇒ V1.0.12 迁移生效），
+        //   而是优化器的成本估算选择。
+        //   登记 R169：ORDER BY sku_id 的确定性加锁序仍未由优化器保证；
+        //   正解候选（FORCE INDEX / 调整索引列序）需独立批次，本批不得改索引设计、
+        //   不得把 possible_keys 硬改成 key 断言、不得改迁移。
         assertTrue(!"ALL".equals(explain.get("type")),
                 "不得全表扫描（R2 修复的最低目标），实际 type=" + explain.get("type"));
+        assertTrue(String.valueOf(explain.get("possible_keys")).contains("idx_repl_team_wh_sku"),
+                "V1.0.12 的 idx_repl_team_wh_sku 必须可达（在 possible_keys 中），实际："
+                        + explain.get("possible_keys"));
         assertTrue(String.valueOf(explain.get("possible_keys")).contains("idx_repl_team_sku_time"),
-                "idx_repl_team_sku_time 必须可达（在 possible_keys 中），实际："
+                "既有 idx_repl_team_sku_time 必须仍可达，实际："
                         + explain.get("possible_keys"));
     }
 
@@ -651,49 +658,68 @@ class PurchaseOrderFromReplenishmentIntegrationTest {
     // =====================================================================
 
     @Test
-    @DisplayName("E14 并发幂等：同键同体并发 ⇒ 组合 ∈ {(201,201),(201,409 COM-0009)}，绝不 500/COM-0002，purchase_orders 恰 1 条")
+    @DisplayName("E14【弱验证/R168】并发幂等：确定性观测 (201,201)；绝不 500/COM-0002；purchase_orders 恰 1 条")
     void concurrentIdempotencyDoesNotReturn500() throws Exception {
         long a = createApprovedItem(TEAM7, SKU_NO_BALANCE, "30.000", SUPPLIER7, "10.0000");
         String token = login("approver01");
         String body = "{\"replenishment_item_ids\":[" + a + "],\"warehouse_id\":" + WH7 + "}";
 
         int threads = 2;
+        // ★ D3：try/finally + shutdownNow + awaitTermination——裸 shutdown() 在
+        //   f.get() 抛 Timeout/ExecutionException（最需要调试的路径）时不会执行，
+        //   非 daemon 线程可能挂住 surefire。
         ExecutorService pool = Executors.newFixedThreadPool(threads);
-        CountDownLatch gate = new CountDownLatch(1);
-        List<Future<ResponseEntity<String>>> futures = new ArrayList<>();
-        for (int i = 0; i < threads; i++) {
-            futures.add(pool.submit(() -> {
-                gate.await();
-                return postWithKey("/api/v1/purchasing/orders/from-replenishment",
-                        body, token, "idem-e14");
-            }));
-        }
-        gate.countDown();
-        List<ResponseEntity<String>> responses = new ArrayList<>();
-        for (Future<ResponseEntity<String>> f : futures) {
-            responses.add(f.get(60, TimeUnit.SECONDS));
-        }
-        pool.shutdown();
-
-        List<Integer> codes = new ArrayList<>();
-        for (ResponseEntity<String> r : responses) {
-            codes.add(r.getStatusCode().value());
-        }
-        System.out.println("[M6T02-EVIDENCE] E14 响应组合: " + codes
-                + " | bodies=" + responses.stream().map(ResponseEntity::getBody).toList());
-        // ★ 合法组合（C1 后）：(201,201)=B 在⑤步命中首单；(201,409)=B 撞 uk_po_team_idem 后
-        //   RC 重查命中所落 COM-0009。绝不出现 500/COM-0002。
-        for (ResponseEntity<String> r : responses) {
-            int status = r.getStatusCode().value();
-            assertTrue(status == 201 || status == 409,
-                    "只允许 201 或 409，实际 " + status + " body=" + r.getBody());
-            if (status == 409) {
-                assertEquals(ErrorCodes.COM_0009, codeOf(r), "并发撞键必须落 COM-0009(409)，不是 COM-0002");
+        try {
+            CountDownLatch gate = new CountDownLatch(1);
+            List<Future<ResponseEntity<String>>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> {
+                    gate.await();
+                    return postWithKey("/api/v1/purchasing/orders/from-replenishment",
+                            body, token, "idem-e14");
+                }));
             }
-            assertFalse(r.getBody().contains("COM-0002"), "绝不出现 COM-0002(500)");
+            gate.countDown();
+            List<ResponseEntity<String>> responses = new ArrayList<>();
+            for (Future<ResponseEntity<String>> f : futures) {
+                responses.add(f.get(60, TimeUnit.SECONDS));
+            }
+
+            List<Integer> codes = new ArrayList<>();
+            for (ResponseEntity<String> r : responses) {
+                codes.add(r.getStatusCode().value());
+            }
+            System.out.println("[M6T02-EVIDENCE] E14 响应组合: " + codes
+                    + " | bodies=" + responses.stream().map(ResponseEntity::getBody).toList());
+            // ★ 覆盖度如实申报（R168 / §5.68.3 P-12）：本用例确定性观测到 **(201,201)**。
+            //   机理：E14 刻意用 SKU_NO_BALANCE ⇒ 走 ②b 降级锁，对建议 a 自己那一行
+            //   SELECT ... FOR UPDATE ⇒ 两请求在 ReplenishmentAppService 的行锁上确定性串行
+            //   ⇒ B 恢复后 ⑤ 幂等命中 ⇒ (201,201)。⇒ **COM-0009 分支在本设计下不可达**，
+            //   下方 if(status==409) 的断言是死代码——但仍是有效的「绝不出现 500」护栏，保留不动。
+            //   因此 C1 的 RC 修复在本用例中**未被直接覆盖**；本用例的价值是回归护栏：
+            //   「绝不出现 500 / 409 必须是 COM-0009」。
+            // ★ 合法组合（C1 后）：(201,201)=B 在⑤步命中首单；(201,409)=B 撞 uk_po_team_idem 后
+            //   RC 重查命中所落 COM-0009。绝不出现 500/COM-0002。
+            for (ResponseEntity<String> r : responses) {
+                int status = r.getStatusCode().value();
+                assertTrue(status == 201 || status == 409,
+                        "只允许 201 或 409，实际 " + status + " body=" + r.getBody());
+                if (status == 409) {
+                    assertEquals(ErrorCodes.COM_0009, codeOf(r), "并发撞键必须落 COM-0009(409)，不是 COM-0002");
+                }
+                assertFalse(r.getBody().contains("COM-0002"), "绝不出现 COM-0002(500)");
+            }
+            assertEquals(1L, countOf("purchase_orders"), "并发生成恰好 1 条采购单");
+            assertEquals(1L, countOf("purchase_order_items"), "明细行数与首次一致（1 条）");
+        } finally {
+            // D3：异常路径也保证回收；shutdownNow 会让仍在 await 的线程收到中断
+            pool.shutdownNow();
+            try {
+                pool.awaitTermination(10, TimeUnit.SECONDS);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
         }
-        assertEquals(1L, countOf("purchase_orders"), "并发生成恰好 1 条采购单");
-        assertEquals(1L, countOf("purchase_order_items"), "明细行数与首次一致（1 条）");
     }
 
     // =====================================================================
