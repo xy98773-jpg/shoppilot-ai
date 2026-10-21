@@ -181,7 +181,7 @@ docker compose -f deploy/docker-compose.dev.yml down       # 停栈，保留数�
 docker compose -f deploy/docker-compose.dev.yml down -v    # 停栈并删除数据卷（清库重来）
 docker compose -f deploy/docker-compose.dev.yml logs -f backend-java   # 跟踪后端日志
 ```
-> Flyway 会在 backend 启动时自动迁移；`down -v` 后再 `up` 会重跑全部 13 个迁移（`V1.0.0`–`V1.0.12`）。
+> Flyway 会在 backend 启动时自动迁移；`down -v` 后再 `up` 会重跑全部 14 个迁移（`V1.0.0`–`V1.0.13`）。
 
 ### 集成栈
 ```bash

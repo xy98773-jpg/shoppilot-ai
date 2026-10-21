@@ -466,6 +466,39 @@
 
 ---
 
+### 5.10b `inventory_idempotency_keys`（幂等键占位，M8-T04 / `V1.0.13` / ADR-008）
+
+- **业务用途**：让**差额为 0 的库存操作**也有幂等键载体。盘点调整在 `target == on_hand` 时按
+  `INVENTORY_WORKFLOW §5.5` 步骤 G 不写流水，而 `ck_invtxn_delta_non_zero (qty_delta <> 0)`
+  又使流水表**结构上**无法记录 0 变化 ⇒ 幂等键在这一支上没有载体 ⇒ 同 key 重试会在余额被
+  外部改动后**真落账**（把余额拉回盘点目标值，静默抹掉中间变动；`R76` 实测）。
+- **所属模块 / 写入方**：`inventory`（`InventoryWriteService` 差额 0 分支）。
+- **与 `inventory_transactions` 互斥**：差额 ≠ 0 只写流水、差额 = 0 只写本表
+  （ADR-008 §4）⇒ 不存在「两个载体必须永远同步」的新不变式。
+- **公共审计字段**：集合 B（**无 `updated_at`、无 `version`**）；只 INSERT，永不 UPDATE / DELETE。
+- **无外键**：与 `inventory_transactions` 同款取舍（`DATABASE_CONSTRAINTS §3.3` ④）。
+
+| 字段名 | 类型 | 可空 | 默认值 | 含义 | 更新规则 |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `BIGINT UNSIGNED` | 否 | AUTO_INCREMENT | 主键 | 不可变 |
+| `team_id` | `BIGINT UNSIGNED` | 否 | — | 团队 ID | 不可变 |
+| `idempotency_key` | `VARCHAR(128)` | 否 | — | 幂等键（`§5.10` 一般式 + 必填后缀） | 不可变 |
+| `txn_type` | `VARCHAR(32)` | 否 | — | 事务类型（六值之一） | 不可变 |
+| `biz_type` | `VARCHAR(32)` | 否 | — | 业务来源（与 `txn_type` 正交） | 不可变 |
+| `biz_ref_id` | `BIGINT UNSIGNED` | 是 | NULL | 业务单据 ID（多态） | 不可变 |
+| `sku_id` | `BIGINT UNSIGNED` | 否 | — | SKU ID | 不可变 |
+| `warehouse_id` | `BIGINT UNSIGNED` | 否 | — | 仓库 ID | 不可变 |
+| `content_hash` | `CHAR(64)` | 否 | — | `sha256(txn_type\|biz_type\|biz_ref_id\|sku\|wh\|qty)` | 不可变 |
+| `result_kind` | `VARCHAR(16)` | 否 | — | `NO_CHANGE`（差额 0）｜`TXN`（预留） | 不可变 |
+| `created_at` | `DATETIME(3)` | 否 | — | 登记时间（UTC） | 不可变 |
+| `created_by` | `BIGINT UNSIGNED` | 是 | NULL | 操作人 | 不可变 |
+
+索引：`PRIMARY (id)`、`uk_invidem_team_key (team_id, idempotency_key)`（幂等唯一性载体）、
+`idx_invidem_created (team_id, created_at)`（预留清理用，ADR-008 §5.1 的 `R197`）。
+
+> ★ `content_hash` **必须包含数量**：否则「同 key 换 target」会被判为同内容而静默重放，
+> 等于把 `R76` 的危害从「静默落账」换成「静默忽略」。比对字段沿用 `R75` 口径（不含 `reason`）。
+
 ### 5.11 `sales_daily`（日销售）
 
 - **业务用途**：日粒度销售事实，是 `D`（`§10.1`）与滞销/异常规则的唯一数据源。

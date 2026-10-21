@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code DATABASE_DESIGN §5.16/§5.17/§7.4} 与
  * {@code DATABASE_CONSTRAINTS #18 / §3.2 #36–#42 / §4.1–§4.3 / §5.2 #18–#23}：
  * <ul>
- *   <li>迁移链到 {@code V1.0.12} 共 13 条；两表存在，关键列类型/可空/默认值正确；</li>
+ *   <li>迁移链到 {@code V1.0.13} 共 14 条；两表存在，关键列类型/可空/默认值正确；</li>
  *   <li>{@code replenishment_items} = 集合 A + {@code version}（{@code int unsigned NOT NULL}）；
  *       {@code replenishment_reviews} = 集合 B，且<b>没有</b> {@code updated_at}/{@code updated_by}/{@code version}；</li>
  *   <li>{@code uk_repl_run_sku_wh} = (run_id, sku_id, warehouse_id) 且<b>不含 team_id</b>（R89）；</li>
@@ -128,7 +128,7 @@ class ReplenishmentSchemaConstraintTest {
     // =====================================================================
 
     @Test
-    @DisplayName("T1 迁移链到 V1.0.12（13 条）：两表存在，关键列类型/可空/默认值正确")
+    @DisplayName("T1 迁移链到 V1.0.13（14 条）：两表存在，关键列类型/可空/默认值正确")
     void migrationAppliesThroughV110AndCreatesBothTables() throws Exception {
         List<String> tables = queryStrings("SELECT table_name FROM information_schema.tables "
                 + "WHERE table_schema = DATABASE()");
@@ -138,9 +138,9 @@ class ReplenishmentSchemaConstraintTest {
         List<String> versions = queryStrings(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank");
         assertEquals(List.of("1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5",
-                        "1.0.6", "1.0.7", "1.0.8", "1.0.9", "1.0.10", "1.0.11", "1.0.12"),
-                versions, "应应用 V1.0.0 → V1.0.12 共 13 条迁移（V1.0.10 = M5-T01 replenishment，"
-                        + "V1.0.11 = M6-T01 purchasing，V1.0.12 = M6-T02-D R165 锚点锁索引）");
+                        "1.0.6", "1.0.7", "1.0.8", "1.0.9", "1.0.10", "1.0.11", "1.0.12", "1.0.13"),
+                versions, "应应用 V1.0.0 → V1.0.13 共 14 条迁移（V1.0.10 = M5-T01 replenishment，"
+                        + "V1.0.11 = M6-T01 purchasing，V1.0.12 = M6-T02-D R165 锚点锁索引，V1.0.13 = M8-T04 ADR-008 幂等键占位表）");
 
         // 关键列类型（§5.16 / §5.17 / §14.2）
         assertEquals("int unsigned", columnType("replenishment_items", "version"),

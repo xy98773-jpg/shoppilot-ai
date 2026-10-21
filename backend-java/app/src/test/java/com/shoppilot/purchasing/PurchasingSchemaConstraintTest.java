@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>覆盖 C1–C7：
  * <ul>
- *   <li>四表存在、迁移版本 <b>13</b>（V1.0.0 → V1.0.12）；</li>
+ *   <li>四表存在、迁移版本 <b>14</b>（V1.0.0 → V1.0.13）；</li>
  *   <li>★ <b>两个幂等键 NULL 性相反</b>：{@code purchase_orders.idempotency_key} 可空、
  *       {@code goods_receipts.idempotency_key} <b>NOT NULL</b>；</li>
  *   <li>★ {@code goods_receipt_items} <b>无</b> {@code updated_at}/{@code updated_by}/{@code version}
@@ -126,9 +126,9 @@ class PurchasingSchemaConstraintTest {
 
         List<String> versions = queryStrings(
                 "SELECT version FROM flyway_schema_history WHERE success = 1 ORDER BY installed_rank");
-        assertEquals(13, versions.size(), "应应用 V1.0.0 → V1.0.12 共 13 条迁移");
-        assertEquals("1.0.12", versions.get(12),
-                "最新一条应为 V1.0.12（M6-T02-D R165 锚点锁索引）");
+        assertEquals(14, versions.size(), "应应用 V1.0.0 → V1.0.13 共 14 条迁移");
+        assertEquals("1.0.13", versions.get(13),
+                "最新一条应为 V1.0.13（M8-T04 ADR-008 幂等键占位表）");
 
         // ★ 两个幂等键 NULL 性相反
         assertEquals("YES", columnNullable("purchase_orders", "idempotency_key"),

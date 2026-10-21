@@ -16,13 +16,18 @@ import com.shoppilot.inventory.domain.InventoryBizType;
 import com.shoppilot.inventory.domain.InventoryTxnType;
 import com.shoppilot.inventory.infrastructure.persistence.InventoryBalanceUpdater;
 import com.shoppilot.inventory.infrastructure.persistence.entity.InventoryBalanceEntity;
+import com.shoppilot.inventory.infrastructure.persistence.entity.InventoryIdempotencyKeyEntity;
 import com.shoppilot.inventory.infrastructure.persistence.entity.InventoryTransactionEntity;
 import com.shoppilot.inventory.infrastructure.persistence.mapper.InventoryBalanceMapper;
+import com.shoppilot.inventory.infrastructure.persistence.mapper.InventoryIdempotencyKeyMapper;
 import com.shoppilot.inventory.infrastructure.persistence.mapper.InventoryBalanceMapper.BalanceDelta;
 import com.shoppilot.inventory.infrastructure.persistence.mapper.InventoryBalanceMapper.BalanceKey;
 import com.shoppilot.inventory.infrastructure.persistence.mapper.InventoryTransactionMapper;
 import com.shoppilot.inventory.infrastructure.persistence.mapper.InventoryTransactionMapper.TxnInsertRow;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -149,6 +154,8 @@ public class InventoryWriteService {
 
     private final InventoryBalanceMapper balanceMapper;
     private final InventoryTransactionMapper transactionMapper;
+    /** M8-T04（ADR-008 / R76）：差额 0 的幂等键占位表。 */
+    private final InventoryIdempotencyKeyMapper idempotencyKeyMapper;
     private final InventoryBalanceUpdater balanceUpdater;
     private final AuditWriteService auditWriteService;
     private final TransactionTemplate attemptTemplate;
@@ -157,9 +164,11 @@ public class InventoryWriteService {
                                  InventoryTransactionMapper transactionMapper,
                                  InventoryBalanceUpdater balanceUpdater,
                                  AuditWriteService auditWriteService,
-                                 PlatformTransactionManager transactionManager) {
+                                 PlatformTransactionManager transactionManager,
+                                 InventoryIdempotencyKeyMapper idempotencyKeyMapper) {
         this.balanceMapper = balanceMapper;
         this.transactionMapper = transactionMapper;
+        this.idempotencyKeyMapper = idempotencyKeyMapper;
         this.balanceUpdater = balanceUpdater;
         this.auditWriteService = auditWriteService;
         this.attemptTemplate = new TransactionTemplate(transactionManager);
@@ -656,6 +665,13 @@ public class InventoryWriteService {
         }
         BigDecimal delta = QtyUtils.subtract(targetQty, balance.onHandQty());
         if (delta.signum() == 0) {
+            // ★ M8-T04（ADR-008 / R76）：差额 0 时【登记幂等键占位】再返回。
+            //   §5.5 步骤 G 的「不写流水」保持不变（流水表结构上也无法记 0 变化，
+            //   ck_invtxn_delta_non_zero 会拒）；但幂等键必须有载体——否则同 key 重试
+            //   在余额被外部改动后会「真落账」，把余额拉回盘点目标值（R76 实测）。
+            //   数量用 targetQty（与上面 replayIfIdempotent 传入的 targetBased 值同源）
+            recordNoChangeIdempotency(InventoryTxnType.COUNT_ADJUST, InventoryBizType.COUNT, bizRefId,
+                    balance, targetQty, key);
             return new StockChangeResult(null, InventoryTxnType.COUNT_ADJUST.name(),
                     InventoryBizType.COUNT.name(), BigDecimal.ZERO.setScale(QtyUtils.SCALE),
                     balance.onHandQty(), balance.onHandQty(), balance.version(),
@@ -803,9 +819,99 @@ public class InventoryWriteService {
                                                  BigDecimal deltaOrTarget, boolean targetBased,
                                                  String key, BalanceRow balance) {
         InventoryTransactionEntity existing = transactionMapper.selectByIdempotencyKey(key);
-        if (existing == null) {
+        if (existing != null) {
+            return assertSameContentAndReplay(existing, txnType, bizType, bizRefId, skuId, warehouseId,
+                    deltaOrTarget, targetBased, key, balance);
+        }
+        // ★ M8-T04 第 ② 步（ADR-008）：查流水没命中 ⇒ 可能是「差额 0 已占位」。
+        //   这【只新增一种可能命中】，不改变任何既有分支：未命中则照旧返回 null 继续写。
+        InventoryIdempotencyKeyEntity placeholder = idempotencyKeyMapper.selectByKey(key);
+        if (placeholder == null) {
             return null;
         }
+        if (!contentHashOf(txnType, bizType, bizRefId, skuId, warehouseId, deltaOrTarget)
+                .equals(placeholder.getContentHash())) {
+            // 同 key 不同内容（含【数量不同】）⇒ 与流水侧的 INV-5003 同口径
+            throw new BizException(ErrorCodes.INV_5003, "该库存操作已提交，请勿重复提交");
+        }
+        log.debug("幂等键命中无变更占位（ADR-008）：key={}", key);
+        return new StockChangeResult(null, txnType.name(), bizType.name(),
+                BigDecimal.ZERO.setScale(QtyUtils.SCALE), balance == null ? null : balance.onHandQty(),
+                balance == null ? null : balance.onHandQty(),
+                balance == null ? null : balance.version(), LocalDateTime.now(ZoneOffset.UTC), true);
+    }
+
+    /**
+     * 登记「差额 0」的幂等键占位（M8-T04 / ADR-008 §4）。
+     *
+     * <p><b>不写流水</b>（§5.5 步骤 G 不变），只在 {@code inventory_idempotency_keys} 留一行。
+     * 与流水表<b>互斥</b>：差额 ≠ 0 的路径根本不调本方法。
+     *
+     * <p>并发：两个请求同时发现差额 0 ⇒ 双方都 INSERT ⇒
+     * {@code uk_invidem_team_key} 让其一失败。其一捕获后<b>按重放处理</b>（返回成功），
+     * 而不是把「并发重复」暴露成错误——这与流水侧 {@code writeChange} 的
+     * {@code DuplicateKeyException} → 重放 是同一口径。
+     */
+    private void recordNoChangeIdempotency(InventoryTxnType txnType, InventoryBizType bizType,
+                                           Long bizRefId, BalanceRow balance,
+                                           BigDecimal quantity, String key) {
+        InventoryIdempotencyKeyEntity row = new InventoryIdempotencyKeyEntity();
+        row.setTeamId(currentTeamId());
+        row.setIdempotencyKey(key);
+        row.setTxnType(txnType.name());
+        row.setBizType(bizType.name());
+        row.setBizRefId(bizRefId);
+        row.setSkuId(balance.skuId());
+        row.setWarehouseId(balance.warehouseId());
+        row.setContentHash(contentHashOf(txnType, bizType, bizRefId, balance.skuId(),
+                balance.warehouseId(), quantity));
+        row.setResultKind("NO_CHANGE");
+        row.setCreatedAt(LocalDateTime.now(ZoneOffset.UTC));
+        row.setCreatedBy(currentOperatorId());
+        try {
+            idempotencyKeyMapper.insert(row);
+        } catch (DuplicateKeyException ex) {
+            log.debug("幂等键占位并发冲突，按重放处理：key={}", key);
+        }
+    }
+
+    /**
+     * 内容哈希（M8-T04 / ADR-008 §5.3）：{@code sha256(txn_type|biz_type|biz_ref_id|sku|wh|qty)}。
+     *
+     * <p>★ 必含<b>数量</b>：否则「同 key 换 target」会被误判为同内容而当成纯重放
+     * ——那等于把 {@code R76} 的危害从「静默落账」换成「静默忽略」，问题没解决。
+     *
+     * <p>★ 不含 {@code reason}（{@code R75} 口径）：{@code reason} 相同与否不影响库存效果。
+     *
+     * <p>字段用 {@code |} 分隔且各字段先做 {@code null → ""} 归一，避免
+     * 「{@code null} 与空串拼接后相同」造成的哈希碰撞。
+     */
+    private static String contentHashOf(InventoryTxnType txnType, InventoryBizType bizType,
+                                        Long bizRefId, Long skuId, Long warehouseId,
+                                        BigDecimal quantity) {
+        String raw = txnType.name() + "|" + bizType.name() + "|" + (bizRefId == null ? "" : bizRefId)
+                + "|" + (skuId == null ? "" : skuId) + "|" + (warehouseId == null ? "" : warehouseId)
+                + "|" + (quantity == null ? "" : QtyUtils.of(quantity).toPlainString());
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(raw.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(64);
+            for (byte b : digest) {
+                sb.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+            }
+            return sb.toString();
+        } catch (NoSuchAlgorithmException ex) {
+            // SHA-256 是 JDK 必备算法；真缺了说明运行环境异常，宁可炸也不能悄悄放行幂等
+            throw new BizException(ErrorCodes.COM_0002, "系统繁忙，请稍后重试");
+        }
+    }
+
+    /** 流水侧命中的既有内容判定（ADR-008 后从 {@code replayIfIdempotent} 原样抽出）。 */
+    private StockChangeResult assertSameContentAndReplay(InventoryTransactionEntity existing,
+                                                         InventoryTxnType txnType, InventoryBizType bizType,
+                                                         Long bizRefId, Long skuId, Long warehouseId,
+                                                         BigDecimal deltaOrTarget, boolean targetBased,
+                                                         String key, BalanceRow balance) {
         boolean sameContent = txnType.name().equals(existing.getTxnType())
                 && bizType.name().equals(existing.getBizType())
                 && Objects.equals(existing.getBizRefId(), bizRefId)

@@ -87,10 +87,10 @@ sep
 log "[6] Flyway 迁移版本"
 MIG=$(docker exec shoppilot-dev-mysql-1 mysql -ushoppilot -pchangeme_app_password shoppilot \
         --default-character-set=utf8mb4 -N -B -e "SELECT COUNT(*) FROM flyway_schema_history WHERE success=1" 2>/dev/null)
-chk "6 成功迁移数" "13" "$MIG"
+chk "6 成功迁移数" "14" "$MIG"
 LATEST=$(docker exec shoppilot-dev-mysql-1 mysql -ushoppilot -pchangeme_app_password shoppilot \
         --default-character-set=utf8mb4 -N -B -e "SELECT version FROM flyway_schema_history WHERE success=1 ORDER BY installed_rank DESC LIMIT 1" 2>/dev/null)
-chk "6 最新版本" "1.0.12" "$LATEST"
+chk "6 最新版本" "1.0.13" "$LATEST"
 sep
 
 # ---- 7. down → up 数据保留（可选）----

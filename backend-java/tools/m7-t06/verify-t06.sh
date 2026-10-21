@@ -109,20 +109,20 @@ chk "5 healthy 服务数" "5" "$HEALTHY"
 sep
 
 # ---- 6. 迁移成功（全新库必须 13 个、末号 1.0.12）----
-log "[6] Flyway 迁移（全新库从零执行）"
+log "[6] Flyway 迁移（全新库从零执行；V1.0.13 = M8-T04 幂等键占位表）"
 # ★ 口令必须从 clone 的 deploy/.env 读：.env.example 的占位口令是 CHANGE_ME_app_password，
 #   与 dev 栈 compose 内联默认 changeme_app_password 不同——用错口令时 mysql 静默失败，
 #   会把「连不上」误显示成「迁移数为空」（本批踩过）。
 MP=$(grep -m1 '^MYSQL_PASSWORD=' "$CLONE/deploy/.env" | cut -d= -f2-)
 MIG=$(docker exec "$PROJ-mysql-1" mysql -ushoppilot -p"$MP" shoppilot \
       --default-character-set=utf8mb4 -N -B -e "SELECT COUNT(*) FROM flyway_schema_history WHERE success=1" 2>/dev/null)
-chk "6 成功迁移数" "13" "$MIG"
+chk "6 成功迁移数" "14" "$MIG"
 LATEST=$(docker exec "$PROJ-mysql-1" mysql -ushoppilot -p"$MP" shoppilot \
         --default-character-set=utf8mb4 -N -B -e "SELECT version FROM flyway_schema_history WHERE success=1 ORDER BY installed_rank DESC LIMIT 1" 2>/dev/null)
-chk "6 最新版本" "1.0.12" "$LATEST"
+chk "6 最新版本" "1.0.13" "$LATEST"
 TABLES=$(docker exec "$PROJ-mysql-1" mysql -ushoppilot -p"$MP" shoppilot \
         --default-character-set=utf8mb4 -N -B -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='shoppilot'" 2>/dev/null)
-chk_gt "6 建出的业务表数" "16" "$TABLES"
+chk_gt "6 建出的业务表数" "24" "$TABLES"
 sep
 
 # ---- 7. 对外入口与内网隔离 ----

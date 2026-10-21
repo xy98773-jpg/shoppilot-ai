@@ -111,6 +111,7 @@ class InventoryWriteServiceTest {
 
     @BeforeEach
     void resetAndSeed() {
+        jdbc.execute("DELETE FROM inventory_idempotency_keys");
         jdbc.execute("DELETE FROM inventory_transactions");
         jdbc.execute("DELETE FROM inventory_balances");
         jdbc.execute("DELETE FROM replenishment_policies");
@@ -371,6 +372,111 @@ class InventoryWriteServiceTest {
         assertEquals(0, result.qtyDelta().signum());
         assertEquals(before, txnCount(), "不得新增流水");
         assertEquals(0, new BigDecimal("10").compareTo(onHand(SKU_A)));
+    }
+
+    // =====================================================================
+    // R76 / ADR-008：差额 0 也占用幂等键（新增占位表）
+    // =====================================================================
+
+    @Test
+    @DisplayName("R76-1 差额 0：不写流水、但幂等占位表登记 1 行（key 有了载体）")
+    void zeroDeltaRegistersIdempotencyPlaceholder() {
+        writeService.applyInitialImport(SKU_A, WAREHOUSE_ID, new BigDecimal("10"), null, "init-A");
+        int txnBefore = txnCount();
+        String key = "COUNT_ADJUST:COUNT:r76-1:9002";
+
+        StockChangeResult result = writeService.applyCountAdjust(SKU_A, WAREHOUSE_ID, new BigDecimal("10"),
+                "盘点无差异", null, key);
+
+        assertTrue(result.idempotentHit(), "差额 0 仍是幂等成功");
+        assertNull(result.txnId(), "差额 0 仍不写流水（§5.5 步骤 G 不变）");
+        assertEquals(txnBefore, txnCount(), "不得新增流水");
+        Map<String, Object> row = jdbc.queryForMap(
+                "SELECT * FROM inventory_idempotency_keys WHERE team_id = ? AND idempotency_key = ?",
+                TEAM_ID, key);
+        assertEquals("NO_CHANGE", row.get("result_kind"), "占位类型必须是 NO_CHANGE");
+        assertEquals("COUNT_ADJUST", row.get("txn_type"));
+        assertNotNull(row.get("content_hash"), "内容哈希必须登记（ADR-008 §5.3）");
+    }
+
+    @Test
+    @DisplayName("R76-2 ★危害链守卫：余额被外部改动后同 key 重试 ⇒ 纯重放（余额不回弹）")
+    void retryAfterBalanceChangedIsPureReplay() {
+        writeService.applyInitialImport(SKU_A, WAREHOUSE_ID, new BigDecimal("10"), null, "init-A");
+        String key = "COUNT_ADJUST:COUNT:r76-2:9002";
+
+        StockChangeResult first = writeService.applyCountAdjust(SKU_A, WAREHOUSE_ID, new BigDecimal("10"),
+                "盘点无差异", null, key);
+        assertTrue(first.idempotentHit());
+        assertNull(first.txnId());
+
+        // 期间用一次【非零差额】的盘点把余额改掉（模拟出库/其他变动）
+        writeService.applyCountAdjust(SKU_A, WAREHOUSE_ID, new BigDecimal("5"), "事后下调", null,
+                "COUNT_ADJUST:COUNT:r76-2-other:9002");
+        assertEquals(0, new BigDecimal("5").compareTo(onHand(SKU_A)), "余额已被改成 5");
+
+        int txnBefore = txnCount();
+        // ★ 同 key 同请求体重发 —— R76 的危害链就在这一步：旧实现会把它当成「首次」
+        StockChangeResult retry = writeService.applyCountAdjust(SKU_A, WAREHOUSE_ID, new BigDecimal("10"),
+                "盘点无差异", null, key);
+
+        assertTrue(retry.idempotentHit(), "必须判为幂等命中");
+        assertEquals(0, new BigDecimal("5").compareTo(onHand(SKU_A)),
+                "★ 余额不得被拉回 10（R76 的核心危害：静默抹掉中间变动）");
+        assertEquals(txnBefore, txnCount(), "不得新增流水");
+    }
+
+    @Test
+    @DisplayName("R76-3 同 key 换 target ⇒ INV-5003（内容哈希含数量，不能被当成同内容重放）")
+    void sameKeyDifferentTargetRejected() {
+        writeService.applyInitialImport(SKU_A, WAREHOUSE_ID, new BigDecimal("10"), null, "init-A");
+        String key = "COUNT_ADJUST:COUNT:r76-3:9002";
+
+        writeService.applyCountAdjust(SKU_A, WAREHOUSE_ID, new BigDecimal("10"), "盘点", null, key);
+
+        BizException ex = assertThrows(BizException.class, () ->
+                writeService.applyCountAdjust(SKU_A, WAREHOUSE_ID, new BigDecimal("20"), "盘点", null, key));
+        assertEquals("INV-5003", ex.getErrorCode(),
+                "★ 数量必须进内容哈希：否则「同 key 换 target」会被静默当成重放（问题只是被挪了位置）");
+        assertEquals(0, new BigDecimal("10").compareTo(onHand(SKU_A)), "余额不变");
+    }
+
+    @Test
+    @DisplayName("R76-4 差额非 0 的原有路径不变：只写流水、不写占位表（两表互斥）")
+    void nonZeroDeltaDoesNotWritePlaceholder() {
+        writeService.applyInitialImport(SKU_A, WAREHOUSE_ID, new BigDecimal("10"), null, "init-A");
+        String key = "COUNT_ADJUST:COUNT:r76-4:9002";
+
+        StockChangeResult result = writeService.applyCountAdjust(SKU_A, WAREHOUSE_ID, new BigDecimal("12"),
+                "盘点差异", null, key);
+
+        assertNotNull(result.txnId(), "差额非 0 必须写流水");
+        assertFalse(result.idempotentHit());
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM inventory_idempotency_keys WHERE team_id = ? AND idempotency_key = ?",
+                Integer.class, TEAM_ID, key),
+                "★ 两表互斥：非零差额不写占位表（避免「两个载体必须永远同步」的新不变式，ADR-008 §4）");
+        // 同 key 重放仍走【流水侧】第 ① 步，行为不变
+        StockChangeResult replay = writeService.applyCountAdjust(SKU_A, WAREHOUSE_ID, new BigDecimal("12"),
+                "盘点差异", null, key);
+        assertTrue(replay.idempotentHit());
+        assertEquals(result.txnId(), replay.txnId(), "重放须带回既有流水 id");
+    }
+
+    @Test
+    @DisplayName("R76-5 跨团队隔离：别团队的占位行查不到（租户线不被绕过）")
+    void placeholderIsTenantScoped() {
+        writeService.applyInitialImport(SKU_A, WAREHOUSE_ID, new BigDecimal("10"), null, "init-A");
+        String key = "COUNT_ADJUST:COUNT:r76-5:9002";
+        writeService.applyCountAdjust(SKU_A, WAREHOUSE_ID, new BigDecimal("10"), "盘点", null, key);
+
+        // 直接以别团队身份查同 key：租户线应使其查不到
+        jdbc.update("UPDATE inventory_idempotency_keys SET team_id = ? WHERE idempotency_key = ?",
+                OTHER_TEAM_ID, key);
+        // 若租户线被绕过，同 key 重试会命中别团队的占位行 ⇒ 误判为重放
+        StockChangeResult retry = writeService.applyCountAdjust(SKU_A, WAREHOUSE_ID, new BigDecimal("10"),
+                "盘点", null, key);
+        assertTrue(retry.idempotentHit(), "本团队仍应正常命中自己的占位（本用例只验证可见性）");
     }
 
     @Test

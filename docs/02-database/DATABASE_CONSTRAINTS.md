@@ -355,7 +355,8 @@ ALTER TABLE purchase_order_items
 | `ck_invtxn_consistency` | `inventory_transactions` | `qty_after = qty_before + qty_delta` | `§6-C.2` | **流水自证**，对账的第一道防线 |
 | `ck_invtxn_before_non_negative` | `inventory_transactions` | `qty_before >= 0` | `D-08` | — |
 | `ck_invtxn_after_non_negative` | `inventory_transactions` | `qty_after >= 0` | `D-08` | — |
-| `ck_invtxn_delta_non_zero` | `inventory_transactions` | `qty_delta <> 0` | 业务 | 0 变更不应产生流水 |
+| `ck_invtxn_delta_non_zero` | `inventory_transactions` | `qty_delta <> 0` | 业务 | 0 变更不应产生流水。★ 差额 0 的**幂等占位**改由 `inventory_idempotency_keys` 承载（`V1.0.13` / `ADR-008` / `R76`），**本约束不放宽** |
+| `ck_invidem_result_kind` | `inventory_idempotency_keys` | `result_kind IN ('NO_CHANGE','TXN')` | `ADR-008 §2` | 占位类型白名单；`NO_CHANGE`=差额 0 无流水，`TXN`=预留 |
 | `ck_poi_ordered_positive` | `purchase_order_items` | `ordered_qty > 0` | 业务 | 0 数量的明细无意义 |
 | `ck_poi_received_range` | `purchase_order_items` | `received_qty >= 0 AND received_qty <= ordered_qty` | `§6-I.3`（不允许超额收货） | 应用层校验返回 `PO-9002`，DB 兜底 |
 | `ck_gri_received_positive` | `goods_receipt_items` | `received_qty > 0` | 业务 | 到货明细数量必须为正 |
