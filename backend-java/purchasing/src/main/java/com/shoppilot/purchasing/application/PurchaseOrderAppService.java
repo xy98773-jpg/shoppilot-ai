@@ -276,7 +276,10 @@ public class PurchaseOrderAppService {
      * {@code remark}（≤500）/ 明细行（{@code ordered_qty}/{@code unit_price}/
      * {@code expected_arrival_date}，按 {@code purchase_order_item_id} 定位）。
      * <b>不可改</b>：{@code status}、{@code source}、{@code po_no}、{@code idempotency_key}、
-     * {@code total_*}（服务端同事务重算）。
+     * {@code total_*}（服务端同事务重算）、以及 SSOT 明示不可变的明细列
+     * （{@code line_no}/{@code sku_id}/{@code product_id}/{@code replenishment_item_id}，
+     * {@code DATABASE_DESIGN.md:808}）⇒ <b>本服务不提供增删明细行 / 改 SKU 的能力</b>
+     * （是 SSOT 不可变规则，不是接口缺失；行作废止需 V1.0.13，登记 R174）。
      *
      * <p><b>校验</b>：全字段未传 ⇒ {@code COM-0001}(field=body)；
      * {@code expected_version} 必填（缺失 ⇒ {@code COM-0001}(field=expected_version)；

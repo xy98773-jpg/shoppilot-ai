@@ -23,8 +23,8 @@ import java.time.LocalDateTime;
  * <ul>
  *   <li><b>为什么破例</b>：需把 {@code id} + {@code status=源态} + {@code version} 三个前提并进
  *       <b>同一条 UPDATE</b> 做同语句状态守卫，而 MyBatis-Plus 的 {@code updateById} 只生成
- *       {@code WHERE id=? AND version=?}（缺 {@code status} 条件）⇒ 「读完到更新之间」的
- *       TOCTOU 窗口无法闭合；</li>
+ *       {@code WHERE id=? AND version=?}（缺 {@code status} 条件）⇒ 无法在一条语句里
+ *       同时表达「状态仍为源态」与「版本未变」两个前提；</li>
  *   <li><b>破例后如何保证正确性</b>：显式 {@code .eq(version, 读到的值)} + 手动
  *       {@code set(version, version + 1)}（插件对 {@code entity == null} 不触发，故无重复自增/
  *       漏自增风险），与插件的 {@code WHERE version=? SET version=version+1} 语义逐字等价

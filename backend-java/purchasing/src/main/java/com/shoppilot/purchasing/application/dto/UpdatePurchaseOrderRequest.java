@@ -14,8 +14,19 @@ import java.util.List;
  * <p>★ <b>明细行口径（本批）</b>：{@code items} 为<b>要修改的行清单</b>（partial）——
  * 每项必须带 {@code purchase_order_item_id}（须属本采购单），只改该行的
  * {@code ordered_qty}/{@code unit_price}/{@code expected_arrival_date}。
- * <b>不提供</b>新增行 / 删除行 / 改 {@code sku_id} 的能力：那需要 SKU 归属校验接口
- * （{@code catalog} 当前无 {@code existsInTeam} 同款方法 ⇒ 需扩 catalog，超出本批授权）。
+ * <b>不提供</b>新增行 / 删除行 / 改 {@code sku_id} 的能力。
+ *
+ * <p>★ <b>理由（SSOT 不可变规则，非接口缺失）</b>：{@code DATABASE_DESIGN.md:808} 明文
+ * {@code purchase_order_id / line_no / sku_id / product_id / replenishment_item_id} <b>不可变</b>，
+ * 仅 {@code ordered_qty / unit_price} 在 {@code DRAFT} 可改、{@code received_qty} 只增不减、
+ * 不物理删除 ⇒ 增删行/改 SKU 自始不在可改集合内（{@code catalog} 的
+ * {@code SkuQueryService#requireInTeam} 存在但本批无需调用——{@code sku_id} 不可变）。
+ *
+ * <p>★ <b>行作废本批不做</b>（R174，P2）：SSOT 的行作废口径是「把 {@code ordered_qty} 改成
+ * 该行 {@code received_qty}」，但 {@code DRAFT} 阶段 {@code received_qty} 恒为 0
+ * （到货确认才累加，而到货要求采购单已 {@code ORDERED}）⇒ 作废即 {@code ordered_qty = 0}，
+ * 会撞 {@code ck_poi_ordered_positive CHECK (ordered_qty > 0)}（{@code V1.0.11:155}）
+ * ⇒ 需独立迁移/口径批次（V1.0.13），本批登记 R174 后不做。
  *
  * <p>★ <b>不可改</b>：{@code status}、{@code source}、{@code po_no}、{@code idempotency_key}、
  * {@code total_qty}/{@code total_amount}/{@code received_qty}（由服务端同事务重算）。

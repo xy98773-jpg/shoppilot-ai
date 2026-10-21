@@ -15,6 +15,24 @@ import java.time.LocalDateTime;
  *
  * <p>★ 本表带 {@code version}（乐观锁）：{@code purchase_order_items.received_qty} 累加是典型丢失更新场景（{@code §6-I}），实体必须带 {@code @Version}。
  *
+ * <p>★ <b>更新口径：默认 {@code updateById(entity)} + 判返回值；{@code update(null, wrapper)}
+ * 默认禁用</b>（那类调用无实体形态，{@code OptimisticLockerInnerInterceptor} 不触发 ⇒
+ * {@code @Version} 被绕过）。权威口径见 {@code common/MultiTenantConfig}。
+ *
+ * <p><b>逐处列明的例外</b>：{@code PurchaseOrderAppService#updateDraft}（M6-T03 A4 草稿编辑）
+ * 逐行改 {@code ordered_qty}/{@code unit_price} 时用 {@code update(null, lambdaUpdate)}：
+ * <ul>
+ *   <li><b>为什么破例</b>：需把 {@code id} + {@code purchase_order_id} 两个定位条件并进同一条
+ *       UPDATE（防跨单篡改），且本方法只改<b>部分列</b>（不动 {@code sku_id}/{@code line_no}/
+ *       {@code product_id}/{@code replenishment_item_id} 等不可变列），实体形态更新无法表达
+ *       「只 set 这几列且其余列保持原值」；</li>
+ *   <li><b>破例后如何保证正确性</b>：手动 {@code set(version, version + 1)}（插件对
+ *       {@code entity == null} 不触发，故无重复自增/漏自增风险），语义与插件等价；</li>
+ *   <li><b>边界</b>：本例外<b>不</b>改 {@code received_qty}（只增不减，由 M6-T05 到货确认写入），
+ *       故 DRAFT 态无「收货并发累加」冲突；本表<b>不设</b>行级 {@code status}，故本表
+ *       <b>无需</b>同语句状态守卫（状态守卫只发生在 {@code purchase_orders} 主体表）。</li>
+ * </ul>
+ *
  * <p>★ <b>{@code team_id} 不接受客户端传入</b>：由租户插件从 {@code TeamContext} 注入；
  * 本表<b>不在</b> {@code TenantTables.WITHOUT_TEAM_ID} 黑名单。
  *
@@ -59,7 +77,13 @@ public class PurchaseOrderItemEntity {
     private Long createdBy;
     /** 更新人（集合 A） */
     private Long updatedBy;
-    /** 乐观锁版本（★ received_qty 累加并发） */
+    /**
+     * 乐观锁版本（★ {@code received_qty} 累加并发）。
+     *
+     * <p>★ <b>自增口径</b>：实体形态更新（{@code updateById(entity)}）由插件自动
+     * {@code SET version = version + 1}；<b>wrapper 形态</b>（{@code update(null, wrapper)}）
+     * 插件<b>不触发</b>，须<b>手动自增</b>。
+     */
     @Version
     private Integer version;
 

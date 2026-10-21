@@ -321,10 +321,11 @@ class PurchaseOrderFlowIntegrationTest {
         long poId = createDraftPo("DRAFT", "10.000", "100.00", 0);
         long lineId = firstLineId(poId);
         String token = login("operator01");
-        // ★ R172：草稿编辑不写审计。按 biz_id 差分断言（登录等系统动作有自己的审计，
-        //   全表计数会误撞——基数钉死为 0，杜绝 0==0 恒真假绿）
-        long auditBefore = auditCount(poId);
-        assertEquals(0L, auditBefore, "基线应为 0 条（本 PO 尚无任何审计）");
+        // ★ R172：草稿编辑不写审计。按 biz_id + action 差分断言（裁定二：限定 action，
+        //   避免同一 biz_id 上其它动作干扰；登录等系统动作有自己的审计，全表计数会误撞）。
+        //   基数钉死为 0，杜绝 0==0 恒真假绿。
+        long auditBefore = auditCount(poId, "PURCHASE_ORDER_CONFIRM");
+        assertEquals(0L, auditBefore, "基线应为 0 条（本 PO 尚无任何采购域审计）");
 
         String body = "{\"expected_version\":0,\"remark\":\"已对齐价格\","
                 + "\"items\":[{\"purchase_order_item_id\":" + lineId + ","
@@ -340,7 +341,8 @@ class PurchaseOrderFlowIntegrationTest {
         assertEquals("20.000", data.get("items").get(0).get("ordered_qty").asText());
         assertEquals("15.0000", data.get("items").get(0).get("unit_price").asText());
         // ★ R172：草稿编辑不得写审计（前后计数不变）
-        assertEquals(auditBefore, auditCount(poId), "草稿编辑不得写审计（R172）");
+        assertEquals(auditBefore, auditCount(poId, "PURCHASE_ORDER_CONFIRM"),
+                "草稿编辑不得写审计（R172）");
     }
 
     // =====================================================================
@@ -640,12 +642,6 @@ class PurchaseOrderFlowIntegrationTest {
     private long auditCount(long bizId, String action) {
         return jdbc.queryForObject(
                 "SELECT COUNT(*) FROM audit_logs WHERE biz_id = ? AND action = ?", Long.class, bizId, action);
-    }
-
-    /** 按 {@code biz_id} 计审计条数（R172 草稿编辑无审计的差分断言用）。 */
-    private long auditCount(long bizId) {
-        return jdbc.queryForObject(
-                "SELECT COUNT(*) FROM audit_logs WHERE biz_id = ?", Long.class, bizId);
     }
 
     private String codeOf(ResponseEntity<String> res) throws Exception {
