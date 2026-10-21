@@ -9,9 +9,18 @@ import java.time.LocalDateTime;
 /**
  * {@code goods_receipt_items} 表映射（{@code DATABASE_DESIGN.md §5.x}；迁移 {@code V1.0.11__purchasing.sql}）。
  *
- * <p>到货单行项目：逐条对应采购明细并记录<b>本次</b>到货数量。★ <b>仅 INSERT</b>：到货单 {@code CONFIRMED} 后不可变，永不 UPDATE / DELETE。
+ * <p>到货单行项目：逐条对应采购明细并记录<b>本次</b>到货数量。★ 到货单 {@code CONFIRMED} 后不可变（只能走冲销 {@code REVERSED}）。
  *
- * <p>★ <b>本表无 {@code version}、无 {@code updated_at}/{@code updated_by}</b>（审计集合 B，{@code DATA_DICTIONARY §4.1}）：到货单 {@code CONFIRMED} 后一切字段冻结（只能走冲销），本表是<b>仅追加</b>表——不要「好心补齐」乐观锁列，那会把只追加表变成可更新表。
+ * <p>★ <b>本表无 {@code version}、无 {@code updated_at}/{@code updated_by}</b>（审计集合 B，{@code DATA_DICTIONARY §4.1}）：到货单 {@code CONFIRMED} 后一切字段冻结（只能走冲销）——不要「好心补齐」乐观锁列，那会把只追加表变成可更新表。
+ *
+ * <p>★ <b>写路径口径（{@code DATABASE_DESIGN §5.21} 更新规则）</b>：
+ * {@code received_qty} / {@code unit_price} / {@code amount} / {@code batch_no} / {@code remark}
+ * 「<b>仅到货单 DRAFT 时可改</b>」⇒ DRAFT 期（登记 / 编辑）允许 {@code insert} 与
+ * <b>受限的</b> {@code update}（按 {@code id} + {@code goods_receipt_id} 双条件定位）；
+ * 但 <b>不得物理删除</b>（SSOT「不物理删除」）⇒ 编辑时「请求未提及的旧行保留」，
+ * 不提供删行能力。
+ * 本表<b>无 {@code version}</b> ⇒ <b>无行级乐观锁</b>；并发保护由父单
+ * {@code goods_receipts} 的 {@code version} CAS 提供（同事务，父单 CAS 失败则整体回滚）。
  *
  * <p>★ <b>{@code team_id} 不接受客户端传入</b>：由租户插件从 {@code TeamContext} 注入；
  * 本表<b>不在</b> {@code TenantTables.WITHOUT_TEAM_ID} 黑名单。
