@@ -16,6 +16,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -49,7 +50,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <h2>覆盖范围（T12a 段，无 T12b）</h2>
  * <ul>
  *   <li><b>A1</b> {@code TEST_STRATEGY §8.1} 第一张表（13 行）→ 扩为 <b>24 个参数</b>
- *       （合法 10 + 非法 14；终态「→任意」按目标态拆开，B0-1 要求）；</li>
+ *       （合法 10 + 非法 14；终态「→任意」按目标态拆开，B0-1 要求）。
+ *       ★ 其中 4 个「到货驱动」合法行只做<b>源态替代断言</b>并记为 SKIPPED
+ *       ⇒ <b>真断通过 = 20 行</b>（6 合法 + 14 非法），台账见 {@code a1CoverageLedger}；</li>
  *   <li><b>A2</b> {@code §8.1} 第二段（{@code ReplenishmentItemStatus}）→
  *       5 个命令 × 7 个状态 = <b>35 个参数</b>全表；另加「驳回未填意见 ⇒ {@code RPL-8005}」；</li>
  *   <li><b>A3</b> 并发 confirm / cancel / order 各一例（两线程，恰好 1 胜）；</li>
@@ -60,18 +63,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <h2>★ 三处口径取舍（均有出处，非自由发挥；详见 {@code M6-T12a} 汇报）</h2>
  * <ol>
  *   <li><b>合法 10 / 非法 3</b>（不是 B0-1 写的 9/4）：出处
- *       {@code TEST_STRATEGY.md:318-332} 的表逐行数即 10 合法 + 3 非法 = 13 行。</li>
+ *       {@code TEST_STRATEGY.md:318-332} 的表逐行数即 10 合法 + 3 非法 = 13 行。
+ *       ★ 项目负责人已裁定（F1）：以 SSOT 为准按 10/3 做，令文「9/4」为笔误。</li>
  *   <li><b>{@code RECEIVED → CANCELLED} 判 {@code PO-9009}（不是 {@code PO-9003}）</b>：
  *       {@code PurchaseOrderAppService#cancel} 先判「已全部到货」再判状态集合
  *       （{@code PurchaseOrderAppService.java:236-238}）；{@code ERROR_CODES.md:231}、
  *       {@code API_CONTRACT.md:601}、{@code PURCHASING_WORKFLOW.md:213/375} 同口径；
- *       既有生产测试 {@code PurchaseOrderFlowIntegrationTest#cancelGuards}（E7）已锁死该行为。</li>
- *   <li><b>4 个「到货驱动」合法行断言在<b>源态</b>侧</b>：{@code ORDERED→PARTIALLY_RECEIVED} /
- *       {@code ORDERED→RECEIVED} / {@code PARTIALLY_RECEIVED→PARTIALLY_RECEIVED} /
- *       {@code PARTIALLY_RECEIVED→RECEIVED} 的目标态唯一生产者是到货<b>确认</b>，
- *       该端点在当前 worktree <b>不存在</b>（{@code GoodsReceiptAppService.java:45}
- *       明写「本批不实现」；{@code GoodsReceiptController} 无 {@code /confirm} 映射），
- *       故本类只断言「到货登记入口接受该源态」并显式标注目标态断言待 T12b 的 R-1/R-2。
+ *       既有生产测试 {@code PurchaseOrderFlowIntegrationTest#cancelGuards}（E7）已锁死该行为。
+ *       ★ 项目负责人已裁定（F2）：该行期望 {@code PO-9009}，其余非法行仍 {@code PO-9003}。</li>
+ *   <li><b>4 个「到货驱动」合法行断言在<b>源态</b>侧，且不计入 A1 通过行数</b>：
+ *       {@code ORDERED→PARTIALLY_RECEIVED} / {@code ORDERED→RECEIVED} /
+ *       {@code PARTIALLY_RECEIVED→PARTIALLY_RECEIVED} / {@code PARTIALLY_RECEIVED→RECEIVED}
+ *       的目标态唯一生产者是到货<b>确认</b>，该端点在当前 worktree <b>不存在</b>
+ *       （{@code GoodsReceiptAppService.java:45} 明写「本批不实现」；{@code GoodsReceiptController}
+ *       无 {@code /confirm} 映射）。故本节做「到货登记入口接受该源态」的替代断言
+ *       （替代断言<b>真跑真断</b>，失败即该用例失败），通过后 {@code Assumptions.abort} 记为
+ *       <b>SKIPPED</b> ⇒ 项目负责人裁定（F3）要求「不得计入 A1 通过行数」在机器层即成立。
  *       对称的非法行（{@code RECEIVED/CANCELLED → PARTIALLY_RECEIVED/RECEIVED} ⇒ 409
  *       {@code PO-9003}）反证「只有这两个源态合法」。</li>
  * </ol>
@@ -312,11 +319,14 @@ class PurchaseOrderStateMachineTableTest {
                 + " | expect=" + expectStatus + "/" + (expectCode == null ? "-" : expectCode)
                 + " | actual=" + actualStatus + "/" + (actualCode == null ? "-" : actualCode)
                 + " | po.status after=" + statusAfter
+                + " | 计入A1通过行数=" + countedAsPass(driver, legal)
                 + " | " + note);
 
         if (legal) {
             if (driver == Driver.RECEIPT) {
-                // 目标态由「到货确认」（T12b）产生：此处只断言「登记入口接受该源态」
+                // ★ 目标态断言由 T12b 承接（项目负责人裁定 F3）：本节只做「源态被正确接受」的替代断言，
+                //   替代断言<b>真跑真断</b>（失败即本用例失败），通过后 abort ⇒ JUnit 记 SKIPPED，
+                //   <b>不计入</b> A1 的「通过行数」。
                 assertEquals(expectStatus, actualStatus, "到货登记应被接受：" + res.getBody());
                 assertEquals(from, statusAfter,
                         "登记到货只建 DRAFT 到货单，不推进 PO 状态（推进在 T12b 的 confirm）");
@@ -325,6 +335,11 @@ class PurchaseOrderStateMachineTableTest {
                         "到货单必须停在 DRAFT（未确认）");
                 assertEquals(1L, countOf("inventory_transactions"),
                         "★ INV-03：登记到货不得写库存流水（种子那 1 条除外）");
+                assertInventoryReconciled(TEAM7, WH7, SKU7);
+                System.out.println("[M6T12-A1] DEFERRED " + from + " -> " + to
+                        + " | 源态替代断言已通过 | 目标态断言待 T12b（POST /receipts/{id}/confirm 未落地）");
+                Assumptions.abort("目标态 " + to + " 待 T12b：到货确认端点 POST /receipts/{id}/confirm "
+                        + "在当前 worktree 未落地（GoodsReceiptAppService.java:45「本批不实现」）");
             } else {
                 assertEquals(expectStatus, actualStatus, "合法转换应成功：" + res.getBody());
                 assertEquals(to, statusAfter, "数据库中的目标状态不符");
@@ -341,12 +356,44 @@ class PurchaseOrderStateMachineTableTest {
         assertInventoryReconciled(TEAM7, WH7, SKU7);
     }
 
+    /**
+     * A1 覆盖度台账（把「计入口径」变成可执行断言，杜绝汇报与实际执行偷偷漂移）。
+     *
+     * <p>★ 项目负责人裁定 F3：4 个「到货驱动」合法行只做源态替代断言，<b>不计入</b> A1 通过行数
+     * （JUnit 记 SKIPPED）⇒ 真断通过 = 24 − 4 = <b>20</b> 行（6 合法 + 14 非法）。
+     */
+    @Test
+    @DisplayName("A1 覆盖度台账：10 合法 + 3 非法 = 13 行 → 24 参数；真断 20，待 T12b 4")
+    void a1CoverageLedger() {
+        List<Arguments> rows = purchaseOrderTransitions().toList();
+        long legal = rows.stream().filter(row -> Boolean.TRUE.equals(row.get()[2])).count();
+        long illegal = rows.size() - legal;
+        long receiptDriven = rows.stream()
+                .filter(row -> Boolean.TRUE.equals(row.get()[2]) && row.get()[3] == Driver.RECEIPT)
+                .count();
+        long asserted = rows.size() - receiptDriven;
+
+        System.out.println("[M6T12-A1] 台账: 参数总数=" + rows.size() + " 合法=" + legal
+                + " 非法=" + illegal + "（3 行展开）| 真断通过=" + asserted
+                + " | 目标态待 T12b（替代断言，不计入通过）=" + receiptDriven);
+
+        assertEquals(24, rows.size(), "§8.1 的 13 行按目标态展开后应为 24 参数");
+        assertEquals(10, legal, "SSOT TEST_STRATEGY.md:320-329 合法 10 行（B0-1 的「9」是令文笔误）");
+        assertEquals(14, illegal, "SSOT 非法 3 行（终态→任意 / DRAFT→ORDERED / PENDING→RECEIVED）展开为 14 参数");
+        assertEquals(4, receiptDriven, "到货驱动的合法行恰为 4 行");
+        assertEquals(20, asserted, "★ A1 真断通过行数 = 20（不含 4 行待 T12b）");
+    }
+
+    /** 该行是否计入 A1「通过行数」：到货驱动的合法行不计（目标态待 T12b）。 */
+    private static boolean countedAsPass(Driver driver, boolean legal) {
+        return !(legal && driver == Driver.RECEIPT);
+    }
+
     // =====================================================================
     // A2 —— 补货建议状态转换表驱动（§8.1 第二段：5 命令 × 7 状态 = 35 参数）
     // =====================================================================
 
     private static final String OK = "OK";
-
     private static Arguments rplRow(String action, String fromStatus, String expect) {
         return Arguments.of(action, fromStatus, expect);
     }
