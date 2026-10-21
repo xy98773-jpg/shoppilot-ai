@@ -189,7 +189,7 @@ flowchart TD
 | 2 | Java（`inventory`） | `applyInbound(skuId, warehouseId, qty, GOODS_RECEIPT, receiptId, idempotencyKey)` | `PURCHASE_INBOUND` 流水 + 余额 | — | 复用步骤 1 事务（`REQUIRED`） | 并发 → `INV-5002`；重复 → `INV-5003` |
 | 3 | Java（`purchasing`） | 本次到货量 | `received_qty` 累加、采购单状态重算 | 采购单 `ORDERED/PARTIALLY_RECEIVED→PARTIALLY_RECEIVED/RECEIVED` | 同事务 | 见 `PURCHASING_WORKFLOW.md §8` |
 
-- **幂等键**：`PURCHASE_INBOUND:GOODS_RECEIPT:<receipt_id>:<sku_id>`（`DATABASE_DESIGN.md §6-I.2`）；粒度按 SKU，一项到货明细对应一条流水。
+- **幂等键**：`PURCHASE_INBOUND:GOODS_RECEIPT:<receipt_id>:<sku_id>:<purchase_order_item_id>`（`DATABASE_DESIGN.md §6-I.2`；后缀**必填**，见 `§5.3` 后缀用途 ③）；粒度按**采购明细行**，一条到货明细行对应一条流水（同 SKU 多行各自独立，`R180`）。
 - **在途扣减**：确认到货时同步减少 `in_transit_qty`（`in_transit_qty` 由采购单驱动，但**不在本流程产生流水**，见 §4）。
 
 ---

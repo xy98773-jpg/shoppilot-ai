@@ -1481,10 +1481,10 @@ replenishment_items.status = 'APPROVED'
 | `inventory_transactions.biz_type` | `GOODS_RECEIPT` |
 | `inventory_transactions.biz_ref_id` | `goods_receipts.id` |
 | `inventory_transactions.biz_ref_no` | `goods_receipts.receipt_no`（冗余，便于免 JOIN 展示） |
-| 幂等键 | `PURCHASE_INBOUND:GOODS_RECEIPT:<receipt_id>:<sku_id>` |
+| 幂等键 | `PURCHASE_INBOUND:GOODS_RECEIPT:<receipt_id>:<sku_id>:<purchase_order_item_id>`（后缀**必填**，见 `§5.3` 后缀用途 ③） |
 | 反查方向 | `idx_invtxn_team_biz (team_id, biz_type, biz_ref_id)` → 由到货单查全部入库流水 |
 
-**粒度说明**：**按 SKU 拆分**，一 SKU 一条流水（而不是一张到货单一条）。理由：流水是**SKU×仓库 的账本**，必须可比对到余额行；一张到货单含多 SKU 时，合并流水会让 `qty_before`/`qty_after` 无法对应单一 SKU 的余额。**一项到货明细 → 一条流水**（`goods_receipt_items` 与 `inventory_transactions` 1:1）。
+**粒度说明**：**按 SKU 拆分**，一 SKU 一条流水（而不是一张到货单一条）。理由：流水是**SKU×仓库 的账本**，必须可比对到余额行；一张到货单含多 SKU 时，合并流水会让 `qty_before`/`qty_after` 无法对应单一 SKU 的余额。★ **粒度基准是「采购明细行」而非「SKU」**：`purchase_order_items` 无 `(po_id, sku_id)` 唯一键 ⇒ 同一到货单可合法出现「同 SKU、不同采购明细行」，故 **一条到货明细行 → 一条流水**（`goods_receipt_items` 与 `inventory_transactions` 1:1），靠 `:<purchase_order_item_id>` 后缀区分（`R180`）。
 
 #### I.3 四个并发/重复问题
 

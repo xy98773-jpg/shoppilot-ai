@@ -102,11 +102,11 @@
 | 项 | 规定 |
 | --- | --- |
 | 键格式 | `<txn_type>:<biz_type>:<biz_ref_id>:<sku_id>[:<suffix>]` |
-| 示例 | `PURCHASE_INBOUND:GOODS_RECEIPT:1024:5501`（到货单 1024 的 SKU 5501 入库） |
+| 示例 | `PURCHASE_INBOUND:GOODS_RECEIPT:1024:5501:8801`（到货单 1024 的**采购明细行 8801** 的 SKU 5501 入库）<br>★ `PURCHASE_INBOUND` 的后缀 `:<purchase_order_item_id>` 是**必填**（理由见 `DATABASE_DESIGN §5.3` 后缀用途 ③） |
 | 盘点/手工调整 | 追加 `<operator_id>:<yyyyMMddHHmmss>` 后缀（人工操作每次都是一次新事件） |
 | **禁止** | 使用 `UUID` / 随机数作幂等键——那样永不冲突，等于没有幂等 |
 | 冲突判定 | 命中唯一约束后**比较请求指纹**（`txn_type` + `qty_delta` + `biz_ref_id`）：一致 → 返回原流水（HTTP 200）；不一致 → `INV-5003`（HTTP 409） |
-| 与业务单据的关系 | 同一到货单同一 SKU **只能**产生一条 `PURCHASE_INBOUND` 流水；冲销用 `REVERSAL:<receipt_id>:<sku_id>` 也是幂等的 |
+| 与业务单据的关系 | 同一到货单的同一**采购明细行**只能产生一条 `PURCHASE_INBOUND` 流水（同 SKU 多行各自独立，靠 `:<purchase_order_item_id>` 后缀区分）；冲销用 `REVERSAL:<receipt_id>:<sku_id>` 也是幂等的 |
 
 #### 幂等 3：分析任务幂等（业务键 + 状态守卫）
 

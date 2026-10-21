@@ -200,7 +200,8 @@ public class InventoryWriteService {
      *
      * @param bizType        业务来源（须为 {@link InventoryBizType} 成员，到货通常为 {@code GOODS_RECEIPT}）
      * @param bizRefId       业务单据 ID（到货单 ID）
-     * @param idempotencyKey 幂等键（{@code §5.3}：{@code PURCHASE_INBOUND:GOODS_RECEIPT:<receiptId>:<skuId>}）
+     * @param idempotencyKey 幂等键（{@code §5.3}：{@code <txn_type>:<biz_type>:<biz_ref_id>:<sku_id>[:<suffix>]}；
+     *                       {@code PURCHASE_INBOUND} 的后缀 {@code :<purchaseOrderItemId>} 必填，见 {@code R180}）
      * @throws BizException {@code INV-5003} / {@code INV-5002}
      */
     @Transactional(propagation = Propagation.REQUIRED, isolation = Isolation.READ_COMMITTED,

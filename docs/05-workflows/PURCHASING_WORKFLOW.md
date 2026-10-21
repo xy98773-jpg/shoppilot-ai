@@ -359,8 +359,8 @@ MIN(received_qty / ordered_qty) = 1  →  RECEIVED
 | `biz_type` | `GOODS_RECEIPT` |
 | `biz_ref_id` | `goods_receipts.id` |
 | `biz_ref_no` | `goods_receipts.receipt_no`（冗余，免 JOIN） |
-| 幂等键 | `PURCHASE_INBOUND:GOODS_RECEIPT:<receipt_id>:<sku_id>` |
-| 粒度 | **一项到货明细 → 一条流水**（按 SKU 拆，`goods_receipt_items` 与 `inventory_transactions` **1:1**） |
+| 幂等键 | `PURCHASE_INBOUND:GOODS_RECEIPT:<receipt_id>:<sku_id>:<purchase_order_item_id>`（后缀**必填**，见 `DATABASE_DESIGN §5.3` 后缀用途 ③） |
+| 粒度 | **一条到货明细行 → 一条流水**（`goods_receipt_items` 与 `inventory_transactions` **1:1**）；同 SKU 多行各自独立，靠 `:<purchase_order_item_id>` 区分（`R180`） |
 
 > **为何按 SKU 拆流水**：流水是 `SKU×仓库` 的账本，`qty_before`/`qty_after` 必须对应单一 SKU 的余额行。合并成"一张到货单一条流水"会让前后余额无意义。
 
