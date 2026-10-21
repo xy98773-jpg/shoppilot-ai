@@ -108,6 +108,27 @@ public class GoodsReceiptController {
     }
 
     /**
+     * A5 确认到货入库（{@code DRAFT → CONFIRMED}，触发 {@code PURCHASE_INBOUND}）。
+     *
+     * <p>角色 {@code OPERATOR}+（契约 {@code :605}；不足 ⇒ {@code TEAM-2003}）。
+     * <ul>
+     *   <li>到货单不存在 / 跨团队 ⇒ {@code PO-9005}（404）；</li>
+     *   <li>非 {@code DRAFT}（已 {@code CONFIRMED} / {@code CANCELLED}）⇒ {@code PO-9003}（409）；</li>
+     *   <li>采购单非 {@code ORDERED}/{@code PARTIALLY_RECEIVED} ⇒ {@code PO-9003}（409）；</li>
+     *   <li>超额（跨单据累计）⇒ {@code PO-9002}（409，带 {@code details}），<b>且不产生任何库存变更</b>；</li>
+     *   <li>库存余额乐观锁冲突 ⇒ {@code INV-5002}（409）。</li>
+     * </ul>
+     *
+     * @param id 到货单 ID
+     * @return 200 + 确认后的到货单详情（含 {@code confirmed_at}/{@code confirmed_by}）
+     */
+    @PostMapping("/{id}/confirm")
+    @RequireRole(value = {"OWNER", "ADMIN", "OPERATOR", "APPROVER"}, teamIdParam = "")
+    public ResponseEntity<ApiResponse<GoodsReceiptDetail>> confirm(@PathVariable("id") long id) {
+        return ResponseEntity.ok(ApiResponse.success(appService.confirm(id)));
+    }
+
+    /**
      * A4 到货单详情（不存在 / 跨团队 ⇒ {@code PO-9005}）。
      *
      * @param id 到货单 ID

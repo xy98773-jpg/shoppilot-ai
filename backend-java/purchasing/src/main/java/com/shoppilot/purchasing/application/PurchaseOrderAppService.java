@@ -45,6 +45,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -262,6 +263,131 @@ public class PurchaseOrderAppService {
         log.info("采购单已取消 id={} poNo={} from={}", order.getId(), order.getPoNo(), fromStatus);
         return new PurchaseOrderActionResponse(order.getId(), order.getPoNo(), PO_STATUS_CANCELLED,
                 null, null, null, now, reason, order.getVersion() + 1);
+    }
+
+    // =====================================================================
+    // M6-T05 确认到货：明细回写（④）+ 采购单汇总与状态推导（⑤）
+    // =====================================================================
+
+    /**
+     * 确认到货的 ④⑤ 步：{@code purchase_order_items.received_qty += 本次}（悲观锁）
+     * + {@code purchase_orders.received_qty = Σ} 与状态推导（乐观锁 + 状态守卫）。
+     *
+     * <p>★ <b>调用方与事务</b>：由 {@code GoodsReceiptAppService#confirm} 在<b>同一事务</b>内调用
+     * （{@code MODULE_BOUNDARIES §2.9}：{@code confirm} 单事务覆盖「写 {@code goods_receipts} 状态 +
+     * 调用 {@code InventoryWriteService} + 推进 PO 状态 + 校验 {@code PO-9002}」）。
+     * 本方法 {@code REQUIRED} 加入调用方事务，<b>不</b>自行提交/回滚。
+     *
+     * <p>★ <b>锁口径</b>（{@code DATABASE_DESIGN §6-I.3}）：
+     * <ul>
+     *   <li>{@code purchase_order_items.received_qty} 是「读-改-写累加」，批量收货下乐观锁失败率极高
+     *       ⇒ {@code SELECT ... FOR UPDATE} 按 {@code line_no} <b>升序</b>加锁（固定顺序防死锁）；</li>
+     *   <li>{@code purchase_orders} 的汇总 {@code received_qty} 与 {@code status} 用
+     *       <b>乐观锁 {@code version}</b> + 状态守卫（{@code status IN (ORDERED, PARTIALLY_RECEIVED)}）。</li>
+     * </ul>
+     *
+     * <p>★ <b>超额守卫的锁内复核</b>：调用方已在写库存前用未加锁快照校验过一次（保证「超额时不产生
+     * 任何流水」，任务书 A1）；此处持锁再算一次是防 TOCTOU 的兜底。若在此超限，因同一事务 ⇒
+     * 已写入的库存流水与余额随整体回滚，<b>不会留下部分写入</b>。
+     *
+     * <p>★ <b>状态推导</b>（{@code DESIGN_BASIS §9.13} 补充规则 3）：{@code Σ received == Σ ordered}
+     * ⇒ {@code RECEIVED}（终态，同时写 {@code closed_at}）；否则 ⇒ {@code PARTIALLY_RECEIVED}。
+     * <b>用户不能直接设置</b>该状态。
+     *
+     * @param purchaseOrderId  采购单 ID（调用方保证存在且属本团队）
+     * @param receivedByItemId 本次每行到货量（{@code purchase_order_items.id → qty}）
+     * @return 推导后的采购单状态与累计已收量
+     * @throws BizException {@code PO-9002}（锁内复核超额）/ {@code PO-9003}（状态或版本已变）
+     */
+    @Transactional(propagation = Propagation.REQUIRED, rollbackFor = Exception.class)
+    public ReceiptApplyResult applyReceivedQuantities(long purchaseOrderId,
+                                                      Map<Long, BigDecimal> receivedByItemId) {
+        PurchaseOrderEntity order = requireOrder(purchaseOrderId);
+        Long operatorId = currentUserId();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+        // ④-a 悲观锁：按 line_no 升序锁定本单全部明细（固定加锁顺序，防与其它路径交叉死锁）
+        List<PurchaseOrderItemEntity> lines = orderItemMapper.selectList(
+                Wrappers.<PurchaseOrderItemEntity>lambdaQuery()
+                        .eq(PurchaseOrderItemEntity::getPurchaseOrderId, purchaseOrderId)
+                        .orderByAsc(PurchaseOrderItemEntity::getLineNo)
+                        .last("FOR UPDATE"));
+        if (lines.isEmpty()) {
+            throw new BizException(ErrorCodes.PO_9006, "采购单没有明细行，无法确认到货");
+        }
+
+        BigDecimal sumOrdered = BigDecimal.ZERO.setScale(3);
+        BigDecimal sumReceived = BigDecimal.ZERO.setScale(3);
+        for (PurchaseOrderItemEntity line : lines) {
+            BigDecimal ordered = line.getOrderedQty() == null
+                    ? BigDecimal.ZERO.setScale(3) : line.getOrderedQty();
+            BigDecimal current = line.getReceivedQty() == null
+                    ? BigDecimal.ZERO.setScale(3) : line.getReceivedQty();
+            BigDecimal delta = receivedByItemId.getOrDefault(line.getId(), BigDecimal.ZERO);
+            BigDecimal next = current.add(delta);
+
+            // 锁内复核超额（B0-20 跨单据累计；DB 层 ck_poi_received_range 兜底）
+            if (next.compareTo(ordered) > 0) {
+                BigDecimal pending = ordered.subtract(current);
+                if (pending.signum() < 0) {
+                    pending = BigDecimal.ZERO.setScale(3);
+                }
+                throw BizException.withDetails(ErrorCodes.PO_9002, "到货数量超过待收数量",
+                        List.of(new ApiErrorDetail(
+                                "items[" + (line.getLineNo() == null ? 0 : line.getLineNo() - 1)
+                                        + "].received_qty",
+                                "待收数量为 " + pending.setScale(3, RoundingMode.HALF_UP).toPlainString()
+                                        + "，本次登记 " + delta.setScale(3, RoundingMode.HALF_UP).toPlainString(),
+                                delta.setScale(3, RoundingMode.HALF_UP).toPlainString())));
+            }
+
+            // ④-b 逐行累加（只增不减；不动 line_no/sku_id/product_id/replenishment_item_id 等不可变列）
+            if (delta.signum() > 0) {
+                int affected = orderItemMapper.update(null,
+                        Wrappers.<PurchaseOrderItemEntity>lambdaUpdate()
+                                .eq(PurchaseOrderItemEntity::getId, line.getId())
+                                .eq(PurchaseOrderItemEntity::getPurchaseOrderId, purchaseOrderId)
+                                .eq(PurchaseOrderItemEntity::getVersion, line.getVersion())
+                                .set(PurchaseOrderItemEntity::getReceivedQty, next)
+                                .set(PurchaseOrderItemEntity::getVersion, line.getVersion() + 1)
+                                .set(PurchaseOrderItemEntity::getUpdatedBy, operatorId));
+                if (affected == 0) {
+                    throw new BizException(ErrorCodes.PO_9003, "采购明细已被同时修改，请刷新后重试");
+                }
+            }
+            sumOrdered = sumOrdered.add(ordered);
+            sumReceived = sumReceived.add(next);
+        }
+
+        // ⑤ 汇总 + 状态推导（乐观锁 version + 状态守卫：仅 ORDERED / PARTIALLY_RECEIVED 可推进）
+        String fromStatus = order.getStatus();
+        String newStatus = sumReceived.compareTo(sumOrdered) >= 0
+                ? PO_STATUS_RECEIVED : PO_STATUS_PARTIALLY_RECEIVED;
+        LambdaUpdateWrapper<PurchaseOrderEntity> updater =
+                Wrappers.<PurchaseOrderEntity>lambdaUpdate()
+                        .eq(PurchaseOrderEntity::getId, order.getId())
+                        .in(PurchaseOrderEntity::getStatus,
+                                PO_STATUS_ORDERED, PO_STATUS_PARTIALLY_RECEIVED)
+                        .eq(PurchaseOrderEntity::getVersion, order.getVersion())
+                        .set(PurchaseOrderEntity::getReceivedQty, sumReceived)
+                        .set(PurchaseOrderEntity::getStatus, newStatus)
+                        .set(PurchaseOrderEntity::getVersion, order.getVersion() + 1)
+                        .set(PurchaseOrderEntity::getUpdatedBy, operatorId);
+        if (PO_STATUS_RECEIVED.equals(newStatus)) {
+            // §5.18 closed_at：进入终态时间（RECEIVED 为终态）
+            updater.set(PurchaseOrderEntity::getClosedAt, now);
+        }
+        int affected = orderMapper.update(null, updater);
+        if (affected == 0) {
+            throw new BizException(ErrorCodes.PO_9003, "采购单状态已变化，请刷新后重试");
+        }
+        log.info("采购单到货回写 poId={} poNo={} {}→{} received={} ordered={}",
+                order.getId(), order.getPoNo(), fromStatus, newStatus, sumReceived, sumOrdered);
+        return new ReceiptApplyResult(newStatus, sumReceived, fromStatus);
+    }
+
+    /** 到货回写结果（{@code GoodsReceiptAppService#confirm} 用于审计摘要）。 */
+    public record ReceiptApplyResult(String status, BigDecimal receivedQty, String fromStatus) {
     }
 
     /**

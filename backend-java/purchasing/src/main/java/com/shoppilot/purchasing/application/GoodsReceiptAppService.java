@@ -10,6 +10,7 @@ import com.shoppilot.common.context.TeamContext;
 import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
+import com.shoppilot.inventory.application.InventoryWriteService;
 import com.shoppilot.purchasing.application.dto.CreateGoodsReceiptRequest;
 import com.shoppilot.purchasing.application.dto.GoodsReceiptCancelResponse;
 import com.shoppilot.purchasing.application.dto.GoodsReceiptDetail;
@@ -71,6 +72,7 @@ public class GoodsReceiptAppService {
     private static final int UNIT_PRICE_MAX_SCALE = 4;
 
     private static final String STATUS_DRAFT = "DRAFT";
+    private static final String STATUS_CONFIRMED = "CONFIRMED";
     private static final String STATUS_CANCELLED = "CANCELLED";
 
     /** 允许登记到货的采购单源态（{@code DESIGN_BASIS §9.13} 补充规则 3）。 */
@@ -84,17 +86,23 @@ public class GoodsReceiptAppService {
     private final PurchaseOrderQueryService purchaseOrderQueryService;
     private final GoodsReceiptQueryService goodsReceiptQueryService;
     private final AuditWriteService auditWriteService;
+    private final InventoryWriteService inventoryWriteService;
+    private final PurchaseOrderAppService purchaseOrderAppService;
 
     public GoodsReceiptAppService(GoodsReceiptMapper receiptMapper,
                                   GoodsReceiptItemMapper receiptItemMapper,
                                   PurchaseOrderQueryService purchaseOrderQueryService,
                                   GoodsReceiptQueryService goodsReceiptQueryService,
-                                  AuditWriteService auditWriteService) {
+                                  AuditWriteService auditWriteService,
+                                  InventoryWriteService inventoryWriteService,
+                                  PurchaseOrderAppService purchaseOrderAppService) {
         this.receiptMapper = receiptMapper;
         this.receiptItemMapper = receiptItemMapper;
         this.purchaseOrderQueryService = purchaseOrderQueryService;
         this.goodsReceiptQueryService = goodsReceiptQueryService;
         this.auditWriteService = auditWriteService;
+        this.inventoryWriteService = inventoryWriteService;
+        this.purchaseOrderAppService = purchaseOrderAppService;
     }
 
     // =====================================================================
@@ -341,10 +349,164 @@ public class GoodsReceiptAppService {
         Map<String, Object> after = new LinkedHashMap<>();
         after.put("status", STATUS_CANCELLED);
         after.put("cancelled_at", now.toString());
-        recordAudit(receipt.getId(), after, "到货单已作废：" + receipt.getReceiptNo());
+        recordAudit(AuditAction.GOODS_RECEIPT_CANCEL, receipt.getId(), after,
+                "到货单已作废：" + receipt.getReceiptNo());
         return new GoodsReceiptCancelResponse(
                 receipt.getId(), receipt.getReceiptNo(), STATUS_CANCELLED, now,
                 receipt.getVersion() + 1);
+    }
+
+    // =====================================================================
+    // A4' 确认到货入库（M6-T05+T06）
+    // =====================================================================
+
+    /**
+     * 确认到货入库：{@code POST /api/v1/purchasing/receipts/{id}/confirm}。
+     *
+     * <p>角色 {@code OPERATOR}+（{@code API_CONTRACT.md:605} + {@code PURCHASING_WORKFLOW.md:57} 角色矩阵；
+     * ★ <b>不用</b> {@code PO-9010}——那是未来收紧的兜底码，本端点不适用，见 B0-15/B0-16）。
+     *
+     * <p>★ <b>单事务六步</b>（{@code DATABASE_DESIGN.md §6-I.3}「收货后事务失败」行，逐字对齐）：
+     * <ol>
+     *   <li>① {@code goods_receipts.status := 'CONFIRMED'}（同语句状态守卫 {@code status='DRAFT'} +
+     *       乐观锁 {@code version}）；</li>
+     *   <li>② {@code goods_receipt_items} 校验并固化（<b>不新增/不删除明细行</b>，本表无 {@code version}）；</li>
+     *   <li>③ 每条明细调 {@link InventoryWriteService#applyInbound}（幂等键
+     *       {@code PURCHASE_INBOUND:GOODS_RECEIPT:<receiptId>:<skuId>}，按 SKU 1:1）；</li>
+     *   <li>④ {@code purchase_order_items.received_qty += 本次}（<b>悲观锁</b> {@code FOR UPDATE}，
+     *       由 {@link PurchaseOrderAppService#applyReceivedQuantities} 承担）；</li>
+     *   <li>⑤ {@code purchase_orders.received_qty = Σ} 与 {@code status} <b>由明细推导</b>（乐观锁）；</li>
+     *   <li>⑥ {@code audit_logs} 写 {@code GOODS_RECEIPT_CONFIRM}（{@code §9.17} #26）。</li>
+     * </ol>
+     *
+     * <p>★ <b>超额守卫在写库存之前</b>（任务书 A1）：第 ② 步即按采购明细的
+     * {@code ordered_qty - received_qty}（跨到货单累计口径，{@code DATABASE_CONSTRAINTS §6-I}）
+     * 逐行校验；超限 ⇒ {@code PO-9002}（409），<b>此时尚未写任何流水与余额</b>。
+     * {@code PurchaseOrderAppService} 在持锁后再复核一次（防 TOCTOU），失败则整事务回滚。
+     *
+     * <p>★ <b>不留 {@code PENDING} 悬挂</b>：任何一步失败都抛异常 ⇒ 整事务回滚 ⇒
+     * 到货单仍为 {@code DRAFT}、无流水、无余额变更（{@code M6-T12b} 的 R-7 即验此）。
+     *
+     * @param receiptId 到货单 ID
+     * @return 确认后的到货单详情（含 {@code confirmed_at}/{@code confirmed_by}）
+     * @throws BizException {@code PO-9005}（不存在/跨团队）、{@code PO-9003}（状态不允许）、
+     *                      {@code PO-9002}（超额）、{@code PO-9006}（无明细）、
+     *                      {@code PO-9012}（数量非法）、{@code INV-5002}（库存乐观锁冲突）
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED, rollbackFor = Exception.class)
+    public GoodsReceiptDetail confirm(long receiptId) {
+        // ---- 前置：存在性 + 到货单状态守卫（不存在/跨团队 ⇒ PO-9005）----
+        GoodsReceiptEntity receipt = receiptMapper.selectById(receiptId);
+        if (receipt == null) {
+            throw new BizException(ErrorCodes.PO_9005, "到货单不存在");
+        }
+        String receiptStatus = receipt.getStatus();
+        if (STATUS_CONFIRMED.equals(receiptStatus)) {
+            // 已确认：按状态机拒绝（B0-19）。★ 本判断发生在写库存之前 ⇒ 不会产生第二条流水。
+            throw new BizException(ErrorCodes.PO_9003, "到货单已确认，请勿重复确认");
+        }
+        if (STATUS_CANCELLED.equals(receiptStatus)) {
+            // CONFIRMED 的直接作废已被 A3 拒绝；CANCELLED 亦不可再确认（§9.14 DRAFT→CONFIRMED 单向）
+            throw new BizException(ErrorCodes.PO_9003, "到货单已作废，不可确认");
+        }
+        if (!STATUS_DRAFT.equals(receiptStatus)) {
+            throw new BizException(ErrorCodes.PO_9003, "当前到货单状态不允许确认");
+        }
+
+        // ---- 采购单状态守卫：仅 ORDERED / PARTIALLY_RECEIVED 可收货 ----
+        GoodsReceiptPoView po = readPurchaseOrder(receipt.getPurchaseOrderId());
+        if (!PO_STATUS_ORDERED.equals(po.status()) && !PO_STATUS_PARTIALLY_RECEIVED.equals(po.status())) {
+            throw new BizException(ErrorCodes.PO_9003, "当前采购单状态不允许确认到货");
+        }
+
+        // ---- ② 明细校验并固化（不新增/不删除行）+ ★ 超额守卫（必须在写库存之前）----
+        List<GoodsReceiptItemEntity> lines = receiptItemMapper.selectList(
+                Wrappers.<GoodsReceiptItemEntity>lambdaQuery()
+                        .eq(GoodsReceiptItemEntity::getGoodsReceiptId, receipt.getId())
+                        .orderByAsc(GoodsReceiptItemEntity::getId));
+        if (lines.isEmpty()) {
+            throw BizException.withDetails(ErrorCodes.PO_9006, "到货单至少需要一条明细",
+                    List.of(ApiErrorDetail.of("items", "明细行不能为空")));
+        }
+        Map<Long, BigDecimal> deltaByPoItem = new LinkedHashMap<>();
+        for (int i = 0; i < lines.size(); i++) {
+            GoodsReceiptItemEntity line = lines.get(i);
+            BigDecimal qty = line.getReceivedQty();
+            if (qty == null || qty.signum() <= 0) {
+                throw BizException.withDetails(ErrorCodes.PO_9012, "到货数量必须为正",
+                        List.of(ApiErrorDetail.of("items[" + i + "].received_qty",
+                                "received_qty 必须大于 0")));
+            }
+            PurchaseOrderDetail.LineItem poLine = po.lines().get(line.getPurchaseOrderItemId());
+            if (poLine == null) {
+                throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
+                        List.of(ApiErrorDetail.of("items[" + i + "].purchase_order_item_id",
+                                "明细行必须属于该采购单")));
+            }
+            // ★ 待收 = ordered_qty − 已收累计（received_qty 仅由「已确认」到货单累加 ⇒ 天然是跨单据累计口径）
+            BigDecimal orderedQty = new BigDecimal(poLine.orderedQty());
+            BigDecimal alreadyReceived = new BigDecimal(poLine.receivedQty());
+            BigDecimal pending = orderedQty.subtract(alreadyReceived);
+            if (pending.signum() < 0) {
+                pending = BigDecimal.ZERO.setScale(3);
+            }
+            if (qty.compareTo(pending) > 0) {
+                throw BizException.withDetails(ErrorCodes.PO_9002, "到货数量超过待收数量",
+                        List.of(new ApiErrorDetail(
+                                "items[" + i + "].received_qty",
+                                "待收数量为 " + pending.setScale(3, RoundingMode.HALF_UP).toPlainString()
+                                        + "，本次登记 " + qty.setScale(3, RoundingMode.HALF_UP).toPlainString(),
+                                qty.setScale(3, RoundingMode.HALF_UP).toPlainString())));
+            }
+            deltaByPoItem.merge(line.getPurchaseOrderItemId(), qty, BigDecimal::add);
+        }
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        Long operatorId = currentUserId();
+
+        // ---- ① 到货单状态 CAS：DRAFT → CONFIRMED（同语句守卫 + 手动自增 version）----
+        int affected = receiptMapper.update(null,
+                Wrappers.<GoodsReceiptEntity>lambdaUpdate()
+                        .eq(GoodsReceiptEntity::getId, receipt.getId())
+                        .eq(GoodsReceiptEntity::getStatus, STATUS_DRAFT)
+                        .eq(GoodsReceiptEntity::getVersion, receipt.getVersion())
+                        .set(GoodsReceiptEntity::getStatus, STATUS_CONFIRMED)
+                        .set(GoodsReceiptEntity::getConfirmedAt, now)
+                        .set(GoodsReceiptEntity::getConfirmedBy, operatorId)
+                        .set(GoodsReceiptEntity::getVersion, receipt.getVersion() + 1)
+                        .set(GoodsReceiptEntity::getUpdatedBy, operatorId));
+        if (affected == 0) {
+            // 并发同单确认：另一请求已先提交 ⇒ 按状态机拒绝（不重复入库）
+            throw new BizException(ErrorCodes.PO_9003, "到货单状态已变化，请刷新后重试");
+        }
+
+        // ---- ③ 逐条入库（InventoryWriteService.applyInbound 内部写流水 + 余额，并扣减 in_transit_qty）----
+        for (GoodsReceiptItemEntity line : lines) {
+            String idempotencyKey = "PURCHASE_INBOUND:GOODS_RECEIPT:"
+                    + receipt.getId() + ":" + line.getSkuId();
+            inventoryWriteService.applyInbound(line.getSkuId(), receipt.getWarehouseId(),
+                    line.getReceivedQty(), BIZ_TYPE, receipt.getId(), idempotencyKey);
+        }
+
+        // ---- ④⑤ 明细累加（悲观锁）+ 采购单汇总与状态推导（乐观锁）----
+        PurchaseOrderAppService.ReceiptApplyResult poResult =
+                purchaseOrderAppService.applyReceivedQuantities(
+                        receipt.getPurchaseOrderId(), deltaByPoItem);
+
+        // ---- ⑥ 审计（#26 GOODS_RECEIPT_CONFIRM）----
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("status", STATUS_CONFIRMED);
+        after.put("from_status", STATUS_DRAFT);
+        after.put("purchase_order_id", receipt.getPurchaseOrderId());
+        after.put("purchase_order_status", poResult.status());
+        after.put("received_qty", poResult.receivedQty().setScale(3, RoundingMode.HALF_UP).toPlainString());
+        after.put("total_qty", receipt.getTotalQty() == null ? null
+                : receipt.getTotalQty().setScale(3, RoundingMode.HALF_UP).toPlainString());
+        after.put("confirmed_at", now.toString());
+        recordAudit(AuditAction.GOODS_RECEIPT_CONFIRM, receipt.getId(), after,
+                "到货单已确认入库：" + receipt.getReceiptNo());
+
+        return goodsReceiptQueryService.getReceipt(receipt.getId());
     }
 
     // =====================================================================
@@ -601,7 +763,7 @@ public class GoodsReceiptAppService {
                 }
             }
         }
-        throw new BizException(ErrorCodes.PO_9013,
+        throw new BizException(ErrorCodes.PO_9014,
                 "到货单号生成冲突，请重试", lastError);
     }
 
@@ -625,11 +787,11 @@ public class GoodsReceiptAppService {
         return prefix + String.format("%06d", next);
     }
 
-    private void recordAudit(Long bizId, Map<String, Object> after, String summary) {
+    private void recordAudit(AuditAction action, Long bizId, Map<String, Object> after, String summary) {
         TeamContext.Snapshot snapshot = TeamContext.get();
         auditWriteService.recordInBusinessTx(AuditEvent.builder()
                 .teamId(currentTeamId())
-                .action(AuditAction.GOODS_RECEIPT_CANCEL)
+                .action(action)
                 .bizType(BIZ_TYPE)
                 .bizId(bizId)
                 .operatorId(snapshot == null ? null : snapshot.userId())

@@ -40,7 +40,10 @@ public record GoodsReceiptDetail(
         @JsonProperty("updated_at")
         @JsonSerialize(using = UtcDateTimeSerializer.class) LocalDateTime updatedAt,
         @JsonProperty("cancelled_at")
-        @JsonSerialize(using = UtcDateTimeSerializer.class) LocalDateTime cancelledAt) {
+        @JsonSerialize(using = UtcDateTimeSerializer.class) LocalDateTime cancelledAt,
+        @JsonProperty("confirmed_at")
+        @JsonSerialize(using = UtcDateTimeSerializer.class) LocalDateTime confirmedAt,
+        @JsonProperty("confirmed_by") Long confirmedBy) {
 
     /**
      * 到货明细行。

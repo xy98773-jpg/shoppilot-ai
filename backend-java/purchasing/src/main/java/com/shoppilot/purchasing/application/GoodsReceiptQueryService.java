@@ -134,6 +134,7 @@ public class GoodsReceiptQueryService {
                 GoodsReceiptDetail.qtyText(e.getTotalQty()),
                 GoodsReceiptDetail.amountText(e.getTotalAmount()),
                 e.getRemark(), e.getVersion(), itemViews,
-                e.getCreatedAt(), e.getUpdatedAt(), e.getCancelledAt());
+                e.getCreatedAt(), e.getUpdatedAt(), e.getCancelledAt(),
+                e.getConfirmedAt(), e.getConfirmedBy());
     }
 }

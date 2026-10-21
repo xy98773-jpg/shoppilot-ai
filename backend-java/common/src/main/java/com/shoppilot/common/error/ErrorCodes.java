@@ -200,6 +200,15 @@ public final class ErrorCodes {
     public static final String PO_9012 = "PO-9012";
     /** 采购单号生成冲突（409）—— {@code po_no} 连续撞 {@code uk_po_team_no} 且重试耗尽，请重试（§5.67 P-2）。 */
     public static final String PO_9013 = "PO-9013";
+    /**
+     * 到货单号生成冲突（409）—— {@code receipt_no} 连续撞 {@code uk_gr_team_no} 且有限重试（≤3）耗尽
+     * （{@code ERROR_CODES §2.10}；{@code DESIGN_REVIEW §5.72}）。
+     *
+     * <p>★ 与 {@link #PO_9013}（<b>采购单</b>号语义）严格区分：{@code M6-T04} 曾借用 {@code PO-9013}
+     * 表达「到货单号冲突」，{@code R176} 裁定<b>不扩写已发布码的语义</b>、另立本码；本批（{@code M6-T05+T06}）
+     * 将 {@code GoodsReceiptAppService} 的借用处改用本码，即 {@code R176} 的闭环动作。
+     */
+    public static final String PO_9014 = "PO-9014";
 
     // AI —— Java ↔ Python 内部通信（ERROR_CODES.md §2.11）
     // ★ 只固化 Java 侧会实际产出/断言的 5 条；其余 14 条只在 ErrorCodeHttpStatus 查表（见类 javadoc）。
