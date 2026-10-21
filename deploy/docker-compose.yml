@@ -89,7 +89,7 @@ services:
       SPRING_DATASOURCE_USERNAME: ${MYSQL_USER:-shoppilot}
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD:-changeme_app_password}
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-}
-      JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx512m}
+      JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx1536m}
       AI_INTERNAL_TOKEN: ${AI_INTERNAL_TOKEN:-changeme_internal_token}
       AI_SERVICE_BASE_URL: ${AI_SERVICE_BASE_URL:-http://service-ai:8000}
       # M4-B20.4.1（R143）：分析轮询 / timeout_at 超时扫描开关。
