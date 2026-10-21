@@ -1,14 +1,14 @@
-M7-T05 Compose 部署验证  2026-10-21 19:01:25
+M7-T05 Compose 部署验证  2026-10-21 20:51:42
 compose 文件：/d/Desktop/ShopPilot-AI/deploy/docker-compose.dev.yml
 compose 版本：2.40.3-desktop.1
 -------------------------------------------------------------
 [1] 当前服务清单
 SERVICE        STATE     STATUS
-backend-java   running   Up 3 minutes (healthy)
-frontend-web   running   Up 50 minutes (healthy)
+backend-java   running   Up 4 minutes (healthy)
+frontend-web   running   Up 2 hours (healthy)
 mysql          running   Up 2 hours (healthy)
-nginx          running   Up 15 minutes (healthy)
-service-ai     running   Up 50 minutes (healthy)
+nginx          running   Up 2 hours (healthy)
+service-ai     running   Up 2 hours (healthy)
 [PASS] 1 服务数（mysql/backend-java/service-ai/frontend-web/nginx） => 5
 -------------------------------------------------------------
 [2] 健康状态
@@ -38,11 +38,22 @@ service-ai     running   Up 50 minutes (healthy)
 [PASS] 6 成功迁移数 => 13
 [PASS] 6 最新版本 => 1.0.12
 -------------------------------------------------------------
-[7] down（保留卷）→ up → 数据保留
-    重启前快照：users=6,skus=10010,txns=150000,audit=118,flyway=13
-    重启后快照：users=6,skus=10010,txns=150000,audit=118,flyway=13
-[PASS] 7 down/up 后数据快照不变（users/skus/txns/audit/flyway） => users=6,skus=10010,txns=150000,audit=118,flyway=13
-[PASS] 7 重启后 backend healthy => healthy
+[7] down/up 数据保留：未执行（需 --with-recreate；避免中断并行任务）
 -------------------------------------------------------------
-TOTAL: PASS=15 FAIL=0
+[8] 指标埋点：容器内 /actuator/prometheus 可见四类指标
+[PASS] 8 导入批次终态指标存在 => ok
+[PASS] 8 导入确认耗时指标存在 => ok
+[PASS] 8 分析运行终态指标存在 => ok
+[PASS] 8 导入指标带 status 标签 => ok
+[PASS] 8 分析指标带 status 标签 => ok
+[PASS] 8 分析指标带 llm_status 标签 => ok
+[PASS] 8 敏感端点 env 仍 404 => 404
+[PASS] 8 敏感端点 beans 仍 404 => 404
+[PASS] 8 敏感端点 configprops 仍 404 => 404
+[PASS] 8 敏感端点 heapdump 仍 404 => 404
+[PASS] 8 敏感端点 threaddump 仍 404 => 404
+[PASS] 8 敏感端点 loggers 仍 404 => 404
+[PASS] 8 宿主取 prometheus 拿到的是 SPA => ok
+-------------------------------------------------------------
+TOTAL: PASS=26 FAIL=0
 RESULT: ALL PASS

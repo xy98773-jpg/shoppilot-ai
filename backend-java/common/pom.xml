@@ -51,6 +51,13 @@
             <artifactId>mybatis-plus-jsqlparser</artifactId>
             <version>3.5.17</version>
         </dependency>
+        <!-- M8-T02（R195 / NFR-OBS-02）：Micrometer 埋点 API。版本随 spring-boot-dependencies BOM 管理。
+             ★ 只引 micrometer-core，不引 spring-boot-starter-actuator——注册表与端点暴露
+             仍由 app（组合根）决定，common 不把观测栈的「装配」拽进来。 -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

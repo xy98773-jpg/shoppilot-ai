@@ -105,11 +105,13 @@ logging:
 # M1-T06：Actuator 健康检查（TECH_STACK.md：Micrometer + Actuator，NFR-OBS）。
 # 暴露面最小化：仅 health 与 info；env / beans / configprops / loggers / threaddump /
 # heapdump / shutdown 等敏感端点一律不暴露（暴露列表即白名单，未列出者不可达）。
+# ★ M8-T02（R195 / NFR-OBS-02）：追加 prometheus。它只吐指标名+数值、无配置值、无堆栈，
+#   与 env/beans 的危险面不同量级；且 nginx 不代理 /actuator（R189），宿主仍不可达。
 management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus
   endpoint:
     health:
       # 不向调用方泄露健康组件细节（数据源地址、磁盘路径等）

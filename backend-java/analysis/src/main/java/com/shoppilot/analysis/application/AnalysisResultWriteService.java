@@ -124,6 +124,8 @@ public class AnalysisResultWriteService {
     private final AiServiceClient aiServiceClient;
     private final AuditWriteService auditWriteService;
     private final ApplicationEventPublisher eventPublisher;
+    /** M8-T02（R195 / NFR-OBS-02）：分析运行终态埋点。 */
+    private final com.shoppilot.common.observability.AppMetrics appMetrics;
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -132,13 +134,15 @@ public class AnalysisResultWriteService {
                                       AnalysisItemAssembler assembler,
                                       AiServiceClient aiServiceClient,
                                       AuditWriteService auditWriteService,
-                                      ApplicationEventPublisher eventPublisher) {
+                                      ApplicationEventPublisher eventPublisher,
+                                      com.shoppilot.common.observability.AppMetrics appMetrics) {
         this.runMapper = runMapper;
         this.itemMapper = itemMapper;
         this.assembler = assembler;
         this.aiServiceClient = aiServiceClient;
         this.auditWriteService = auditWriteService;
         this.eventPublisher = eventPublisher;
+        this.appMetrics = appMetrics;
     }
 
     // =====================================================================
@@ -511,6 +515,8 @@ public class AnalysisResultWriteService {
                 null);
         log.info("分析结果落库完成：runId={} status={} llm={} items={} risk={} suggestion={}",
                 run.getId(), terminal, runLlm, persistedItems, riskCount, suggestionCount);
+        // M8-T02（R195）：降级率 = status=DEGRADED / 总数，由 PromQL 在查询层算，这里只给可加的原始量。
+        appMetrics.recordAnalysisRun(terminal.name(), runLlm == null ? null : runLlm.name());
     }
 
     /** 二次校验失败 ⇒ run 置 {@code FAILED / ANL-7004}（整批零落库）。 */

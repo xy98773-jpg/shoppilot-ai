@@ -120,6 +120,32 @@ else
   log "[7] down/up 数据保留：未执行（需 --with-recreate；避免中断并行任务）"
 fi
 sep
+# ---- 8. NFR-OBS-02：指标端点（M8-T02 / R195）----
+log "[8] 指标埋点：容器内 /actuator/prometheus 可见四类指标"
+PROM=$(docker exec shoppilot-dev-backend-java-1 curl -s --noproxy '*' \
+      http://127.0.0.1:8080/actuator/prometheus 2>/dev/null)
+# ★ Prometheus 文本格式把指标名里的 '.' 转成 '_'：shoppilot.import.batch.total → shoppilot_import_batch_total
+chk "8 导入批次终态指标存在" "ok" "$(echo "$PROM" | grep -q '^shoppilot_import_batch_total{' && echo ok || echo missing)"
+chk "8 导入确认耗时指标存在" "ok" "$(echo "$PROM" | grep -q '^shoppilot_import_confirm_seconds_count' && echo ok || echo missing)"
+chk "8 分析运行终态指标存在" "ok" "$(echo "$PROM" | grep -q '^shoppilot_analysis_run_total{' && echo ok || echo missing)"
+# 标签是「成功率/降级率」的分子分母来源：缺了标签，PromQL 只能算总数，指标失去意义
+chk "8 导入指标带 status 标签" "ok" "$(echo "$PROM" | grep -q 'shoppilot_import_batch_total{.*status=' && echo ok || echo missing)"
+# ★ 两个标签【分别】断言，不断言它们的先后顺序：Prometheus 文本格式按标签名字典序输出
+#   （llm_status 在 status 之前），写死顺序会得到与实现无关的假红（本批踩过）。
+chk "8 分析指标带 status 标签" "ok" "$(echo "$PROM" | grep -q 'shoppilot_analysis_run_total{.*status=' && echo ok || echo missing)"
+chk "8 分析指标带 llm_status 标签" "ok" "$(echo "$PROM" | grep -q 'shoppilot_analysis_run_total{.*llm_status=' && echo ok || echo missing)"
+# 敏感端点仍不暴露（R189 的最小暴露不许被 prometheus 顺带撕开）
+for e in env beans configprops heapdump threaddump loggers; do
+  c=$(docker exec shoppilot-dev-backend-java-1 curl -s --noproxy '*' -o /dev/null \
+      -w '%{http_code}' "http://127.0.0.1:8080/actuator/$e" 2>/dev/null)
+  chk "8 敏感端点 $e 仍 404" "404" "$c"
+done
+# 宿主侧仍不可达（nginx 不代理 /actuator，返回的是 SPA 而非指标）
+code=$(curl -s --noproxy '*' -o /tmp/t05-prom.html -m 5 -w '%{http_code}' \
+       "$BASE/actuator/prometheus" 2>/dev/null)
+chk "8 宿主取 prometheus 拿到的是 SPA" "ok" "$( grep -q '<!DOCTYPE html' /tmp/t05-prom.html 2>/dev/null && echo ok || echo "泄漏或异常：$code" )"
+sep
+
 log "TOTAL: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" = "0" ] && log "RESULT: ALL PASS" || log "RESULT: HAS FAILURES"
 [ "$FAIL" = "0" ] || exit 1

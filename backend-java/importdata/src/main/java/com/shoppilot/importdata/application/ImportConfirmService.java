@@ -17,6 +17,7 @@ import com.shoppilot.common.error.ErrorCodes;
 import com.shoppilot.common.web.ApiErrorDetail;
 import com.shoppilot.common.web.BizException;
 import com.shoppilot.importdata.application.dto.ConfirmRequest;
+import com.shoppilot.common.observability.AppMetrics;
 import com.shoppilot.inventory.application.InventoryWriteService;
 import com.shoppilot.inventory.application.InventoryWriteService.InitialImportRow;
 import com.shoppilot.inventory.domain.InventoryBizType;
@@ -186,6 +187,8 @@ public class ImportConfirmService {
     private final SalesWriteService salesWriteService;
     private final AuditWriteService auditWriteService;
     private final TransactionTemplate txTemplate;
+    /** M8-T02（R195 / NFR-OBS-02）：导入批次终态 + 确认耗时埋点。 */
+    private final AppMetrics appMetrics;
 
     public ImportConfirmService(ImportBatchMapper batchMapper,
                                 ImportRowErrorMapper rowErrorMapper,
@@ -198,7 +201,8 @@ public class ImportConfirmService {
                                 InventoryWriteService inventoryWriteService,
                                 SalesWriteService salesWriteService,
                                 AuditWriteService auditWriteService,
-                                PlatformTransactionManager transactionManager) {
+                                PlatformTransactionManager transactionManager,
+                                AppMetrics appMetrics) {
         this.batchMapper = batchMapper;
         this.rowErrorMapper = rowErrorMapper;
         this.parseService = parseService;
@@ -211,6 +215,7 @@ public class ImportConfirmService {
         this.salesWriteService = salesWriteService;
         this.auditWriteService = auditWriteService;
         this.txTemplate = new TransactionTemplate(transactionManager);
+        this.appMetrics = appMetrics;
     }
 
     // =====================================================================
@@ -229,7 +234,19 @@ public class ImportConfirmService {
     public ConfirmOutcome confirm(Long batchId, String idempotencyKey, ConfirmRequest request) {
         TeamContext.Snapshot snapshot = TeamContext.require();
         long teamId = snapshot.teamId();
+        // M8-T02（R195）：计时从进入方法起算，覆盖「落库 + 审计 + 终态刷新」全过程。
+        // 埋点放在 finally 里：确认失败（IMP-4009 阻断 / 非业务异常整批回滚）同样要计入
+        // 「失败率」分子——只记成功会让成功率永远是 100%，指标失去告警意义。
+        long startedAt = System.currentTimeMillis();
+        try {
+            return doConfirm(batchId, idempotencyKey, request, teamId);
+        } finally {
+            appMetrics.recordImportConfirm(System.currentTimeMillis() - startedAt);
+        }
+    }
 
+    private ConfirmOutcome doConfirm(Long batchId, String idempotencyKey, ConfirmRequest request, long teamId) {
+        TeamContext.Snapshot snapshot = TeamContext.require();
         // ---- E1：幂等键必填 ----
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw BizException.withDetails(ErrorCodes.COM_0001, "请求参数校验失败",
@@ -1004,6 +1021,9 @@ public class ImportConfirmService {
         batchMapper.update(null, w);
 
         recordCompleteAudit(batch, teamId, finalStatus, snapshot);
+        // M8-T02（R195）：导入批次终态埋点。放在审计之后、返回之前，确保「指标已记」与
+        // 「用户已看到终态」不会颠倒（观测滞后于业务是可接受的，反过来不行）。
+        appMetrics.recordImportBatch(finalStatus, batch.getBizType());
         ImportBatchEntity done = batchMapper.selectById(batch.getId());
         return ConfirmOutcome.completed(ConfirmResultView.of(done == null ? batch : done), false);
     }

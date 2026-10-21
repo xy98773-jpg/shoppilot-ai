@@ -33,11 +33,21 @@
             <artifactId>spring-boot-starter</artifactId>
         </dependency>
 
-        <!-- M1-T06：Actuator 健康检查（/actuator/health；暴露面由 application.yml 收敛为 health,info）。
+        <!-- M1-T06：Actuator 健康检查（/actuator/health；暴露面由 application.yml 收敛为 health,info。
+             M8-T02（R195 / NFR-OBS-02）起追加 prometheus，见下一行）。
              置于 app（运行时/运维能力），与 flyway / mysql-connector 同类；业务模块不感知。 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- M8-T02（R195 / NFR-OBS-02）：Prometheus 抓取格式的 MeterRegistry。
+             ★ 必须显式引入：actuator starter 只带 SimpleMeterRegistry，
+             缺它时 /actuator/prometheus 虽在暴露白名单里，实际返回 COM-0003（资源不存在），
+             指标一个都抓不到——「端点开了但没数据」比「端点没开」更难排查。
+             版本随 spring-boot-dependencies BOM 管理。 -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
 
         <!-- M1-T05：数据库迁移与驱动。
