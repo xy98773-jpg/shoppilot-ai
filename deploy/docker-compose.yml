@@ -63,9 +63,13 @@ services:
       # M4-B14（R100）：Python 回调 Java 的地址。与 backend-java 的 AI_SERVICE_BASE_URL
       # 语义相反（后者是 Java 调 Python），故变量名刻意不同，不得混用。
       JAVA_BACKEND_BASE_URL: ${JAVA_BACKEND_BASE_URL:-http://backend-java:8080}
-      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      # M8-T07（R155）：LLM 接入（OpenAI 兼容；默认 DeepSeek）。
+      #   ★ LLM_API_KEY **故意不留默认值**——密钥只能由宿主/密钥管理注入，
+      #     留默认等于鼓励把密钥写进仓库。未配置时 LLM 步骤按 SKIPPED 降级，
+      #     规则结果照常返回（铁律③），不会让 run 失败。
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_MODEL: ${LLM_MODEL:-}
     expose:
       - "8000"
     healthcheck:

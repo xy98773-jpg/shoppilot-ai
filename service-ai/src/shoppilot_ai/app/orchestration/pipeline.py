@@ -316,10 +316,24 @@ def _run_narrative(
         warnings.append("LLM 返回的解释不是对象，按无解释处理")
         explanations = {}
 
-    # §5.32 #3：声明要用解释但没解释（M4 未实现）时，写 run 级 warning；
-    # enable_llm=false 则不加。真实 narrative 成功时**不**加（否则是假声明）。
+    # ★ M8-T07（R155）：真实 narrative 在**内部**收敛异常后返回失败态，
+    #   不会再冒泡到上面的 except ⇒ 这里必须补一条 run 级 warning，
+    #   否则「LLM 失败」对调用方是**静默**的（用户看到 run 成功却没解释，
+    #   没有任何线索）。可观测性是降级契约的一部分（PROMPT_DESIGN §9）。
+    if llm_status in {"FAILED", "TIMEOUT", "VALIDATION_FAILED"} and not any(
+        "LLM" in w for w in warnings
+    ):
+        warnings.append(f"LLM 解释未生成（{llm_status}），规则结果完整保留")
+
+    # §5.32 #3：声明要用解释但没解释时，写 run 级 warning；enable_llm=false 则不加。
+    # 真实 narrative 成功时**不**加（否则是假声明）。
+    # ★ M8-T07（R155）措辞订正：原写「LLM 解释未实现（M5）」已过时——
+    #   现已实现，SKIPPED 只可能是「未配 LLM_API_KEY」或「没有有风险的 SKU」。
     if request.params.enable_llm and llm_status == "SKIPPED":
-        warnings.append("LLM 解释未实现（M5）")
+        warnings.append(
+            "LLM 解释未产出（enable_llm=true 但 llm_status=SKIPPED："
+            "可能未配置 LLM_API_KEY，或本次没有有风险的 SKU）"
+        )
     return llm_status, explanations
 
 

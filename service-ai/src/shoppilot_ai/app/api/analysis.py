@@ -48,6 +48,7 @@ from shoppilot_ai.app.core.errors import (
     ServiceAIBaseError,
 )
 from shoppilot_ai.app.core.tracing import resolve_request_id
+from shoppilot_ai.app.llm.narrative import llm_narrative
 from shoppilot_ai.app.orchestration.pipeline import request_hash, run_analysis
 from shoppilot_ai.app.orchestration.progress import RunRecord, RunRegistry
 from shoppilot_ai.app.schemas.analysis_request import (
@@ -179,7 +180,11 @@ def _execute_run(payload: AnalyzeRequest) -> None:
     """
     run_registry = get_registry()
     try:
-        run_analysis(payload, run_registry)
+        # ★ M8-T07（R155）：注入**真实** LLM 解释器（此前未传 ⇒ 恒用 null_narrative
+        #   ⇒ llm_status 恒 SKIPPED）。
+        #   ★ 铁律③：LLM 只解释；其任何失败都在 llm_narrative / _run_narrative 内
+        #     收敛为 llm_status，规则结果一律保留，绝不因解释失败让整条 run FAILED。
+        run_analysis(payload, run_registry, narrative=llm_narrative)
     except Exception as exc:  # noqa: BLE001 —— 最后防线，异常绝不外泄
         run_registry.fail(
             payload.analysis_run_id,

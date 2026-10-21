@@ -391,6 +391,12 @@ def test_llm_disabled_has_no_run_warning() -> None:
 
 
 def test_llm_enabled_but_unimplemented_adds_warning() -> None:
+    """`§5.32 #3`：声明要解释却没产出 ⇒ run 级 warning（**不静默**）。
+
+    ★ M8-T07（R155）文案订正：原断言写死「LLM 解释未实现（M5）」已过时——
+      LLM 解释现已实现，此处 `SKIPPED` 的原因是**未注入 narrative**（用默认
+      `null_narrative`）。新文案改为中性表述，故这里按片段匹配而非整句。
+    """
     request = make_request(default_items(), enable_llm=True, prompt_version="explain_risk.v1")
     registry = RunRegistry()
     registry.register(request.analysis_run_id, team_id=7)
@@ -399,7 +405,7 @@ def test_llm_enabled_but_unimplemented_adds_warning() -> None:
 
     record = registry.get(request.analysis_run_id)
     assert result.data.llm_status == "SKIPPED"
-    assert "LLM 解释未实现（M5）" in record.warnings
+    assert any("LLM 解释未产出" in w for w in record.warnings), record.warnings
 
 
 def test_custom_narrative_is_called_and_explanations_are_written() -> None:
