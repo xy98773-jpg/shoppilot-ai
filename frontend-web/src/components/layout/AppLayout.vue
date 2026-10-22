@@ -12,8 +12,10 @@
     </el-header>
     <el-container class="app-layout__body">
       <el-aside width="200px" class="app-layout__aside">
-        <!-- 侧栏：已实现页面（工作台 / 主数据 / 导入 / 库存 / 采购 / 销售）；
-             写页按角色显隐（体验层，服务端仍是唯一安全边界）。 -->
+        <!-- 侧栏：已实现页面（工作台 / 主数据 / 导入 / 库存 / **AI 分析** / 采购 / 销售）；
+             写页按角色显隐（体验层，服务端仍是唯一安全边界）。
+             ★ AI 分析入口此前缺失（页面与路由都已实现，却没挂菜单 ⇒ 用户找不到 AI 在哪），
+               入口顺序按业务链路：库存快照 → 分析（风险/补货建议）→ 采购下单。 -->
         <el-menu :default-active="activePath" router class="app-layout__menu">
           <el-menu-item index="/dashboard">工作台</el-menu-item>
           <el-menu-item index="/catalog/products">商品</el-menu-item>
@@ -25,6 +27,8 @@
           <el-menu-item index="/inventory/overview">库存概览</el-menu-item>
           <el-menu-item index="/inventory/transactions">库存流水</el-menu-item>
           <el-menu-item v-if="canWrite" index="/inventory/count-adjust">盘点调整</el-menu-item>
+          <el-menu-item index="/analysis/runs" class="app-layout__menu-ai">🤖 AI 分析</el-menu-item>
+          <el-menu-item v-if="canWrite" index="/analysis/runs/new" class="app-layout__menu-ai">✨ 新建 AI 分析</el-menu-item>
           <el-menu-item index="/purchasing/orders">采购单</el-menu-item>
           <el-menu-item index="/purchasing/receipts">到货单</el-menu-item>
           <el-menu-item index="/sales">销售记录</el-menu-item>
@@ -61,6 +65,11 @@ const activePath = computed(() => {
   const path = route.path
   if (path.startsWith('/catalog/')) {
     return path
+  }
+  // ★ 分析详情 `/analysis/runs/{id}` 归入「分析任务」高亮（否则进详情后侧栏无选中项）；
+  //   `/analysis/runs/new` 是独立菜单项，保持自身高亮。
+  if (path.startsWith('/analysis/runs/') && !path.endsWith('/new')) {
+    return '/analysis/runs'
   }
   return path
 })
@@ -106,6 +115,15 @@ async function onLogout(): Promise<void> {
 }
 .app-layout__menu {
   border-right: none;
+}
+/* ★ AI 入口高亮：在纯中文菜单中以品牌色 + 加粗突出，避免用户找不到 AI 在哪 */
+.app-layout__menu-ai {
+  font-weight: 600;
+  color: var(--el-color-primary);
+}
+.app-layout__menu-ai.is-active {
+  color: #fff;
+  background: var(--el-color-primary);
 }
 .app-layout__main {
   background: #f5f7fa;
