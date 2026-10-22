@@ -36,21 +36,7 @@
 
 ## 3. 系统架构
 
-```mermaid
-flowchart TB
-    FE[Vue 3 前端]
-    NG[Nginx 反向代理]
-    APP[Java 后端 · 模块化单体]
-    DB[MySQL 8]
-    SA[Python 分析服务]
-    LLM[大模型]
-
-    FE --> NG
-    NG --> APP
-    APP --> DB
-    APP --> SA
-    SA --> LLM
-```
+![ShopPilot AI 系统架构](docs/images/system-architecture.png)
 
 **模块依赖方向**（单向，禁止反向与跨域直连数据表）：
 
