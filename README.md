@@ -64,7 +64,7 @@ flowchart TB
         SA["FastAPI<br/>统计计算 / 规则判定 / Prompt 编排"]
     end
 
-    DB[("MySQL 8<br/>Flyway 版本化迁移")]
+    DB["MySQL 8<br/>Flyway 版本化迁移"]
     LLM["大模型<br/>OpenAI 兼容接口"]
 
     FE --> NG
