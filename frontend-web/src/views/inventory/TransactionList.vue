@@ -16,8 +16,8 @@
           <el-input v-model="skuId" placeholder="如 9002" style="width: 120px" />
         </el-form-item>
         <el-form-item label="类型">
-          <el-select v-model="txnType" clearable placeholder="全部" style="width: 170px">
-            <el-option v-for="t in TXN_TYPES" :key="t" :label="t" :value="t" />
+          <el-select v-model="txnType" clearable placeholder="全部" style="width: 210px">
+            <el-option v-for="t in TXN_TYPES" :key="t" :label="txnTypeLabel(t)" :value="t" />
           </el-select>
         </el-form-item>
         <el-form-item label="起始日">
@@ -56,6 +56,8 @@
         @size-change="changeSize"
       >
         <template #occurredAt="{ row }">{{ formatDateTime(row.occurred_at) }}</template>
+        <template #txnType="{ row }">{{ txnTypeLabel(row.txn_type) }}</template>
+        <template #bizType="{ row }">{{ bizTypeLabel(row.biz_type) }}</template>
         <template #actions="{ row }">
           <el-button link type="primary" @click="openDetail(row)">详情</el-button>
           <!-- ★ 冲销仅 OWNER/ADMIN 可见（体验层；服务端仍是唯一安全边界，角色不足 → TEAM-2003） -->
@@ -75,8 +77,8 @@
     <el-dialog v-model="detailVisible" title="流水详情" width="720px">
       <el-descriptions v-if="detail" :column="2" border size="small">
         <el-descriptions-item label="流水 ID">{{ detail.id }}</el-descriptions-item>
-        <el-descriptions-item label="类型">{{ detail.txn_type }}</el-descriptions-item>
-        <el-descriptions-item label="业务类型">{{ detail.biz_type }}</el-descriptions-item>
+        <el-descriptions-item label="类型">{{ txnTypeLabel(detail.txn_type) }}</el-descriptions-item>
+        <el-descriptions-item label="业务类型">{{ bizTypeLabel(detail.biz_type) }}</el-descriptions-item>
         <el-descriptions-item label="仓库 / SKU">
           {{ detail.warehouse_id }} / {{ detail.sku_code || detail.sku_id }}
         </el-descriptions-item>
@@ -131,6 +133,7 @@ import { hasAnyRole } from '@/utils/permission'
 import { describeError } from '@/utils/error'
 import { formatDateTime } from '@/utils/format'
 import { createIdempotencyIntent } from '@/utils/idempotency'
+import { bizTypeLabel, txnTypeLabel } from '@/utils/terms'
 import { toPositiveInt } from '@/views/sales/salesQuery'
 
 const TXN_TYPES = [
@@ -155,9 +158,9 @@ const dateTo = ref('')
 const columns: TableColumn[] = [
   { prop: 'id', label: '流水 ID', width: 100 },
   { prop: 'warehouse_id', label: '仓库 ID', width: 100 },
-  { prop: 'sku_code', label: 'SKU', minWidth: 120 },
-  { prop: 'txn_type', label: '类型', width: 160 },
-  { prop: 'biz_type', label: '业务类型', width: 130 },
+  { prop: 'sku_code', label: 'SKU（商品规格）', minWidth: 130 },
+  { prop: 'txn_type', label: '类型', width: 190, slot: 'txnType' },
+  { prop: 'biz_type', label: '业务类型', width: 150, slot: 'bizType' },
   { prop: 'qty_delta', label: '变更量', width: 110 },
   { prop: 'qty_after', label: '变更后', width: 110 },
   { prop: 'reason', label: '原因', minWidth: 160 },

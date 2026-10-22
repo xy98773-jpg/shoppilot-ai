@@ -50,6 +50,7 @@
         @size-change="changeSize"
       >
         <template #createdAt="{ row }">{{ formatDateTime(row.created_at) }}</template>
+        <template #source="{ row }">{{ sourceLabel(row.source) }}</template>
       </PageTable>
 
       <p class="sales-page__note">
@@ -72,6 +73,7 @@ import type { SalesDailyQuery, SalesDailyRow } from '@/types/sales'
 import type { TableColumn } from '@/types/ui'
 import { usePagination } from '@/composables/usePagination'
 import { formatDateTime } from '@/utils/format'
+import { sourceLabel } from '@/utils/terms'
 import { buildSalesQuery, type SalesFilterInput } from './salesQuery'
 
 const filters = reactive<SalesFilterInput>({
@@ -84,12 +86,12 @@ const filters = reactive<SalesFilterInput>({
 const columns: TableColumn[] = [
   { prop: 'sale_date', label: '业务日期', width: 130 },
   { prop: 'warehouse_id', label: '仓库 ID', width: 100 },
-  { prop: 'sku_code', label: 'SKU', minWidth: 120 },
+  { prop: 'sku_code', label: 'SKU（商品规格）', minWidth: 130 },
   { prop: 'qty', label: '净销量', width: 120 },
   { prop: 'return_qty', label: '退货量', width: 110 },
   { prop: 'sales_amount', label: '销售金额', width: 130 },
   { prop: 'order_count', label: '订单数', width: 100 },
-  { prop: 'source', label: '来源', width: 100 },
+  { prop: 'source', label: '来源', width: 140, slot: 'source' },
   { prop: 'created_at', label: '写入时间', minWidth: 170, slot: 'createdAt' },
 ]
 

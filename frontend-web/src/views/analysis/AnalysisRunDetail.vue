@@ -44,12 +44,12 @@
           <el-descriptions-item label="运行 ID">{{ run.run_id }}</el-descriptions-item>
           <el-descriptions-item label="状态">{{ statusLabel(run.status) }}</el-descriptions-item>
           <el-descriptions-item label="当前步骤">{{ run.current_step || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="范围">{{ run.scope_type }}</el-descriptions-item>
+          <el-descriptions-item label="范围">{{ scopeTypeLabel(run.scope_type) }}</el-descriptions-item>
           <el-descriptions-item label="仓库 ID">{{ run.warehouse_id }}</el-descriptions-item>
           <el-descriptions-item label="SKU 进度">
             {{ run.processed_skus }} / {{ run.total_skus }}
           </el-descriptions-item>
-          <el-descriptions-item label="LLM 状态">{{ run.llm_status || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="LLM 状态">{{ run.llm_status ? llmStatusLabel(run.llm_status) : '-' }}</el-descriptions-item>
           <el-descriptions-item label="风险 SKU 数">
             {{ run.risk_sku_count ?? '-' }}
           </el-descriptions-item>
@@ -125,10 +125,15 @@
               v-model="itemsQuery.risk_level"
               clearable
               placeholder="全部"
-              style="width: 150px"
+              style="width: 190px"
               @change="onFilterChange"
             >
-              <el-option v-for="level in RISK_LEVELS" :key="level" :label="level" :value="level" />
+              <el-option
+                v-for="level in RISK_LEVELS"
+                :key="level"
+                :label="riskLevelLabel(level)"
+                :value="level"
+              />
             </el-select>
           </el-form-item>
           <el-form-item label="排序">
@@ -145,6 +150,8 @@
             <el-button :loading="itemsLoading" @click="loadItems">刷新</el-button>
           </el-form-item>
         </el-form>
+
+        <p class="run-detail__legend">风险类型速查：{{ RISK_TYPE_LEGEND }}</p>
 
         <el-alert
           v-if="itemsError"
@@ -173,8 +180,11 @@
           <template #qtySuggest="{ row }">{{ row.qty_suggest ?? '-' }}</template>
           <template #riskLevel="{ row }">
             <el-tag :type="riskTagType(row.risk_level)" size="small">
-              {{ row.risk_level || '-' }}
+              {{ row.risk_level ? riskLevelLabel(row.risk_level) : '-' }}
             </el-tag>
+          </template>
+          <template #llmStatus="{ row }">
+            {{ row.llm_status ? llmStatusLabel(row.llm_status) : '-' }}
           </template>
           <template #actions="{ row }">
             <el-button link type="primary" @click="openItem(row)">详情</el-button>
@@ -196,17 +206,17 @@
             {{ selectedItem.valid_days ?? '-' }} / {{ selectedItem.sales_window_days ?? '-' }}
           </el-descriptions-item>
           <el-descriptions-item label="交期">
-            {{ selectedItem.lead_time_days ?? '-' }}（{{ selectedItem.lead_time_source || '-' }}）
+            {{ selectedItem.lead_time_days ?? '-' }}（来源：{{ leadTimeSourceLabel(selectedItem.lead_time_source) }}）
           </el-descriptions-item>
           <el-descriptions-item label="覆盖天数">{{ selectedItem.coverage_days ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="安全库存">{{ selectedItem.safety_stock_qty ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="基础补货量">{{ selectedItem.qty_base ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="建议补货量">{{ selectedItem.qty_suggest ?? '-' }}</el-descriptions-item>
-          <el-descriptions-item label="风险等级">{{ selectedItem.risk_level || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="风险等级">{{ riskLevelLabel(selectedItem.risk_level) }}</el-descriptions-item>
           <el-descriptions-item label="风险类型">
-            {{ (selectedItem.risk_types || []).join(' / ') || '-' }}
+            {{ riskTypesLabel(selectedItem.risk_types) }}
           </el-descriptions-item>
-          <el-descriptions-item label="LLM 状态">{{ selectedItem.llm_status || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="LLM 状态">{{ llmStatusLabel(selectedItem.llm_status) }}</el-descriptions-item>
           <el-descriptions-item label="数据质量">
             {{ qualityText(selectedItem) }}
           </el-descriptions-item>
@@ -248,6 +258,15 @@ import { useTeamStore } from '@/stores/team'
 import { hasAnyRole } from '@/utils/permission'
 import { describeError } from '@/utils/error'
 import { formatDateTime } from '@/utils/format'
+import {
+  RISK_TYPE_LEGEND,
+  dataQualityLabel,
+  leadTimeSourceLabel,
+  llmStatusLabel,
+  riskLevelLabel,
+  riskTypesLabel,
+  scopeTypeLabel,
+} from '@/utils/terms'
 import { classifyAnalysisError } from './analysisError'
 import {
   ITEM_SORT_OPTIONS,
@@ -335,7 +354,7 @@ const itemsQuery = reactive({
 })
 
 const itemColumns: TableColumn[] = [
-  { prop: 'sku_code', label: 'SKU', minWidth: 160 },
+  { prop: 'sku_code', label: 'SKU（商品规格）', minWidth: 180 },
   { prop: 'warehouse_id', label: '仓库 ID', width: 100 },
   { prop: 'on_hand_qty', label: '现有库存', width: 110, align: 'right', slot: 'onHand' },
   { prop: 'available_qty', label: '可用量', width: 110, align: 'right', slot: 'available' },
@@ -343,8 +362,8 @@ const itemColumns: TableColumn[] = [
   { prop: 'lead_time_days', label: '交期(天)', width: 100, align: 'right' },
   { prop: 'coverage_days', label: '覆盖(天)', width: 100, align: 'right' },
   { prop: 'qty_suggest', label: '建议补货量', width: 130, align: 'right', slot: 'qtySuggest' },
-  { prop: 'risk_level', label: '风险等级', width: 110, slot: 'riskLevel' },
-  { prop: 'llm_status', label: 'LLM', width: 110 },
+  { prop: 'risk_level', label: '风险等级', width: 140, slot: 'riskLevel' },
+  { prop: 'llm_status', label: 'LLM 解释', width: 150, slot: 'llmStatus' },
 ]
 
 async function loadItems(): Promise<void> {
@@ -409,7 +428,7 @@ function qualityText(item: AnalysisItemView): string {
   const level = String(quality.level ?? '-')
   const validDays = String(quality.valid_days ?? '-')
   const missingDays = String(quality.missing_days ?? '-')
-  return `${level}（有效 ${validDays} 天 / 缺失 ${missingDays} 天）`
+  return `${dataQualityLabel(level)}（有效 ${validDays} 天 / 缺失 ${missingDays} 天）`
 }
 
 // ---------------------------------------------------------------- 取消
@@ -480,6 +499,12 @@ onMounted(() => {
 }
 .run-detail__filters {
   margin-bottom: 4px;
+}
+.run-detail__legend {
+  margin: 0 0 12px;
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.6;
 }
 .run-detail__label {
   margin: 14px 0 6px;

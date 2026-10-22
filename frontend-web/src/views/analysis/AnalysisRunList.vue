@@ -79,7 +79,9 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="scope_type" label="范围" width="150" />
+          <el-table-column label="范围" width="220">
+            <template #default="{ row }">{{ scopeTypeLabel(row.scope_type) }}</template>
+          </el-table-column>
           <el-table-column label="SKU 总数" width="110" align="right">
             <template #default="{ row }">{{ row.total_skus }}</template>
           </el-table-column>
@@ -148,6 +150,7 @@ import {
   buildAnalysisRunsQuery,
 } from './analysisRunQuery'
 import { statusLabel, statusTagType } from './analysisStatus'
+import { scopeTypeLabel } from '@/utils/terms'
 import { loadRecentRuns } from './recentRuns'
 
 const router = useRouter()
