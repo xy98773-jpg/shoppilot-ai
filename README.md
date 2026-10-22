@@ -39,33 +39,33 @@
 ```mermaid
 flowchart TB
     subgraph Z_BROWSER[浏览器]
-        FE["Vue 3 + TypeScript<br/>Element Plus / Pinia / ECharts"]
+        FE[Vue 3 前端]
     end
 
     subgraph Z_EDGE[接入层]
-        NG["Nginx<br/>静态资源 + /api 反向代理<br/>请求标识透传"]
+        NG[Nginx 反向代理]
     end
 
-    subgraph Z_JAVA[Java 后端 · 模块化单体 · 业务数据唯一写方]
-        APP["app（组合根）"]
-        IDN["identity"]
-        CAT["catalog"]
-        INV["inventory"]
-        SAL["sales"]
-        ANA["analysis"]
-        RPL["replenishment"]
-        PUR["purchasing"]
-        IMP["importdata"]
-        AUD["audit"]
-        CMN["common"]
+    subgraph Z_JAVA[Java 后端 · 模块化单体]
+        APP[app 组合根]
+        IDN[identity]
+        CAT[catalog]
+        INV[inventory]
+        SAL[sales]
+        ANA[analysis]
+        RPL[replenishment]
+        PUR[purchasing]
+        IMP[importdata]
+        AUD[audit]
+        CMN[common]
     end
 
-    subgraph Z_PY[Python 分析服务 · 只读]
-        SA["FastAPI<br/>统计计算 / 规则判定 / Prompt 编排"]
+    subgraph Z_PY[Python 分析服务]
+        SA[FastAPI 分析服务]
     end
 
-    DB["MySQL 8<br/>Flyway 版本化迁移"]
-    LLM["大模型<br/>OpenAI 兼容接口"]
+    DB[MySQL 8]
+    LLM[大模型]
 
     FE --> NG
     NG --> APP
@@ -88,8 +88,8 @@ flowchart TB
     IMP --> CMN
     AUD --> CMN
     APP --> DB
-    ANA -->|"内部契约 + Token 鉴权"| SA
-    SA -->|"解释请求"| LLM
+    ANA -->|内部契约 + Token 鉴权| SA
+    SA -->|解释请求| LLM
 ```
 
 **模块依赖方向**（单向，禁止反向与跨域直连数据表）：
