@@ -88,8 +88,8 @@ flowchart TB
     IMP --> CMN
     AUD --> CMN
     APP --> DB
-    ANA -->|内部契约 + Token 鉴权| SA
-    SA -->|解释请求| LLM
+    ANA --> SA
+    SA --> LLM
 ```
 
 **模块依赖方向**（单向，禁止反向与跨域直连数据表）：
