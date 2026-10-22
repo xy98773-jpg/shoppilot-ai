@@ -98,8 +98,8 @@ describe('AnalysisRunCreate 幂等键与请求体', () => {
       min_days: 7,
       coverage_days: 7,
       lead_time_default: 7,
-      ss_ratio: '0.5',
-      cv_high: '1.0',
+      ss_ratio: 0.5,
+      cv_high: 1.0,
       budget_limit: null,
       enable_llm: true,
     })

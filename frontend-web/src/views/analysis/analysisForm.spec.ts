@@ -51,9 +51,9 @@ describe('analysisForm', () => {
       min_days: 7,
       coverage_days: 7,
       lead_time_default: 7,
-      ss_ratio: '0.5',
-      cv_high: '1.0',
-      budget_limit: '10000.5',
+      ss_ratio: 0.5,
+      cv_high: 1.0,
+      budget_limit: 10000.5,
       enable_llm: true,
     })
   })

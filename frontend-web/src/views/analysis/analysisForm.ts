@@ -3,7 +3,8 @@
 // 权威来源：`CreateAnalysisRunRequest.java` + `AnalysisParams.java`
 //   - `team_id` **不传**（服务端从 JWT 解析）；
 //   - `params` 全量 8 字段（服务端缺省会补默认值，但显式传全量便于用户确认快照）；
-//   - 比率字段是**字符串**（`"0.5000"` / `"1.0000"` 口径），不做浮点往返。
+//   - 比率/预算字段提交时必须为 **JSON 数值**（后端 `isNumber` 校验，字符串 → ANL-7009）；
+//     表单内保留字符串仅为了 `el-input` 双向绑定，提交前经 `Number()` 转换。
 import type {
   AnalysisParamsInput,
   AnalysisScopeType,
@@ -180,9 +181,11 @@ export function buildCreatePayload(input: AnalysisFormInput): CreateAnalysisRunR
     min_days: toInt(input.min_days),
     coverage_days: toInt(input.coverage_days),
     lead_time_default: toInt(input.lead_time_default),
-    ss_ratio: input.ss_ratio.trim(),
-    cv_high: input.cv_high.trim(),
-    budget_limit: input.budget_limit.trim() ? input.budget_limit.trim() : null,
+    // ★ 比率/预算字段必须是 JSON 数值（后端 decimalField 用 isNumber 校验，
+    //   字符串会被拒 ANL-7009）；表单绑定用字符串仅为 el-input 双向绑定方便。
+    ss_ratio: Number(input.ss_ratio),
+    cv_high: Number(input.cv_high),
+    budget_limit: input.budget_limit.trim() ? Number(input.budget_limit) : null,
     enable_llm: input.enable_llm,
   }
 

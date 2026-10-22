@@ -77,16 +77,17 @@ export type AnalysisLlmStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' |
 /**
  * 运行参数（`AnalysisParams`；缺省即服务端补默认值）。
  *
- * `ss_ratio` / `cv_high` 为 4 位小数的**字符串**；`budget_limit` 3 位小数或 `null`。
+ * `ss_ratio` / `cv_high` / `budget_limit` 提交时为 JSON **数值**（后端 `isNumber` 校验，
+ * 传字符串会被拒 `ANL-7009`）；`budget_limit` 传 `null` 表示不限制。
  */
 export interface AnalysisParamsInput {
   window_days?: number
   min_days?: number
   coverage_days?: number
   lead_time_default?: number
-  ss_ratio?: string
-  cv_high?: string
-  budget_limit?: string | null
+  ss_ratio?: number
+  cv_high?: number
+  budget_limit?: number | null
   enable_llm?: boolean
 }
 
