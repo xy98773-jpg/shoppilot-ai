@@ -5,6 +5,15 @@
         <div class="gr-list__head">
           <span class="gr-list__title">到货单</span>
           <span class="gr-list__subtitle">共 {{ total }} 条</span>
+          <span class="gr-list__spacer" />
+          <el-button
+            v-if="canOperate"
+            type="primary"
+            data-testid="gr-create-open"
+            @click="createVisible = true"
+          >
+            ＋ 登记到货
+          </el-button>
         </div>
       </template>
 
@@ -128,6 +137,9 @@
         />
       </div>
     </el-card>
+
+    <!-- M8-R200：登记到货（草稿）；成功后刷新列表并跳到详情页确认到货 -->
+    <GoodsReceiptCreateDialog v-model="createVisible" @created="onCreated" />
   </div>
 </template>
 
@@ -136,17 +148,29 @@
 //
 // ★ 只读页：任何已登录成员可见；写操作（确认/作废）在详情页按角色显隐。
 // ★ `total_qty` / `total_amount` 为后端字符串（scale 3/2），原样展示（口径铁律 ④）。
-import { onMounted, reactive, ref } from 'vue'
+// ★ M8-R200：新增「登记到货」入口（`POST /purchasing/receipts`，OPERATOR+）——
+//   此前只能调接口，界面无法建草稿，导致「确认到货」按钮无从触发。
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { listGoodsReceipts } from '@/api/purchasing'
 import type { GoodsReceiptQuery, GoodsReceiptStatus, GoodsReceiptSummary } from '@/types/purchasing'
+import { useTeamStore } from '@/stores/team'
+import { hasAnyRole } from '@/utils/permission'
 import { describeError } from '@/utils/error'
 import { formatDateTime } from '@/utils/format'
 import { toPositiveInt } from '@/views/sales/salesQuery'
+import GoodsReceiptCreateDialog from './GoodsReceiptCreateDialog.vue'
 import { GR_STATUSES, grStatusLabel, grStatusTagType } from './purchasingStatus'
 
+/** 到货写动作角色（与后端 `@RequireRole(OWNER,ADMIN,OPERATOR,APPROVER)` 对齐；体验层）。 */
+const OPERATE_ROLES = ['OWNER', 'ADMIN', 'OPERATOR', 'APPROVER']
+
 const router = useRouter()
+const teamStore = useTeamStore()
+
+const canOperate = computed(() => hasAnyRole(teamStore.role, OPERATE_ROLES))
+const createVisible = ref(false)
 
 const list = ref<GoodsReceiptSummary[]>([])
 const total = ref(0)
@@ -214,6 +238,24 @@ function openDetail(row: GoodsReceiptSummary): void {
   })
 }
 
+/**
+ * 登记成功回调：刷新列表 → 跳到新到货单详情（用户下一步就是「确认到货」）。
+ *
+ * ★ `replayed=true` 说明是幂等重放（该次登记此前已成功），不要提示「新建成功」以免误导。
+ */
+function onCreated(goodsReceiptId: number, receiptNo: string, replayed: boolean): void {
+  if (replayed) {
+    ElMessage.warning(`该登记此前已提交过，服务端返回首次结果：${receiptNo}（未重复创建）`)
+  } else {
+    ElMessage.success(`已登记到货单 ${receiptNo}（草稿）。下一步：在详情页「确认到货」才会入库。`)
+  }
+  void fetchList()
+  void router.push({
+    name: 'purchasing-receipt-detail',
+    params: { id: String(goodsReceiptId) },
+  })
+}
+
 onMounted(() => {
   void fetchList()
 })
@@ -222,7 +264,7 @@ onMounted(() => {
 <style scoped>
 .gr-list__head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
 }
 .gr-list__title {
@@ -231,6 +273,9 @@ onMounted(() => {
 .gr-list__subtitle {
   color: #909399;
   font-size: 12px;
+}
+.gr-list__spacer {
+  flex: 1;
 }
 .gr-list__filters {
   margin-bottom: 4px;

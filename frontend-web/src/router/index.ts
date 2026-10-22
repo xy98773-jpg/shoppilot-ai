@@ -155,13 +155,15 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'replenishment/suggestions',
         name: 'replenishment-suggestions',
-        component: () => Promise.resolve(Placeholder),
+        // M8-R200：真实页面（列表 + 提交/撤回/作废 + 勾选转采购单）
+        component: () => import('@/views/replenishment/ReplenishmentList.vue'),
         meta: { title: '补货建议' },
       },
       {
         path: 'replenishment/review',
         name: 'replenishment-review',
-        component: () => Promise.resolve(Placeholder),
+        // 与「补货建议」同一组件，按路由名切成「待审批队列」模式
+        component: () => import('@/views/replenishment/ReplenishmentList.vue'),
         // 矩阵 #8 审批：仅 OWNER / ADMIN / APPROVER（OPERATOR ❌）
         meta: { title: '补货审核', roles: ['OWNER', 'ADMIN', 'APPROVER'] },
       },

@@ -23,6 +23,30 @@ import type {
   PurchaseOrderQuery,
   PurchaseOrderSummary,
 } from '@/types/purchasing'
+import type {
+  CreatePurchaseOrderFromReplenishmentRequest,
+  PurchaseOrderFromReplenishmentResponse,
+} from '@/types/replenishment'
+
+// ------------------------------------------------- 由补货建议生成采购单
+
+/**
+ * 由**已审批**补货建议生成采购单（`POST /purchasing/orders/from-replenishment`，201，**必须**带 `Idempotency-Key`）。
+ *
+ * ★ 数量 / 单价 / 供应商一律取自建议，请求体**不接受**客户端覆盖。
+ * ★ 同 SKU×仓库存在其它已审批建议 ⇒ 409 `RPL-8012`（`details[].field=conflict_items`），
+ *   需带 `conflict_acknowledged=true` + `acknowledged_item_ids=[...]` 重试。
+ */
+export function createPurchaseOrderFromReplenishment(
+  payload: CreatePurchaseOrderFromReplenishmentRequest,
+  idempotencyKey: string,
+): Promise<ReplayableResult<PurchaseOrderFromReplenishmentResponse>> {
+  return postWithIdempotency<PurchaseOrderFromReplenishmentResponse>(
+    '/purchasing/orders/from-replenishment',
+    payload,
+    idempotencyKey,
+  )
+}
 
 // ------------------------------------------------------------------ 采购单
 

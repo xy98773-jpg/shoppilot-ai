@@ -91,7 +91,19 @@ export const SOURCE_TERMS: TermMap = {
   API: '接口同步',
 }
 
-/** 统一格式：`CODE（中文）`；未收录的代码原样返回，避免出现 "undefined"。 */export function withZh(code: string | null | undefined, map: TermMap): string {
+/** 补货建议状态（`ReplenishmentItemStatus`）。 */
+export const REPLENISHMENT_STATUS_TERMS: TermMap = {
+  SUGGESTED: '待提交',
+  PENDING_REVIEW: '待审批',
+  APPROVED: '已审批（可转采购单）',
+  CONVERTED: '已转采购单',
+  REJECTED: '已驳回',
+  SUPERSEDED: '已被新建议取代',
+  CANCELLED: '已取消',
+}
+
+/** 统一格式：`CODE（中文）`；未收录的代码原样返回，避免出现 "undefined"。 */
+export function withZh(code: string | null | undefined, map: TermMap): string {
   if (!code) return '-'
   const zh = map[code]
   return zh ? `${code}（${zh}）` : code
@@ -137,6 +149,10 @@ export function bizTypeLabel(code?: string | null): string {
 
 export function sourceLabel(code?: string | null): string {
   return withZh(code, SOURCE_TERMS)
+}
+
+export function replenishmentStatusLabel(code?: string | null): string {
+  return withZh(code, REPLENISHMENT_STATUS_TERMS)
 }
 
 /** 结果页底部的术语速查（只列会被前端展示的六类风险）。 */

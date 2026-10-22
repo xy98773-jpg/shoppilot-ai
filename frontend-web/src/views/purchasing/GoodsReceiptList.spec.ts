@@ -1,10 +1,11 @@
-// 到货单列表页单测（M6-T11）。
+// 到货单列表页单测（M6-T11 + M8-R200）。
 //
 // 覆盖：
 //   1. 首次加载按默认分页请求 `GET /purchasing/receipts` 并渲染行数据；
 //   2. 筛选（采购单 ID / 状态 / 到货单号）后重新请求，且回到第一页；
 //   3. 空列表展示「暂无到货单」；
-//   4. 「详情」跳转该行 goods_receipt_id。
+//   4. 「详情」跳转该行 goods_receipt_id；
+//   5. M8-R200：「登记到货」入口按角色显隐；登记成功后刷新列表并跳到新到货单详情。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
@@ -23,14 +24,18 @@ vi.mock('@/api/purchasing', () => ({
   confirmPurchaseOrder: vi.fn(),
   orderPurchaseOrder: vi.fn(),
   cancelPurchaseOrder: vi.fn(),
+  createPurchaseOrderFromReplenishment: vi.fn(),
   listGoodsReceipts: vi.fn(),
   getGoodsReceipt: vi.fn(),
+  createGoodsReceipt: vi.fn(),
   confirmGoodsReceipt: vi.fn(),
   cancelGoodsReceipt: vi.fn(),
 }))
 
 import { listGoodsReceipts } from '@/api/purchasing'
+import { useTeamStore } from '@/stores/team'
 import type { GoodsReceiptSummary } from '@/types/purchasing'
+import GoodsReceiptCreateDialog from './GoodsReceiptCreateDialog.vue'
 import GoodsReceiptList from './GoodsReceiptList.vue'
 
 function makeRow(overrides: Partial<GoodsReceiptSummary> = {}): GoodsReceiptSummary {
@@ -146,6 +151,42 @@ describe('GoodsReceiptList', () => {
     expect(pushMock).toHaveBeenCalledWith({
       name: 'purchasing-receipt-detail',
       params: { id: '72001' },
+    })
+
+    wrapper.unmount()
+  })
+
+  it('「登记到货」入口仅对 OPERATOR+ 可见（体验层，服务端才是边界）', async () => {
+    const wrapper = mountList()
+    await flushPromises()
+
+    // 角色未水合 ⇒ 一律按无权限处理（不出现「未加载即放行」）
+    expect(wrapper.find('[data-testid="gr-create-open"]').exists()).toBe(false)
+
+    useTeamStore().setRole('OPERATOR')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="gr-create-open"]').exists()).toBe(true)
+
+    useTeamStore().setRole('VIEWER')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="gr-create-open"]').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('登记成功回调：刷新列表并跳转到新到货单详情（草稿下一步就是确认入库）', async () => {
+    const wrapper = mountList()
+    await flushPromises()
+    expect(listGoodsReceipts).toHaveBeenCalledTimes(1)
+
+    wrapper.findComponent(GoodsReceiptCreateDialog).vm.$emit('created', 72099, 'GR-20261022-0002', false)
+    await flushPromises()
+
+    // 刷新一次
+    expect(listGoodsReceipts).toHaveBeenCalledTimes(2)
+    expect(pushMock).toHaveBeenCalledWith({
+      name: 'purchasing-receipt-detail',
+      params: { id: '72099' },
     })
 
     wrapper.unmount()

@@ -47,4 +47,14 @@ UPDATE warehouses SET is_default = 0 WHERE team_id = 7;
 UPDATE warehouses SET is_default = 1 WHERE team_id = 7 AND id = 9003;
 
 -- 4) 供应商绑定：采购单要求建议带 supplier_id，否则 from-replenishment 报 COM-0001「所选建议未指定供应商」
+--    ★ 仅绑定 910001–910003 不够：库里还有一批 9104xx–9105xx 的批量演示 SKU，
+--      它们跑出的建议同样需要供应商，否则界面上点「勾选转采购单」会 400。
 UPDATE skus SET supplier_id = 1 WHERE team_id = 7 AND id IN (910001, 910002, 910003);
+UPDATE skus SET supplier_id = 1 WHERE team_id = 7 AND supplier_id IS NULL AND id >= 910000;
+
+-- 5) 已生成建议的供应商回填（M8-R200）
+--    建议的 supplier_id 是**生成时**从 SKU 主数据快照的；先把主数据补上，
+--    再回填历史建议，否则界面上已有的建议点「转采购单」仍会 400。
+--    ★ 生产环境不应这样做（应通过 PATCH /replenishment/items/{id} 人工改量指定供应商）；
+--      此处仅用于 dev 演示，让「全程鼠标闭环」可走通。
+UPDATE replenishment_items SET supplier_id = 1 WHERE team_id = 7 AND supplier_id IS NULL;

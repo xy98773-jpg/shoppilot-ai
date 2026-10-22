@@ -29,6 +29,8 @@
           <el-menu-item v-if="canWrite" index="/inventory/count-adjust">盘点调整</el-menu-item>
           <el-menu-item index="/analysis/runs" class="app-layout__menu-ai">🤖 AI 分析</el-menu-item>
           <el-menu-item v-if="canWrite" index="/analysis/runs/new" class="app-layout__menu-ai">✨ 新建 AI 分析</el-menu-item>
+          <el-menu-item index="/replenishment/suggestions">补货建议</el-menu-item>
+          <el-menu-item v-if="canApprove" index="/replenishment/review">补货审核</el-menu-item>
           <el-menu-item index="/purchasing/orders">采购单</el-menu-item>
           <el-menu-item index="/purchasing/receipts">到货单</el-menu-item>
           <el-menu-item index="/sales">销售记录</el-menu-item>
@@ -59,6 +61,12 @@ const teamStore = useTeamStore()
 const canWrite = computed(() =>
   hasAnyRole(teamStore.role, ['OWNER', 'ADMIN', 'OPERATOR', 'APPROVER']),
 )
+
+/**
+ * 审批入口显隐（体验层）：与「补货审核」路由 `meta.roles` 一致（**不含 OPERATOR**）。
+ * 服务端 `POST /replenishment/items/{id}/approve` 只允许 OWNER/ADMIN/APPROVER。
+ */
+const canApprove = computed(() => hasAnyRole(teamStore.role, ['OWNER', 'ADMIN', 'APPROVER']))
 
 /** 当前激活菜单项：优先精确匹配，其次匹配 `/catalog/...` 前缀（如商品下 SKU 详情）。 */
 const activePath = computed(() => {
