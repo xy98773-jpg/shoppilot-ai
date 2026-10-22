@@ -94,7 +94,7 @@ q(){ docker exec -i "$MYSQL_NAME" mysql -uroot -prootpw -N --default-character-s
 
 # ---------------------------------------------------------------- 种子（表已由 Flyway 建好）
 q "INSERT INTO teams (id, code, name, status, default_timezone) VALUES (7,'T-7','七组','ACTIVE','Asia/Shanghai');" >/dev/null
-q "INSERT INTO users (id, username, email, password_hash, display_name, status) VALUES (1001,'operator01','operator01@example.com','\$2a\$10\$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6','小王','ACTIVE');" >/dev/null
+q "INSERT INTO users (id, username, email, password_hash, display_name, status) VALUES (1001,'operator01','operator01@example.com','\$2a\$10\$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS','小王','ACTIVE');" >/dev/null
 q "INSERT INTO team_members (team_id,user_id,role,status) VALUES (7,1001,'OPERATOR','ACTIVE');" >/dev/null
 q "INSERT INTO analysis_runs (team_id, run_no, status, scope_type, algorithm_version, llm_status, progress) VALUES (7,'RUN-B204-PENDING','PENDING','ALL_ACTIVE','avg-ma-3sigma-v1','NOT_REQUESTED',0);" >/dev/null
 q "INSERT INTO analysis_runs (team_id, run_no, status, scope_type, algorithm_version, llm_status, progress) VALUES (7,'RUN-B204-SUCCEEDED','SUCCEEDED','ALL_ACTIVE','avg-ma-3sigma-v1','SUCCEEDED',100);" >/dev/null
@@ -104,7 +104,7 @@ chk "种子 run 就绪（PENDING/SUCCEEDED）" "2" "$(q "SELECT COUNT(*) FROM an
 log "RUN_PENDING=$RUN_PENDING RUN_SUCCEEDED=$RUN_SUCCEEDED"
 
 curl -s --noproxy '*' -X POST "http://127.0.0.1:$APP_PORT/api/v1/auth/login" \
-  -H "Content-Type: application/json" -d '{"username":"operator01","password":"S3cret!Passw0rd"}' > "$BODY"
+  -H "Content-Type: application/json" -d '{"username":"operator01","password":"1234"}' > "$BODY"
 T_OP=$(jget "data.accessToken")
 chk "operator01 登录" "1" "$([ -n "$T_OP" ] && [ "$T_OP" != "<unparsable>" ] && echo 1 || echo 0)"
 

@@ -64,7 +64,7 @@ sep
 log "[1] 响应头回显：客户端传入 X-Request-Id 必须原样返回"
 RID1="m7obs-login-$(date +%s)"
 code=$(api -X POST "$BASE/api/v1/auth/login" -H 'Content-Type: application/json' \
-  -H "X-Request-Id: $RID1" -d '{"username":"owner01","password":"S3cret!Passw0rd"}' \
+  -H "X-Request-Id: $RID1" -d '{"username":"owner01","password":"1234"}' \
   -D "$OUT/hdr-login.txt")
 chk "1 登录 HTTP" "200" "$code"
 chk "1 响应头 X-Request-Id 回显" "$RID1" "$(hdr "$OUT/hdr-login.txt")"

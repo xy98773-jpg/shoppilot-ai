@@ -1,6 +1,6 @@
 -- M6-T13 真栈种子（独立库；不入 db/migration）
 -- 团队 7 / 仓库 9004 / SKU 9002 / 供应商 9201；余额 10.000（在途列刻意种 0，用于证明「零写入」）
--- 口令统一 S3cret!Passw0rd（与 seed-b7/b8/b9/b95 同源哈希）
+-- 口令统一 1234（与 seed-b7/b8/b9/b95 同源哈希）
 
 DELETE FROM goods_receipt_items;
 DELETE FROM goods_receipts;
@@ -24,9 +24,9 @@ INSERT INTO teams (id, code, name, status, default_timezone) VALUES
   (7, 'T-T13', 'M6收口团', 'ACTIVE', 'Asia/Shanghai');
 
 INSERT INTO users (id, username, email, password_hash, display_name, status) VALUES
-  (1004, 'owner01',    'owner01@example.com',    '$2a$10$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6', '老板',   'ACTIVE'),
-  (1005, 'admin01',    'admin01@example.com',    '$2a$10$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6', '主管',   'ACTIVE'),
-  (1001, 'operator01', 'operator01@example.com', '$2a$10$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6', '小王',   'ACTIVE');
+  (1004, 'owner01',    'owner01@example.com',    '$2a$10$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS', '老板',   'ACTIVE'),
+  (1005, 'admin01',    'admin01@example.com',    '$2a$10$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS', '主管',   'ACTIVE'),
+  (1001, 'operator01', 'operator01@example.com', '$2a$10$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS', '小王',   'ACTIVE');
 
 INSERT INTO team_members (team_id, user_id, role, status) VALUES
   (7, 1004, 'OWNER',    'ACTIVE'),

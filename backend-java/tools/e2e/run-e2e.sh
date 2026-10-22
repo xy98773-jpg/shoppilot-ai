@@ -157,7 +157,7 @@ sep
 
 # ---------------------------------------------------------------- 登录
 login(){ api -X POST "$BASE/api/v1/auth/login" -H 'Content-Type: application/json' \
-           -d "{\"username\":\"$1\",\"password\":\"S3cret!Passw0rd\"}" >/dev/null; jget "data.accessToken"; }
+           -d "{\"username\":\"$1\",\"password\":\"1234\"}" >/dev/null; jget "data.accessToken"; }
 
 log "[S2] 登录四种角色"
 TOK_OWNER=$(login owner01)

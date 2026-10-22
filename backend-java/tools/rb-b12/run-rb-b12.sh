@@ -11,7 +11,7 @@
 set -u
 BASE="http://127.0.0.1:${APP_PORT:-18280}"
 MYSQL_CT="${MYSQL_CT:-rb-b12-mysql}"
-PW='S3cret!Passw0rd'
+PW='1234'
 PASS=0; FAIL=0; TOTAL=0
 
 log(){ printf '%s\n' "$*"; }

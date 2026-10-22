@@ -41,7 +41,7 @@ APP_LOG="$OUT_DIR/evidence-rb8h-app.log"
 MYSQL_CT="rb8h-mysql"
 MYSQL_PORT=3330
 APP_PORT=18110
-PW="S3cret!Passw0rd"
+PW="1234"
 BASE="http://localhost:$APP_PORT"
 JWT_SECRET="test-only-jwt-secret-0123456789abcdef"
 

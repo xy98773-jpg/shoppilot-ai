@@ -39,7 +39,7 @@ HDR_FILE="$OUT_DIR/evidence-rb10-headers.log"
 MYSQL_CT="rb10-mysql"
 MYSQL_PORT=3337
 APP_PORT=18117
-PW="S3cret!Passw0rd"
+PW="1234"
 BASE="http://localhost:$APP_PORT"
 JWT_SECRET="test-only-jwt-secret-0123456789abcdef"
 PY="python"
@@ -101,7 +101,7 @@ docker exec -i "$MYSQL_CT" mysql "${MYSQL_FLAGS[@]}" shoppilot < "$EVI/seed-b95.
   && log "SEED_OK (seed-b95.sql：团队 7，仓库 9004，SKU-A=9002 / SKU-B=9003 / SKU-C=9005 各 10.000)"
 # ★ seed-b95 无 APPROVER 账号；P6 需要它（后端 adjustments 白名单含 APPROVER）
 docker exec -i "$MYSQL_CT" mysql "${MYSQL_FLAGS[@]}" shoppilot -e \
-  "INSERT IGNORE INTO users (id,username,email,password_hash,display_name,status) VALUES (1006,'approver01','approver01@example.com','\$2a\$10\$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6','审批人','ACTIVE');
+  "INSERT IGNORE INTO users (id,username,email,password_hash,display_name,status) VALUES (1006,'approver01','approver01@example.com','\$2a\$10\$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS','审批人','ACTIVE');
    INSERT IGNORE INTO team_members (team_id,user_id,role,status) VALUES (7,1006,'APPROVER','ACTIVE');" \
   >> "$APP_LOG" 2>&1 && log "SEED_EXTRA_OK (approver01/APPROVER, 仅本复核库)"
 

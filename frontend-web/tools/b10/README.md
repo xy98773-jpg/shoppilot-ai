@@ -43,7 +43,7 @@ bash frontend-web/tools/b10/run-b10-evidence.sh
   这两类表不在种子内，残留数据会①撞文件哈希 `IMP-4004` ②让团队删除被 `RESTRICT` 挡。
 - MySQL 用 **业务账号** `shoppilot`（compose 的 root 口令由环境变量决定，不可假定）；
   客户端必须 `--default-character-set=utf8mb4`（否则中文 SKU 名乱码 → 断言假失败）。
-- 登录口令统一 `S3cret!Passw0rd`（`owner01` / `operator01` / `viewer01`）。
+- 登录口令统一 `1234`（`owner01` / `operator01` / `viewer01`）。
 
 ---
 

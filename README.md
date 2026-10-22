@@ -160,7 +160,7 @@ Flyway 迁移**只建表结构、不建业务数据** ⇒ 全新库 `teams` / `u
 `login` / `refresh` / `logout` / `me`），第一个团队与 OWNER 只能由 DBA/运维直接入库：
 
 ```bash
-# 开发用种子：团队 7（星海优选）+ 团队 8 + 5 个用户 + team_members；口令统一 S3cret!Passw0rd
+# 开发用种子：团队 7（星海优选）+ 团队 8 + 5 个用户 + team_members；口令统一 1234
 docker exec -i shoppilot-dev-mysql-1 mysql -ushoppilot -pchangeme_app_password shoppilot \
   --default-character-set=utf8mb4 < backend-java/tools/evi/seed-b7.sql
 ```

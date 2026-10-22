@@ -154,7 +154,7 @@ sep
 # ---------------------------------------------------------------- 探针
 log "[P1] 登录 operator01"
 code=$(api -X POST "$BASE/api/v1/auth/login" -H 'Content-Type: application/json' \
-  -d '{"username":"operator01","password":"S3cret!Passw0rd"}')
+  -d '{"username":"operator01","password":"1234"}')
 # ★ 登录响应是 camelCase（AuthTokenResponse record，无 @JsonNaming）⇒ data.accessToken
 TOK=$(jget "data.accessToken")
 chk "P1 login HTTP" "200" "$code"

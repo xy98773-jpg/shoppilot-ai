@@ -139,7 +139,7 @@ chk "种子导入成功" "0" "$SEED_RC"
 chk "种子：团队 7 默认仓 9004" "1" "$(q "SELECT is_default FROM shoppilot.warehouses WHERE id=9004;")"
 chk "种子：团队 7 ACTIVE SKU 数（装配预期 5）" "5" "$(q "SELECT COUNT(*) FROM shoppilot.skus WHERE team_id=7 AND status='ACTIVE';")"
 
-login(){ curl -s --noproxy '*' -X POST "http://127.0.0.1:$APP_PORT/api/v1/auth/login" -H "Content-Type: application/json" -d "{\"username\":\"$1\",\"password\":\"S3cret!Passw0rd\"}" | "$PY" -c "import json,sys;print(json.load(sys.stdin).get('data',{}).get('accessToken',''))"; }
+login(){ curl -s --noproxy '*' -X POST "http://127.0.0.1:$APP_PORT/api/v1/auth/login" -H "Content-Type: application/json" -d "{\"username\":\"$1\",\"password\":\"1234\"}" | "$PY" -c "import json,sys;print(json.load(sys.stdin).get('data',{}).get('accessToken',''))"; }
 T_OP=$(login operator01); T_VW=$(login viewer01); T_T8=$(login owner8)
 chk "operator01 登录" "1" "$([ -n "$T_OP" ] && echo 1 || echo 0)"
 chk "viewer01 登录" "1" "$([ -n "$T_VW" ] && echo 1 || echo 0)"

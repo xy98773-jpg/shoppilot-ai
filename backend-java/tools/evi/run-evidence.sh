@@ -10,7 +10,7 @@ MYSQL_CT="b7mysql-b7"
 MYSQL_PORT=3319
 APP_PORT=18099
 JWT_SECRET="test-only-jwt-secret-0123456789abcdef"
-PW="S3cret!Passw0rd"
+PW="1234"
 BASE="http://localhost:$APP_PORT"
 
 : > "$LOG"

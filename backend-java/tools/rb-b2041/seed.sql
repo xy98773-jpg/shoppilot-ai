@@ -1,6 +1,6 @@
 -- B20.1 项目负责人独立复核种子（独立库，不入 db/migration）
 -- 目的：让「items 装配」在真栈里有真实数据可装（库存 / 销量 / 交期 / 采购参数 / 类目）
--- 口令统一：S3cret!Passw0rd（BCrypt 哈希沿用 seed-b7）
+-- 口令统一：1234（BCrypt 哈希沿用 seed-b7）
 
 DELETE FROM refresh_tokens;
 DELETE FROM team_members;
@@ -20,11 +20,11 @@ INSERT INTO teams (id, code, name, status, default_timezone) VALUES
   (8, 'T-OTHER', '别的团队', 'ACTIVE', 'Asia/Shanghai');
 
 INSERT INTO users (id, username, email, password_hash, display_name, status) VALUES
-  (1004, 'owner01',    'owner01@example.com',    '$2a$10$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6', '老板',   'ACTIVE'),
-  (1005, 'admin01',    'admin01@example.com',    '$2a$10$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6', '主管',   'ACTIVE'),
-  (1001, 'operator01', 'operator01@example.com', '$2a$10$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6', '小王',   'ACTIVE'),
-  (1003, 'viewer01',   'viewer01@example.com',   '$2a$10$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6', '观察者', 'ACTIVE'),
-  (2004, 'owner8',     'owner8@example.com',     '$2a$10$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6', '外来户', 'ACTIVE');
+  (1004, 'owner01',    'owner01@example.com',    '$2a$10$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS', '老板',   'ACTIVE'),
+  (1005, 'admin01',    'admin01@example.com',    '$2a$10$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS', '主管',   'ACTIVE'),
+  (1001, 'operator01', 'operator01@example.com', '$2a$10$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS', '小王',   'ACTIVE'),
+  (1003, 'viewer01',   'viewer01@example.com',   '$2a$10$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS', '观察者', 'ACTIVE'),
+  (2004, 'owner8',     'owner8@example.com',     '$2a$10$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS', '外来户', 'ACTIVE');
 
 INSERT INTO team_members (team_id, user_id, role, status) VALUES
   (7, 1004, 'OWNER',    'ACTIVE'),

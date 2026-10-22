@@ -149,7 +149,7 @@ sep
 log "[8] 全新库冒烟（全新库【没有】种子用户：迁移只建结构，不建业务数据）"
 code=$(curl -s --noproxy '*' -o "$OUT/login-t06.json" -w '%{http_code}' \
   -X POST "http://127.0.0.1:$NGINX_PORT/api/v1/auth/login" -H 'Content-Type: application/json' \
-  -d '{"username":"owner01","password":"S3cret!Passw0rd"}')
+  -d '{"username":"owner01","password":"1234"}')
 # 全新库登录必须失败：能登成功才说明库被污染（复用了别人的数据卷）
 chk "8 全新库登录被拒（无种子用户）" "401" "$code"
 chk "8 登录错误码" "AUTH-1002" "$(sed -n 's/.*"code":"\([A-Z0-9-]*\)".*/\1/p' "$OUT/login-t06.json" | head -1)"

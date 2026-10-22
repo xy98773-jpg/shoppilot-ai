@@ -117,7 +117,7 @@ chk "种子导入成功" "0" "$?"
 chk "迁移版本数 10" "10" "$(q "SELECT COUNT(*) FROM flyway_schema_history WHERE success=1;")"
 
 curl -s --noproxy '*' -X POST "http://127.0.0.1:$APP_PORT/api/v1/auth/login" \
-  -H "Content-Type: application/json" -d '{"username":"operator01","password":"S3cret!Passw0rd"}' > "$BODY"
+  -H "Content-Type: application/json" -d '{"username":"operator01","password":"1234"}' > "$BODY"
 T_OP=$(jget "data.accessToken")
 chk "operator01 登录" "1" "$([ -n "$T_OP" ] && [ "$T_OP" != "<unparsable>" ] && echo 1 || echo 0)"
 

@@ -10,7 +10,7 @@ LOG="$(cd "$(dirname "$0")" && pwd)/evidence-rb7.txt"
 MYSQL_CT="rb7-mysql"
 MYSQL_PORT=3327
 APP_PORT=18107
-PW="S3cret!Passw0rd"
+PW="1234"
 BASE="http://localhost:$APP_PORT"
 JWT_SECRET="test-only-jwt-secret-0123456789abcdef"
 

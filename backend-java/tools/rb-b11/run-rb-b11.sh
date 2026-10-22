@@ -12,7 +12,7 @@
 set -u
 BASE="http://127.0.0.1:${APP_PORT:-18260}"
 MYSQL_CT="${MYSQL_CT:-rb-b11-mysql}"
-PW='S3cret!Passw0rd'
+PW='1234'
 HDR_FILE="$(mktemp)"
 PASS=0; FAIL=0; TOTAL=0
 

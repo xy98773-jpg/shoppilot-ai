@@ -134,7 +134,7 @@ chk "种子：团队 7 的默认仓 9004 is_default=1" "1" "$(q "SELECT is_defau
 chk "种子：9003 无库存行" "0" "$(q "SELECT COUNT(*) FROM shoppilot.inventory_balances WHERE sku_id=9003;")"
 chk "种子：9002 销量 28 条（含窗口外 1 条）" "28" "$(q "SELECT COUNT(*) FROM shoppilot.sales_daily WHERE sku_id=9002;")"
 
-login(){ curl -s --noproxy '*' -X POST "http://127.0.0.1:$APP_PORT/api/v1/auth/login" -H "Content-Type: application/json" -d "{\"username\":\"$1\",\"password\":\"S3cret!Passw0rd\"}" | "$PY" -c "import json,sys;print(json.load(sys.stdin).get('data',{}).get('accessToken',''))"; }
+login(){ curl -s --noproxy '*' -X POST "http://127.0.0.1:$APP_PORT/api/v1/auth/login" -H "Content-Type: application/json" -d "{\"username\":\"$1\",\"password\":\"1234\"}" | "$PY" -c "import json,sys;print(json.load(sys.stdin).get('data',{}).get('accessToken',''))"; }
 T_OP=$(login operator01); T_T8=$(login owner8)
 chk "operator01 登录" "1" "$([ -n "$T_OP" ] && echo 1 || echo 0)"
 chk "owner8（团队 8）登录" "1" "$([ -n "$T_T8" ] && echo 1 || echo 0)"

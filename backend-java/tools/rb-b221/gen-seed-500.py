@@ -25,8 +25,8 @@ DATES = ["2026-09-16", "2026-09-17", "2026-09-18", "2026-09-19", "2026-09-20",
          "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-10",
          "2026-10-11", "2026-10-12", "2026-10-13"]
 
-# 口令统一 S3cret!Passw0rd（BCrypt 哈希沿用 tools/evi/seed-b7*.sql）
-PWD_HASH = "$2a$10$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6"
+# 口令统一 1234（BCrypt 哈希沿用 tools/evi/seed-b7*.sql）
+PWD_HASH = "$2a$10$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS"
 
 out = []
 w = out.append

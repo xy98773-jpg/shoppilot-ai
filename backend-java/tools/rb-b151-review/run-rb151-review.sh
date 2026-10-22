@@ -94,7 +94,7 @@ log "APP_UP=1"
 docker exec -i "$MYSQL_NAME" mysql -uroot -prootpw --default-character-set=utf8mb4 shoppilot < "$ROOT/backend-java/tools/evi/seed-b7.sql" 2>/dev/null
 q(){ docker exec -i "$MYSQL_NAME" mysql -uroot -prootpw -N --default-character-set=utf8mb4 -e "$1" 2>/dev/null | tr -d '\r'; }
 T_OP=$(curl -s --noproxy '*' -X POST "http://127.0.0.1:$APP_PORT/api/v1/auth/login" -H "Content-Type: application/json" \
-  -d '{"username":"operator01","password":"S3cret!Passw0rd"}' | "$PY" -c "import json,sys;print(json.load(sys.stdin).get('data',{}).get('accessToken',''))")
+  -d '{"username":"operator01","password":"1234"}' | "$PY" -c "import json,sys;print(json.load(sys.stdin).get('data',{}).get('accessToken',''))")
 chk "operator01 登录" "1" "$([ -n "$T_OP" ] && echo 1 || echo 0)"
 
 jf(){ "$PY" - "$OUT/body.json" "$1" <<'PYEOF'

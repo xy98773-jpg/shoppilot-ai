@@ -40,7 +40,7 @@ HDR_FILE="$OUT_DIR/evidence-rb96-headers.log"
 MYSQL_CT="rb96-mysql"
 MYSQL_PORT=3336
 APP_PORT=18116
-PW="S3cret!Passw0rd"
+PW="1234"
 BASE="http://localhost:$APP_PORT"
 JWT_SECRET="test-only-jwt-secret-0123456789abcdef"
 

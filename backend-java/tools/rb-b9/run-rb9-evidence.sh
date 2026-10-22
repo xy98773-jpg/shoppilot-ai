@@ -45,7 +45,7 @@ APP_LOG="$OUT_DIR/evidence-rb9-app.log"
 MYSQL_CT="rb9-mysql"
 MYSQL_PORT=3332
 APP_PORT=18112
-PW="S3cret!Passw0rd"
+PW="1234"
 BASE="http://localhost:$APP_PORT"
 JWT_SECRET="test-only-jwt-secret-0123456789abcdef"
 

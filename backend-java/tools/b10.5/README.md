@@ -52,7 +52,7 @@ bash backend-java/tools/b10.5/run-b105-evidence.sh
 退出码 `0` = 全部 PASS；`2/3/4/5/6` = jar 缺失 / MySQL 未就绪 / 应用未起 / 种子失败 / 登录失败。
 
 **种子**：`backend-java/tools/evi/seed-b95.sql`（团队 7 = 星海优选，仓库 `9004`，
-SKU-A=`9002` / SKU-B=`9003` / SKU-C=`9005` 各 `10.000`），口令 `S3cret!Passw0rd`。
+SKU-A=`9002` / SKU-B=`9003` / SKU-C=`9005` 各 `10.000`），口令 `1234`。
 
 ---
 

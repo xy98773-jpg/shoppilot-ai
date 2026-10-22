@@ -45,7 +45,7 @@ HDR_FILE="$OUT_DIR/evidence-b107-headers.log"
 MYSQL_CT="b107-mysql"
 MYSQL_PORT="${B107_MYSQL_PORT:-3342}"
 APP_PORT="${B107_APP_PORT:-18200}"
-PW="S3cret!Passw0rd"
+PW="1234"
 BASE="http://localhost:$APP_PORT"
 JWT_SECRET="test-only-jwt-secret-0123456789abcdef"
 # 过去日期（SAL-6003 只拦「晚于今天 / 早于上架日」）

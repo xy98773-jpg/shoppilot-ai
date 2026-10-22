@@ -144,7 +144,7 @@ log "SEED_DONE"
 
 LOGIN_BODY=$(curl -s --noproxy '*' -X POST "http://127.0.0.1:$APP_PORT/api/v1/auth/login" \
   -H "Content-Type: application/json" \
-  -d '{"username":"operator01","password":"S3cret!Passw0rd"}')
+  -d '{"username":"operator01","password":"1234"}')
 TOKEN_JWT=$(echo "$LOGIN_BODY" | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p')
 chk "登录拿到 accessToken" "1" "$([ -n "$TOKEN_JWT" ] && echo 1 || echo 0)"
 if [ -z "$TOKEN_JWT" ]; then

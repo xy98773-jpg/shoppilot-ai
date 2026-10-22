@@ -141,11 +141,11 @@ chk "sales_daily 行数 = 14000" "14000" "$(q "SELECT COUNT(*) FROM sales_daily 
 chk "inventory_balances 行数 = 500" "500" "$(q "SELECT COUNT(*) FROM inventory_balances WHERE team_id=7;")"
 
 curl -s --noproxy '*' -X POST "http://127.0.0.1:$APP_PORT/api/v1/auth/login" \
-  -H "Content-Type: application/json" -d '{"username":"operator01","password":"S3cret!Passw0rd"}' > "$BODY"
+  -H "Content-Type: application/json" -d '{"username":"operator01","password":"1234"}' > "$BODY"
 T_OP=$(jget "data.accessToken")
 chk "operator01 登录" "1" "$([ -n "$T_OP" ] && [ "$T_OP" != "<unparsable>" ] && echo 1 || echo 0)"
 T_VIEW=$(curl -s --noproxy '*' -X POST "http://127.0.0.1:$APP_PORT/api/v1/auth/login" \
-  -H "Content-Type: application/json" -d '{"username":"viewer01","password":"S3cret!Passw0rd"}' \
+  -H "Content-Type: application/json" -d '{"username":"viewer01","password":"1234"}' \
   | "$PY" -c "import json,sys; print(json.load(sys.stdin)['data']['accessToken'])")
 
 # ---------------------------------------------------------------- R148：500 SKU 计时

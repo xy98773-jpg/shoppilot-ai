@@ -41,7 +41,7 @@ MYSQL_CT="${B10_MYSQL_CT:-shoppilot-b10-mysql-1}"
 #   业务账号对 shoppilot 库有全部权限，种子的 DML 足够）
 MYSQL_USER="${B10_MYSQL_USER:-shoppilot}"
 MYSQL_PASSWORD="${B10_MYSQL_PASSWORD:-changeme_app_password}"
-PW="S3cret!Passw0rd"
+PW="1234"
 LOG="$OUT_DIR/evidence-b10.txt"
 HDR="$OUT_DIR/evidence-b10-headers.log"
 CSV="$OUT_DIR/sku-master.csv"

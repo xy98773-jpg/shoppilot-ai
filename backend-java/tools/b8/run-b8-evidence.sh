@@ -48,7 +48,7 @@ APP_LOG="$OUT_DIR/evidence-b8-app.log"
 MYSQL_CT="b8-mysql"
 MYSQL_PORT=3328
 APP_PORT=18108
-PW="S3cret!Passw0rd"
+PW="1234"
 BASE="http://localhost:$APP_PORT"
 JWT_SECRET="test-only-jwt-secret-0123456789abcdef"
 

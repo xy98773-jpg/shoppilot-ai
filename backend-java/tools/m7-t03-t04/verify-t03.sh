@@ -3,7 +3,7 @@
 # M7-T03 安全验证（NFR-SEC：无密钥入库 / 越权 403 / 注入无效）
 # -----------------------------------------------------------------------------
 # 目标栈：deploy/docker-compose.dev.yml 的 nginx :8081（T05 已起）
-# 前置：dev 库用户口令统一为 S3cret!Passw0rd（本脚本第 0 步会幂等重置；
+# 前置：dev 库用户口令统一为 1234（本脚本第 0 步会幂等重置；
 #       仅 dev 栈，生产不入仓、不改库）。
 # 用法：bash backend-java/tools/m7-t03-t04/verify-t03.sh
 # =============================================================================
@@ -15,7 +15,7 @@ BODY="$OUT/body-t03.json"
 BASE="http://127.0.0.1:8081"
 MYSQL=shoppilot-dev-mysql-1
 MYSQL_ARGS="-ushoppilot -pchangeme_app_password shoppilot"
-HASH='$2a$10$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6'
+HASH='$2a$10$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS'
 PY=/c/Users/Shu/.workbuddy/binaries/python/versions/3.13.12/python.exe
 [ -x "$PY" ] || PY=python
 PASS=0; FAIL=0
@@ -40,7 +40,7 @@ print('' if d is None else d)" "$BODY" "$1"; }
 sql(){ docker exec "$MYSQL" mysql $MYSQL_ARGS --default-character-set=utf8mb4 -N -B -e "$1" 2>/dev/null; }
 
 login(){ api -X POST "$BASE/api/v1/auth/login" -H 'Content-Type: application/json' \
-           -d "{\"username\":\"$1\",\"password\":\"S3cret!Passw0rd\"}" >/dev/null; jget "data.accessToken"; }
+           -d "{\"username\":\"$1\",\"password\":\"1234\"}" >/dev/null; jget "data.accessToken"; }
 
 log "M7-T03 安全验证  $(date '+%F %T')"
 log "目标：$BASE（compose dev 栈）"

@@ -91,7 +91,7 @@ log "    on_hand 合计 = $(sql "SELECT SUM(on_hand_qty) FROM inventory_balances
 
 log "[1] 登录"
 code=$(api -X POST "$BASE/api/v1/auth/login" -H 'Content-Type: application/json' \
-  -d '{"username":"owner01","password":"S3cret!Passw0rd"}')
+  -d '{"username":"owner01","password":"1234"}')
 chk "1 登录 HTTP" "200" "$code"
 TOK=$(jget 'data.accessToken')
 AUTH="Authorization: Bearer $TOK"

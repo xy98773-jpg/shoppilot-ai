@@ -3,7 +3,7 @@
 -- ★ 导入命令必须带 --default-character-set=utf8mb4（2026-10-22 教训：不带会按 latin1 双重编码，
 --   users.display_name / teams.name / warehouses.name 全部变 mojibake，需用
 --   CONVERT(BINARY CONVERT(col USING latin1) USING utf8mb4) 反转修复）。
--- 便于脚本结论与集成测试互证。口令统一：S3cret!Passw0rd（与 seed-b7/b8/b9 同源哈希）
+-- 便于脚本结论与集成测试互证。口令统一：1234（与 seed-b7/b8/b9 同源哈希）
 --
 -- 团队 7（星海优选）：仓库 9004=WH-MAIN；SKU 9002=SKU-A、9003=SKU-B、9005=SKU-C（均属商品 9001）
 -- 团队 8（别的团队）：仓库 9103=WH-OTHER；SKU 9102（属商品 9101）—— 保留作跨团队背景数据
@@ -48,11 +48,11 @@ INSERT INTO teams (id, code, name, status, default_timezone) VALUES
   (8, 'T-OTHER', '别的团队', 'ACTIVE', 'Asia/Shanghai');
 
 INSERT INTO users (id, username, email, password_hash, display_name, status) VALUES
-  (1004, 'owner01',    'owner01@example.com',    '$2a$10$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6', '老板',   'ACTIVE'),
-  (1005, 'admin01',    'admin01@example.com',    '$2a$10$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6', '主管',   'ACTIVE'),
-  (1001, 'operator01', 'operator01@example.com', '$2a$10$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6', '小王',   'ACTIVE'),
-  (1003, 'viewer01',   'viewer01@example.com',   '$2a$10$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6', '观察者', 'ACTIVE'),
-  (2004, 'owner8',     'owner8@example.com',     '$2a$10$Pfsl60kXREUbdyYOuaeJEOfnAszIx/cp3SMO/lqt6WLsBARBEMw/6', '外来户', 'ACTIVE');
+  (1004, 'owner01',    'owner01@example.com',    '$2a$10$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS', '老板',   'ACTIVE'),
+  (1005, 'admin01',    'admin01@example.com',    '$2a$10$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS', '主管',   'ACTIVE'),
+  (1001, 'operator01', 'operator01@example.com', '$2a$10$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS', '小王',   'ACTIVE'),
+  (1003, 'viewer01',   'viewer01@example.com',   '$2a$10$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS', '观察者', 'ACTIVE'),
+  (2004, 'owner8',     'owner8@example.com',     '$2a$10$Y.kQCLjuasoWXvfXl/zurubfV9RTe3NJl2hlguWZz.QKfZ7zvuuGS', '外来户', 'ACTIVE');
 
 INSERT INTO team_members (team_id, user_id, role, status) VALUES
   (7, 1004, 'OWNER',    'ACTIVE'),

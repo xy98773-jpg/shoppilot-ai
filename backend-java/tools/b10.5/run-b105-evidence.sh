@@ -43,7 +43,7 @@ CSV_DIR="$OUT_DIR"
 MYSQL_CT="b105-mysql"
 MYSQL_PORT="${B105_MYSQL_PORT:-3338}"
 APP_PORT="${B105_APP_PORT:-18118}"
-PW="S3cret!Passw0rd"
+PW="1234"
 BASE="http://localhost:$APP_PORT"
 JWT_SECRET="test-only-jwt-secret-0123456789abcdef"
 # 过去日期（SAL-6003 只拦未来日期）

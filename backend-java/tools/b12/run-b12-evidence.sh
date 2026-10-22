@@ -42,7 +42,7 @@ MYSQL_CT="b12-mysql"
 MYSQL_PORT="${B12_MYSQL_PORT:-3363}"
 APP_PORT="${B12_APP_PORT:-18270}"
 IMPORT_DIR="${B12_IMPORT_DIR:-$OUT_DIR/.import-storage}"
-PW="S3cret!Passw0rd"
+PW="1234"
 BASE="http://localhost:$APP_PORT"
 JWT_SECRET="test-only-jwt-secret-0123456789abcdef"
 

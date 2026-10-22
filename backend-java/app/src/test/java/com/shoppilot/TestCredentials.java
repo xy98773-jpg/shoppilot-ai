@@ -15,7 +15,7 @@ public final class TestCredentials {
     public static final String RAW_PASSWORD =
             System.getenv("SHOPPILOT_TEST_PASSWORD") != null
                     ? System.getenv("SHOPPILOT_TEST_PASSWORD")
-                    : "S3cret!Passw0rd";
+                    : "1234";
 
     /** 对应口令的 BCrypt 哈希（测试直插库时使用，避免每个测试重复 encode）。 */
     public static final String PASSWORD_HASH = new BCryptPasswordEncoder().encode(RAW_PASSWORD);

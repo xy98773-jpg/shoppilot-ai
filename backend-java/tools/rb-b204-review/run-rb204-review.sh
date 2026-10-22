@@ -116,7 +116,7 @@ q(){ docker exec -i "$MYSQL_NAME" mysql -uroot -prootpw -N --default-character-s
 docker exec -i "$MYSQL_NAME" mysql -uroot -prootpw --default-character-set=utf8mb4 shoppilot < "$OUT/seed-b201.sql" 2>"$OUT/seed.err"
 chk "种子导入成功" "0" "$?"
 
-login(){ curl -s --noproxy '*' -X POST "http://127.0.0.1:$APP_PORT/api/v1/auth/login" -H "Content-Type: application/json" -d "{\"username\":\"$1\",\"password\":\"S3cret!Passw0rd\"}" | "$PY" -c "import json,sys;print(json.load(sys.stdin).get('data',{}).get('accessToken',''))"; }
+login(){ curl -s --noproxy '*' -X POST "http://127.0.0.1:$APP_PORT/api/v1/auth/login" -H "Content-Type: application/json" -d "{\"username\":\"$1\",\"password\":\"1234\"}" | "$PY" -c "import json,sys;print(json.load(sys.stdin).get('data',{}).get('accessToken',''))"; }
 T_OP=$(login operator01); T_VW=$(login viewer01); T_T8=$(login owner8)
 chk "三账号登录" "1|1|1" "$([ -n "$T_OP" ] && echo 1 || echo 0)|$([ -n "$T_VW" ] && echo 1 || echo 0)|$([ -n "$T_T8" ] && echo 1 || echo 0)"
 
