@@ -38,33 +38,21 @@
 
 ```mermaid
 flowchart TB
-    subgraph Z_BROWSER[浏览器]
-        FE[Vue 3 前端]
-    end
-
-    subgraph Z_EDGE[接入层]
-        NG[Nginx 反向代理]
-    end
-
-    subgraph Z_JAVA[Java 后端 · 模块化单体]
-        APP[app 组合根]
-        IDN[identity]
-        CAT[catalog]
-        INV[inventory]
-        SAL[sales]
-        ANA[analysis]
-        RPL[replenishment]
-        PUR[purchasing]
-        IMP[importdata]
-        AUD[audit]
-        CMN[common]
-    end
-
-    subgraph Z_PY[Python 分析服务]
-        SA[FastAPI 分析服务]
-    end
-
+    FE[Vue 3 前端]
+    NG[Nginx 反向代理]
+    APP[Java 后端 · 模块化单体]
+    IDN[identity]
+    CAT[catalog]
+    INV[inventory]
+    SAL[sales]
+    ANA[analysis]
+    RPL[replenishment]
+    PUR[purchasing]
+    IMP[importdata]
+    AUD[audit]
+    CMN[common]
     DB[MySQL 8]
+    SA[Python 分析服务]
     LLM[大模型]
 
     FE --> NG
