@@ -12,35 +12,44 @@
         </div>
       </template>
 
-      <el-form label-width="150px" class="run-create__form">
-        <el-divider content-position="left">分析范围</el-divider>
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        class="run-create__hint-bar"
+        title="字段格式：中文含义（英文参数名）。括号内英文是接口参数名，填写时按中文提示的值填即可。"
+      />
 
-        <el-form-item label="范围类型" required>
-          <el-select v-model="form.scope_type" style="width: 220px">
+      <el-form label-width="210px" class="run-create__form">
+        <el-divider content-position="left">分析范围（要分析哪些商品）</el-divider>
+
+        <el-form-item label="范围类型（scope_type）" required>
+          <el-select v-model="form.scope_type" style="width: 260px">
             <el-option label="全部活跃 SKU（ALL_ACTIVE）" value="ALL_ACTIVE" />
             <el-option label="指定 SKU（SELECTED_SKUS）" value="SELECTED_SKUS" />
             <el-option label="按类目（CATEGORY）" value="CATEGORY" />
           </el-select>
         </el-form-item>
 
-        <el-form-item v-if="form.scope_type === 'SELECTED_SKUS'" label="SKU ID" required>
+        <el-form-item v-if="form.scope_type === 'SELECTED_SKUS'" label="SKU ID（sku_ids）" required>
           <el-input
             v-model="form.sku_ids"
             type="textarea"
             :rows="3"
-            placeholder="多个 SKU ID 用逗号/空格分隔，如 5001, 5002（上限 2000 个）"
+            placeholder="多个 SKU ID 用逗号/空格分隔，如 910001, 910002（上限 2000 个）"
           />
         </el-form-item>
 
-        <el-form-item v-if="form.scope_type === 'CATEGORY'" label="分析类目" required>
+        <el-form-item v-if="form.scope_type === 'CATEGORY'" label="分析类目（category）" required>
           <el-input v-model="form.category" placeholder="如 箱包" style="width: 260px" />
         </el-form-item>
 
-        <el-form-item label="限定仓库 ID">
+        <el-form-item label="限定仓库 ID（warehouse_id）">
           <el-input v-model="form.warehouse_id" placeholder="留空 = 默认仓" style="width: 200px" />
+          <span class="run-create__hint">只统计该仓库存；留空取团队默认仓</span>
         </el-form-item>
 
-        <el-form-item label="数据窗口" required>
+        <el-form-item label="数据窗口（date_from ~ date_to）" required>
           <el-date-picker
             v-model="form.date_from"
             type="date"
@@ -59,50 +68,55 @@
           <span class="run-create__hint">窗口内有效销售天数不足会返回 ANL-7008（数据不足）</span>
         </el-form-item>
 
-        <el-divider content-position="left">运行参数（缺省取服务端默认值）</el-divider>
+        <el-divider content-position="left">运行参数（怎么算，缺省取服务端默认值）</el-divider>
 
-        <el-form-item label="统计窗口 window_days">
+        <el-form-item label="统计窗口（window_days）">
           <el-input v-model="form.window_days" style="width: 120px" />
-          <span class="run-create__hint">1..365，默认 28</span>
+          <span class="run-create__hint">1..365，默认 28；用最近多少天的销量算日均销量 D</span>
         </el-form-item>
-        <el-form-item label="最少有效天数 min_days">
+        <el-form-item label="最少有效天数（min_days）">
           <el-input v-model="form.min_days" style="width: 120px" />
-          <span class="run-create__hint">1..统计窗口，默认 7</span>
+          <span class="run-create__hint">1..统计窗口，默认 7；有效天数不足则判 DATA_INSUFFICIENT（数据不足）</span>
         </el-form-item>
-        <el-form-item label="覆盖天数 coverage_days">
+        <el-form-item label="覆盖天数（coverage_days，补货周期 R）">
           <el-input v-model="form.coverage_days" style="width: 120px" />
-          <span class="run-create__hint">0..365，默认 7</span>
+          <span class="run-create__hint">0..365，默认 7；这次补的货要覆盖几天用量</span>
         </el-form-item>
-        <el-form-item label="默认交期 lead_time_default">
+        <el-form-item label="默认交期（lead_time_default，交期 L）">
           <el-input v-model="form.lead_time_default" style="width: 120px" />
-          <span class="run-create__hint">0..365 天，默认 7</span>
+          <span class="run-create__hint">0..365 天，默认 7；下单到到货的天数（SKU 自身配置优先）</span>
         </el-form-item>
-        <el-form-item label="安全库存系数 ss_ratio">
+        <el-form-item label="安全库存系数（ss_ratio，SS 系数）">
           <el-input v-model="form.ss_ratio" style="width: 120px" />
-          <span class="run-create__hint">非负，默认 0.5</span>
+          <span class="run-create__hint">非负，默认 0.5；安全库存 SS = 日均销量 × ceil(交期 × 系数)</span>
         </el-form-item>
-        <el-form-item label="CV 阈值 cv_high">
+        <el-form-item label="CV 阈值（cv_high，销量波动系数）">
           <el-input v-model="form.cv_high" style="width: 120px" />
-          <span class="run-create__hint">非负，默认 1.0</span>
+          <span class="run-create__hint">非负，默认 1.0；CV 超过它则安全库存 ×1.5（波动大要多备）</span>
         </el-form-item>
-        <el-form-item label="预算上限 budget_limit">
+        <el-form-item label="预算上限（budget_limit）">
           <el-input v-model="form.budget_limit" placeholder="留空 = 不限制" style="width: 160px" />
+          <span class="run-create__hint">超出预算的补货建议会被截断</span>
         </el-form-item>
 
-        <el-form-item label="启用 LLM 解释">
+        <el-form-item label="启用 LLM 解释（enable_llm）">
           <el-switch v-model="form.enable_llm" />
+          <span class="run-create__hint">关闭则只有数字结论，没有大模型写的中文解读</span>
         </el-form-item>
 
-        <el-divider content-position="left">算法与模型</el-divider>
+        <el-divider content-position="left">算法与模型（用哪个算法、哪个大模型）</el-divider>
 
-        <el-form-item label="算法版本" required>
+        <el-form-item label="算法版本（algorithm_version）" required>
           <el-input v-model="form.algorithm_version" style="width: 260px" />
+          <span class="run-create__hint">默认 avg-ma-3sigma-v1（移动平均 + 3σ 截尾）</span>
         </el-form-item>
-        <el-form-item v-if="form.enable_llm" label="Prompt 版本" required>
+        <el-form-item v-if="form.enable_llm" label="Prompt 版本（prompt_version）" required>
           <el-input v-model="form.prompt_version" style="width: 260px" />
+          <span class="run-create__hint">默认 explain_risk.v1（风险解释提示词模板）</span>
         </el-form-item>
-        <el-form-item v-if="form.enable_llm" label="模型名">
+        <el-form-item v-if="form.enable_llm" label="模型名（model_name）">
           <el-input v-model="form.model_name" placeholder="留空 = 服务端默认模型" style="width: 260px" />
+          <span class="run-create__hint">留空用服务端默认（当前 DeepSeek deepseek-chat）</span>
         </el-form-item>
 
         <el-form-item>
@@ -203,6 +217,9 @@ function goList(): void {
 }
 .run-create__form {
   max-width: 980px;
+}
+.run-create__hint-bar {
+  margin-bottom: 12px;
 }
 .run-create__dash {
   margin: 0 8px;
