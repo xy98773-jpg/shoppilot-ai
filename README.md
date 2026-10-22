@@ -37,16 +37,16 @@
 ## 3. 系统架构
 
 ```mermaid
-graph TB
-    subgraph Browser["浏览器"]
+flowchart TB
+    subgraph Z_BROWSER[浏览器]
         FE["Vue 3 + TypeScript<br/>Element Plus / Pinia / ECharts"]
     end
 
-    subgraph Edge["接入层"]
+    subgraph Z_EDGE[接入层]
         NG["Nginx<br/>静态资源 + /api 反向代理<br/>请求标识透传"]
     end
 
-    subgraph Java["Java 后端（模块化单体 · 业务数据唯一写方）"]
+    subgraph Z_JAVA[Java 后端 · 模块化单体 · 业务数据唯一写方]
         APP["app（组合根）"]
         IDN["identity"]
         CAT["catalog"]
@@ -60,18 +60,35 @@ graph TB
         CMN["common"]
     end
 
-    subgraph Py["Python 分析服务（只读 · 确定性计算 + 大模型解释）"]
+    subgraph Z_PY[Python 分析服务 · 只读]
         SA["FastAPI<br/>统计计算 / 规则判定 / Prompt 编排"]
     end
 
     DB[("MySQL 8<br/>Flyway 版本化迁移")]
-    LLM["大模型（OpenAI 兼容接口）"]
+    LLM["大模型<br/>OpenAI 兼容接口"]
 
-    FE --> NG --> APP
-    APP --> IDN & CAT & INV & SAL & ANA & RPL & PUR & IMP & AUD
-    IDN & CAT & INV & SAL & ANA & RPL & PUR & IMP & AUD --> CMN
+    FE --> NG
+    NG --> APP
+    APP --> IDN
+    APP --> CAT
+    APP --> INV
+    APP --> SAL
+    APP --> ANA
+    APP --> RPL
+    APP --> PUR
+    APP --> IMP
+    APP --> AUD
+    IDN --> CMN
+    CAT --> CMN
+    INV --> CMN
+    SAL --> CMN
+    ANA --> CMN
+    RPL --> CMN
+    PUR --> CMN
+    IMP --> CMN
+    AUD --> CMN
+    APP --> DB
     ANA -->|"内部契约 + Token 鉴权"| SA
-    Java --> DB
     SA -->|"解释请求"| LLM
 ```
 
