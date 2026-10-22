@@ -45,3 +45,6 @@ UPDATE sales_daily SET qty = 0.000 WHERE team_id = 7 AND sku_id = 910004;
 -- 3) 默认仓：分析表单「限定仓库 ID」留空时需要（缺省会报 COM-0001 未配置默认仓）
 UPDATE warehouses SET is_default = 0 WHERE team_id = 7;
 UPDATE warehouses SET is_default = 1 WHERE team_id = 7 AND id = 9003;
+
+-- 4) 供应商绑定：采购单要求建议带 supplier_id，否则 from-replenishment 报 COM-0001「所选建议未指定供应商」
+UPDATE skus SET supplier_id = 1 WHERE team_id = 7 AND id IN (910001, 910002, 910003);

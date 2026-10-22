@@ -110,3 +110,45 @@
 ## 5. 下一步闭环
 
 对 `建议补货量 > 0` 的 SKU（910001、910002）→ 侧栏「采购单」新建采购单 → 到货单确认入库 → 库存回补 → 再跑一次分析看风险消失。
+
+---
+
+## 6. 采购闭环（实测跑通，2026-10-22）
+
+### 6.1 完整链路（6 步）
+
+| # | 动作 | 接口 | 状态流转 | 实测结果 |
+| --- | --- | --- | --- | --- |
+| 1 | 提交补货建议 | `POST /replenishment/items/{id}/submit` | SUGGESTED → PENDING_REVIEW | 建议 509 / version 1 |
+| 2 | 审批通过 | `POST /replenishment/items/{id}/approve` | PENDING_REVIEW → APPROVED | version 2 |
+| 3 | 由建议生成采购单 | `POST /purchasing/orders/from-replenishment` | — → DRAFT | `PO-20261022-000001`（80 × ¥8 = ¥640） |
+| 4 | 确认采购单 | `POST /purchasing/orders/{id}/confirm` | DRAFT → PENDING | version 1 |
+| 5 | 下单 | `POST /purchasing/orders/{id}/order` | PENDING → ORDERED | version 2 |
+| 6 | 登记到货 → 确认入库 | `POST /purchasing/receipts` → `/{id}/confirm` | DRAFT → CONFIRMED | `GR-20261022-000001`，库存 **0 → 80** |
+
+### 6.2 闭环前后对比（同一 SKU）
+
+| 时点 | 910001 在库 | 风险等级 | 风险类型 | 建议补货 |
+| --- | --- | --- | --- | --- |
+| 入库前（run 16/18） | 0.000 | HIGH（高风险） | STOCKOUT（缺货） + LOW_STOCK（低库存） | 80.000 |
+| 入库后（run 19） | **80.000** | **NONE（无风险）** | 无 | 无（null） |
+
+> 对照：910002 未补货，入库后仍是 `MEDIUM（中风险）/ LOW_STOCK（低库存）`、建议 40 —— 证明系统是逐 SKU 判定，不是"一刀切清空"。
+
+### 6.3 两个必须知道的业务规则
+
+1. **数量/单价/供应商不可手填**：生成采购单时一律取自补货建议（`ordered_qty ← 建议 qty`、`unit_price ← 建议 purchase_price`、`supplier_id ← 建议 supplier_id`）。建议缺少 `supplier_id` ⇒ `COM-0001 所选建议未指定供应商`（演示数据已补绑定）。
+2. **同 SKU×仓库存在多条已审批建议** ⇒ `409` 冲突，需带 `conflict_acknowledged=true` + `acknowledged_item_ids=[...]` 显式确认。
+
+### 6.4 ★ 界面能力现状（重要）
+
+| 步骤 | 界面是否可操作 | 说明 |
+| --- | --- | --- |
+| 生成 AI 分析 / 看结果 | ✅ | 🤖 AI 分析 |
+| 补货建议 提交 / 审批 | ❌ **无页面** | 仅后端接口；前端无 replenishment 视图 |
+| 由建议生成采购单 | ❌ **无入口** | 仅 `from-replenishment` 接口 |
+| 采购单 确认 / 下单 / 取消 | ✅ | 采购单详情页 |
+| 登记到货单 | ❌ **无表单** | `createGoodsReceipt` 接口存在但无页面调用 |
+| 到货单 确认入库 / 取消 | ✅ | 到货单详情页 |
+
+> 结论：**完整闭环目前只能靠接口执行**，界面只覆盖"后半段"（已有单据的确认/下单/入库）。
