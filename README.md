@@ -41,42 +41,14 @@ flowchart TB
     FE[Vue 3 前端]
     NG[Nginx 反向代理]
     APP[Java 后端 · 模块化单体]
-    IDN[identity]
-    CAT[catalog]
-    INV[inventory]
-    SAL[sales]
-    ANA[analysis]
-    RPL[replenishment]
-    PUR[purchasing]
-    IMP[importdata]
-    AUD[audit]
-    CMN[common]
     DB[MySQL 8]
     SA[Python 分析服务]
     LLM[大模型]
 
     FE --> NG
     NG --> APP
-    APP --> IDN
-    APP --> CAT
-    APP --> INV
-    APP --> SAL
-    APP --> ANA
-    APP --> RPL
-    APP --> PUR
-    APP --> IMP
-    APP --> AUD
-    IDN --> CMN
-    CAT --> CMN
-    INV --> CMN
-    SAL --> CMN
-    ANA --> CMN
-    RPL --> CMN
-    PUR --> CMN
-    IMP --> CMN
-    AUD --> CMN
     APP --> DB
-    ANA --> SA
+    APP --> SA
     SA --> LLM
 ```
 
